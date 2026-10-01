@@ -51,6 +51,10 @@ Remotion을 기본으로 선정한 이유는 편집 UI와 렌더 템플릿을 Re
 
 즉, LLM 추론 비용을 Toris Studio 서버가 별도 API 키로 부담하는 구조가 아닙니다.
 
+## Linux 클라우드 제작
+
+Linux 설치·브라우저·한국어 폰트·CLI 렌더·기존 음성 가져오기 절차는 [docs/LINUX.md](docs/LINUX.md)를 참고하세요. DevDay 클라우드 제작본의 출처와 제한은 [docs/DEVDAY2026_CLOUD.md](docs/DEVDAY2026_CLOUD.md)에 기록했습니다. 롱폼은 새 설명 장면의 음성이 없는 편집 검토본입니다.
+
 ## 시작
 
 ### 1. Node 패키지 설치

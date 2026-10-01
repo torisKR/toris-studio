@@ -28,10 +28,8 @@ export function evaluateVideoQuality(project: VideoProject): VideoQualityReport 
     scenes.filter((scene) => scene.mediaType && scene.mediaType !== "none" && scene.mediaUrl).length,
     scenes.length
   );
-  const sourceCoverage = ratio(
-    scenes.filter((scene) => Boolean(scene.sourceUrl)).length,
-    scenes.filter((scene) => !["hook", "action", "outro"].includes(scene.role ?? "")).length
-  );
+  const evidenceScenes = scenes.filter(scene => !["hook", "action", "outro"].includes(scene.role ?? ""));
+  const sourceCoverage = ratio(evidenceScenes.filter(scene => Boolean(scene.sourceUrl)).length, evidenceScenes.length);
 
   const first = scenes[0];
   const layouts = new Set(scenes.map((scene) => scene.layout).filter(Boolean));
@@ -48,7 +46,7 @@ export function evaluateVideoQuality(project: VideoProject): VideoQualityReport 
       label: "8초 이내 Hook",
       passed: Boolean(first && first.durationSec <= 8 && first.headline.length <= 42),
       detail: first
-        ? `첫 장면 ${first.durationSec}초 · 헤드라인 ${first.headline.length}자`
+        ? `첫 장면 ${first.durationSec.toFixed(1)}초 · 헤드라인 ${first.headline.length}자`
         : "첫 장면이 없습니다.",
       weight: 18
     },
@@ -61,10 +59,17 @@ export function evaluateVideoQuality(project: VideoProject): VideoQualityReport 
     },
     {
       id: "media",
-      label: "실제 화면/B-roll 비중",
+      label: "미디어 연결 비중",
       passed: mediaCoverage >= 0.5 || project.format === "shorts" && mediaCoverage >= 0.25,
-      detail: `${Math.round(mediaCoverage * 100)}% 장면에 실제 미디어 연결`,
+      detail: `${Math.round(mediaCoverage * 100)}% 장면에 미디어 연결 · 실제 화면 여부는 별도 확인`,
       weight: 18
+    },
+    {
+      id: "narration-audio",
+      label: "내레이션 음성 연결",
+      passed: scenes.every(scene => !scene.narration.trim() || Boolean(scene.audioPath)),
+      detail: `대본은 있지만 음성이 없는 장면 ${scenes.filter(scene => scene.narration.trim() && !scene.audioPath).length}개`,
+      weight: 16
     },
     {
       id: "sources",

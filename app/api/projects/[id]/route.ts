@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProject, saveProject } from "@/lib/storage/projects";
+import { projectSchema } from "@/lib/video/schema";
 import type { VideoProject } from "@/lib/video/types";
 
 export const runtime = "nodejs";
@@ -27,7 +28,9 @@ export async function PUT(request: Request, context: Context) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const input = (await request.json()) as VideoProject;
+  const result = projectSchema.safeParse(await request.json());
+  if (!result.success) return NextResponse.json({ error: result.error.message }, { status: 400 });
+  const input = result.data;
   const project: VideoProject = {
     ...input,
     id,

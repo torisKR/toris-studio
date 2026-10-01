@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const MAX_BYTES = 250 * 1024 * 1024;
-const ALLOWED_PREFIXES = ["image/", "video/"];
+const ALLOWED_PREFIXES = ["image/", "video/", "audio/"];
 
 function safeExtension(file: File) {
   const ext = path.extname(file.name).toLowerCase();
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
     if (!ALLOWED_PREFIXES.some((prefix) => file.type.startsWith(prefix))) {
       return NextResponse.json(
-        { error: "Only image and video files are supported." },
+        { error: "Only image, video and audio files are supported." },
         { status: 415 }
       );
     }
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const dir = path.join(process.cwd(), "public", "assets");
+    const dir = path.join(process.cwd(), "public", "generated", "assets");
     await mkdir(dir, { recursive: true });
 
     const fileName = `${randomUUID()}${safeExtension(file)}`;
@@ -49,7 +49,8 @@ export async function POST(request: Request) {
     await writeFile(target, bytes);
 
     return NextResponse.json({
-      mediaUrl: `/assets/${fileName}`,
+      mediaUrl: `/generated/assets/${fileName}`,
+      audioPath: file.type.startsWith("audio/") ? `/generated/assets/${fileName}` : undefined,
       mediaType: file.type.startsWith("video/") ? "video" : "image",
       originalName: file.name,
       size: file.size

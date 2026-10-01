@@ -19,9 +19,16 @@ const sceneSchema = z.object({
     .enum(["none", "image", "video", "screen"])
     .optional(),
   mediaUrl: z.string().optional(),
+  audioPath: z.string().optional(),
+  mediaFit: z.enum(["contain", "cover"]).optional(),
+  captionCues: z.array(z.object({
+    startSec: z.number().nonnegative(),
+    endSec: z.number().positive(),
+    text: z.string()
+  })).optional(),
   accent: z.string().optional(),
   role: z.enum(["hook", "point", "proof", "reaction", "cost", "action", "outro"]).optional(),
-  layout: z.enum(["hero", "split", "media-focus", "reaction-grid", "action-card"]).optional(),
+  layout: z.enum(["hero", "split", "media-focus", "reaction-grid", "action-card", "social-hook", "social-point", "social-cta"]).optional(),
   badge: z.string().optional()
 });
 

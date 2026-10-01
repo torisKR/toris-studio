@@ -14,7 +14,13 @@
     "mcp": "tsx mcp/server.ts",
     "mcp:stdio": "tsx mcp/stdio.ts",
     "tts:setup": "bash scripts/setup-qwen3-tts-macos.sh",
-    "tts:start": "bash scripts/start-qwen3-tts-macos.sh"
+    "tts:start": "bash scripts/start-qwen3-tts-macos.sh",
+    "setup:linux": "bash scripts/setup-linux.sh",
+    "render:project": "tsx scripts/render-project.ts",
+    "tts:setup:linux": "bash scripts/setup-qwen3-tts-linux.sh",
+    "tts:start:linux": "bash scripts/start-qwen3-tts-linux.sh",
+    "test": "tsx --test tests/*.test.ts",
+    "devday:prepare": "tsx scripts/prepare-devday.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "2.0.1",
@@ -42,5 +48,9 @@
     "@types/react-dom": "19.3.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24 <25"
   }
 }
