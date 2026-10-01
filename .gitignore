@@ -1,0 +1,25 @@
+# Dependencies / framework build
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Local environment / runtime data
+.env
+.env.local
+.toris-studio/
+local-voice/
+
+# Generated media / render outputs
+public/generated/
+public/renders/
+public/senior-club/narration*.wav
+public/senior-club/narration*.m4a
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Logs / OS files
+*.log
+.DS_Store

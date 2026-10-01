@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2a1a0e"/><stop offset=".62" stop-color="#0c1018"/><stop offset="1" stop-color="#07090d"/></linearGradient></defs>
+<rect width="900" height="900" rx="72" fill="url(#bg)"/>
+<g stroke="#ffb274" stroke-width="4" fill="none" opacity=".75">
+  <path d="M170 260C300 260 310 430 440 430S590 600 730 600"/><path d="M170 600C310 600 300 430 440 430S600 260 730 260"/>
+</g>
+<g fill="#161b24" stroke="#ffb274" stroke-width="4">
+  <circle cx="170" cy="260" r="76"/><circle cx="170" cy="600" r="76"/><circle cx="440" cy="430" r="98"/><circle cx="730" cy="260" r="76"/><circle cx="730" cy="600" r="76"/>
+</g>
+<g font-family="Arial" font-weight="800" text-anchor="middle">
+  <text x="170" y="250" fill="#ffd9ba" font-size="19">NEW</text><text x="170" y="280" fill="#fff" font-size="23">MESSAGE</text>
+  <text x="170" y="590" fill="#ffd9ba" font-size="19">STATUS</text><text x="170" y="620" fill="#fff" font-size="23">CHANGED</text>
+  <text x="440" y="418" fill="#ffb274" font-size="24">MCP</text><text x="440" y="458" fill="#fff" font-size="31">EVENT</text>
+  <text x="730" y="250" fill="#ffd9ba" font-size="19">DRAFT</text><text x="730" y="280" fill="#fff" font-size="23">PLAN</text>
+  <text x="730" y="590" fill="#ffd9ba" font-size="19">START</text><text x="730" y="620" fill="#fff" font-size="23">AUTOMATION</text>
+</g>
+<text x="450" y="800" fill="#9b836f" font-family="Arial" font-size="22" text-anchor="middle" letter-spacing="4">EVENT → CONTEXT → ACTION</text>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1c1630"/><stop offset="1" stop-color="#080b13"/></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="20"/></filter></defs>
+<rect width="900" height="900" rx="72" fill="url(#bg)"/>
+<circle cx="640" cy="250" r="170" fill="#b69cff" opacity=".16" filter="url(#glow)"/>
+<g transform="translate(110 130)">
+  <path d="M190 315c-62 0-112-45-112-102 0-50 39-92 91-100 23-73 95-126 180-126 105 0 190 79 190 177 0 6 0 12-1 17 63 7 112 55 112 113 0 63-57 114-127 114H190z" fill="#171c2b" stroke="#b69cff" stroke-width="4"/>
+  <rect x="208" y="164" width="316" height="180" rx="22" fill="#070a12" stroke="#7362aa" stroke-width="3"/>
+  <circle cx="239" cy="194" r="8" fill="#ff8b99"/><circle cx="266" cy="194" r="8" fill="#ffd177"/><circle cx="293" cy="194" r="8" fill="#74f0c1"/>
+  <g font-family="monospace" font-size="20"><text x="238" y="245" fill="#b69cff">$ codex run</text><text x="238" y="282" fill="#cfd4e2">tests: passing</text><text x="238" y="318" fill="#74f0c1">PR ready ✓</text></g>
+</g>
+<g fill="#151a27" stroke="#b69cff" stroke-width="3">
+  <rect x="90" y="650" width="200" height="100" rx="26"/><rect x="350" y="650" width="200" height="100" rx="26"/><rect x="610" y="650" width="200" height="100" rx="26"/>
+</g>
+<g font-family="Arial" font-weight="700" font-size="22" text-anchor="middle"><text x="190" y="708" fill="#efeaff">COMPUTER USE</text><text x="450" y="708" fill="#efeaff">DECISIONS</text><text x="710" y="708" fill="#efeaff">MULTI-AGENT</text></g>
+</svg>

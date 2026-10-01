@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="45%" r="65%"><stop offset="0" stop-color="#13342d"/><stop offset=".55" stop-color="#0a1318"/><stop offset="1" stop-color="#05070b"/></radialGradient>
+  <radialGradient id="orb" cx="35%" cy="30%" r="70%"><stop offset="0" stop-color="#d8fff1"/><stop offset=".28" stop-color="#74f0c1"/><stop offset=".72" stop-color="#1c7d67"/><stop offset="1" stop-color="#0a332a"/></radialGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="18" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="900" height="900" rx="72" fill="url(#bg)"/>
+<g opacity=".28" fill="none" stroke="#74f0c1">
+  <circle cx="450" cy="440" r="285"/><circle cx="450" cy="440" r="210"/><circle cx="450" cy="440" r="132"/>
+</g>
+<g stroke="#74f0c1" stroke-width="2" opacity=".42">
+  <path d="M450 440L205 245M450 440L695 255M450 440L740 500M450 440L655 705M450 440L238 690M450 440L155 470"/>
+</g>
+<circle cx="450" cy="440" r="110" fill="url(#orb)" filter="url(#glow)"/>
+<circle cx="450" cy="440" r="46" fill="#eefdf8" opacity=".9"/>
+<g font-family="Arial, sans-serif" font-weight="700" font-size="22" text-anchor="middle">
+  <g><rect x="120" y="200" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="205" y="247" fill="#dffcf2">MAIL</text></g>
+  <g><rect x="610" y="212" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="695" y="259" fill="#dffcf2">SLACK</text></g>
+  <g><rect x="655" y="462" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="740" y="509" fill="#dffcf2">BROWSER</text></g>
+  <g><rect x="570" y="675" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="655" y="722" fill="#dffcf2">FILES</text></g>
+  <g><rect x="153" y="652" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="238" y="699" fill="#dffcf2">CALENDAR</text></g>
+  <g><rect x="70" y="432" width="170" height="76" rx="22" fill="#10252a" stroke="#74f0c1" opacity=".95"/><text x="155" y="479" fill="#dffcf2">APPS</text></g>
+</g>
+<text x="450" y="846" fill="#8ba6a0" font-family="Arial" font-size="24" text-anchor="middle" letter-spacing="4">ALWAYS-ON AGENT</text>
+</svg>

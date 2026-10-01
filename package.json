@@ -1,0 +1,46 @@
+{
+  "name": "toris-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "remotion:studio": "remotion studio remotion/index.ts",
+    "remotion:clean": "rm -rf node_modules/.cache/webpack",
+    "remotion:render": "tsx scripts/render-demo.ts",
+    "mcp": "tsx mcp/server.ts",
+    "mcp:stdio": "tsx mcp/stdio.ts",
+    "tts:setup": "bash scripts/setup-qwen3-tts-macos.sh",
+    "tts:start": "bash scripts/start-qwen3-tts-macos.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "2.0.1",
+    "@modelcontextprotocol/node": "2.1.0",
+    "@modelcontextprotocol/server": "2.2.0",
+    "@remotion/bundler": "4.0.530",
+    "@remotion/cli": "4.0.530",
+    "@remotion/media": "4.0.530",
+    "@remotion/player": "4.0.530",
+    "@remotion/renderer": "4.0.530",
+    "@supabase/supabase-js": "2.117.2",
+    "express": "5.2.1",
+    "googleapis": "182.0.0",
+    "lucide-react": "1.49.0",
+    "next": "16.3.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.530",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3"
+  }
+}

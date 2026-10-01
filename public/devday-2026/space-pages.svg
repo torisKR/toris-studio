@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2d1626"/><stop offset=".55" stop-color="#10111a"/><stop offset="1" stop-color="#07080d"/></linearGradient></defs>
+<rect width="900" height="900" rx="72" fill="url(#bg)"/>
+<rect x="110" y="120" width="680" height="590" rx="42" fill="#111620" stroke="#f59bcb" stroke-width="4"/>
+<rect x="148" y="165" width="180" height="500" rx="24" fill="#0b0f16"/>
+<circle cx="188" cy="214" r="18" fill="#f59bcb"/><rect x="222" y="199" width="70" height="16" rx="8" fill="#6d5366"/>
+<g fill="#232a36"><rect x="174" y="282" width="126" height="42" rx="12"/><rect x="174" y="342" width="126" height="42" rx="12"/><rect x="174" y="402" width="126" height="42" rx="12"/></g>
+<rect x="365" y="166" width="382" height="498" rx="24" fill="#f9f7fb"/>
+<rect x="405" y="220" width="230" height="24" rx="12" fill="#2d3240"/><rect x="405" y="275" width="300" height="13" rx="6" fill="#a5a7af"/><rect x="405" y="306" width="260" height="13" rx="6" fill="#c0c1c7"/>
+<rect x="405" y="365" width="300" height="132" rx="22" fill="#ffe8f4"/><path d="M438 456l64-52 55 28 60-45 54 69z" fill="none" stroke="#d864a7" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="405" y="540" width="172" height="44" rx="22" fill="#202632"/><text x="491" y="569" fill="#fff" font-family="Arial" font-size="18" font-weight="700" text-anchor="middle">ASK AGENT</text>
+<g><circle cx="330" cy="745" r="38" fill="#74f0c1"/><circle cx="405" cy="745" r="38" fill="#8ab9ff"/><circle cx="480" cy="745" r="38" fill="#f59bcb"/><circle cx="555" cy="745" r="38" fill="#ffb274"/></g>
+<text x="450" y="835" fill="#a8869b" font-family="Arial" font-size="23" text-anchor="middle" letter-spacing="3">HUMANS + AGENTS · ONE WORKSPACE</text>
+</svg>
