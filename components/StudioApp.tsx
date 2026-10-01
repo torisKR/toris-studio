@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { VideoPreview } from "./VideoPreview";
 import { VIDEO_PRESETS } from "@/lib/video/presets";
 import { VIDEO_TEMPLATES, applyTemplate } from "@/lib/video/templates";
+import { updateProjectScene } from "@/lib/video/update-scene";
 import { evaluateVideoQuality } from "@/lib/video/quality";
 import type {
   VideoFormat,
@@ -147,11 +148,9 @@ export function StudioApp({ initialProject }: Props) {
   function patchScene(patch: Partial<VideoScene>) {
     if (!selectedScene) return;
 
-    patchProject({
-      scenes: project.scenes.map((scene) =>
-        scene.id === selectedScene.id ? { ...scene, ...patch } : scene
-      )
-    });
+    const projectId = project.id;
+    const sceneId = selectedScene.id;
+    setProject(current => updateProjectScene(current, projectId, sceneId, patch));
   }
 
   function changeFormat(format: VideoFormat) {
@@ -178,7 +177,7 @@ export function StudioApp({ initialProject }: Props) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "저장 실패");
-      setProject(data.project);
+      setProject(current => current === project ? data.project : current);
       setSavedProjects(current => [data.project, ...current.filter(item => item.id !== data.project.id)]);
       setMessage("프로젝트를 저장했습니다.");
     } catch (error) {

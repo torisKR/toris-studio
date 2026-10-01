@@ -435,7 +435,9 @@ function Scene({
   const caption = scene.captionCues
     ? scene.captionCues.find(cue => frame / fps >= cue.startSec && frame / fps < cue.endSec)?.text ?? ""
     : captions[captionIndex] ?? "";
-  const layout = scene.layout ?? "split";
+  const layout = scene.layout === "social-hook" ? "hero"
+    : scene.layout === "social-cta" ? "action-card"
+    : scene.layout ?? "split";
 
   let content: ReactNode;
   if (layout === "hero") {
@@ -644,7 +646,7 @@ function Scene({
 }
 
 export function NewsBriefingVideo({ project }: Props) {
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   let cursor = 0;
 
   return (
@@ -655,7 +657,7 @@ export function NewsBriefingVideo({ project }: Props) {
         cursor += duration;
         return (
           <Sequence key={scene.id} from={from} durationInFrames={duration}>
-            {scene.layout?.startsWith("social-") ? <SocialFocusScene scene={scene} /> : <Scene
+            {height > width && scene.layout?.startsWith("social-") ? <SocialFocusScene scene={scene} /> : <Scene
               scene={scene}
               index={index}
               sceneCount={project.scenes.length}
