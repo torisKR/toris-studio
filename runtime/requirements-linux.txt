@@ -1,0 +1,5 @@
+# CPU-only torch is installed separately from the official PyTorch CPU index.
+qwen-tts==0.1.1
+fastapi==0.142.2
+uvicorn==0.54.0
+soundfile==0.14.0

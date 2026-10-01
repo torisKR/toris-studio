@@ -50,6 +50,6 @@ export function getDurationInFrames(
 ) {
   return Math.max(
     fps,
-    Math.round(scenes.reduce((sum, scene) => sum + scene.durationSec, 0) * fps)
+    scenes.reduce((sum, scene) => sum + Math.max(1, Math.round(scene.durationSec * fps)), 0)
   );
 }

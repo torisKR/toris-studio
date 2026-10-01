@@ -3,7 +3,7 @@ export type VideoFormat = "youtube-landscape" | "vertical" | "shorts";
 export type SceneMediaType = "none" | "image" | "video" | "screen";
 export type VideoTemplateId = "reference-briefing" | "adaptive-promo";
 export type SceneRole = "hook" | "point" | "proof" | "reaction" | "cost" | "action" | "outro";
-export type SceneLayout = "hero" | "split" | "media-focus" | "reaction-grid" | "action-card";
+export type SceneLayout = "hero" | "split" | "media-focus" | "reaction-grid" | "action-card" | "social-hook" | "social-point" | "social-cta";
 
 export type VideoScene = {
   id: string;
@@ -16,6 +16,8 @@ export type VideoScene = {
   sourceUrl?: string;
   mediaType?: SceneMediaType;
   mediaUrl?: string;
+  mediaFit?: "contain" | "cover";
+  captionCues?: Array<{ startSec: number; endSec: number; text: string }>;
   audioPath?: string;
   accent?: string;
   role?: SceneRole;

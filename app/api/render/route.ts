@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { renderProject } from "@/lib/render/render-video";
 import type { VideoProject } from "@/lib/video/types";
+import { projectSchema } from "@/lib/video/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -9,9 +10,10 @@ export async function POST(request: Request) {
   try {
     const { project } = (await request.json()) as { project: VideoProject };
 
-    if (!project?.scenes?.length) {
+    const validated = projectSchema.safeParse(project);
+    if (!validated.success) {
       return NextResponse.json(
-        { error: "At least one scene is required." },
+        { error: validated.error.message },
         { status: 400 }
       );
     }

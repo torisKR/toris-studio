@@ -22,6 +22,8 @@ export function VideoPreview({ project }: { project: VideoProject }) {
         acknowledgeRemotionLicense
         style={{
           width: "100%",
+          maxWidth: preset.height > preset.width ? "min(100%, max(240px, calc((100vh - 310px) * 9 / 16)))" : undefined,
+          marginInline: "auto",
           aspectRatio: `${preset.width} / ${preset.height}`,
           borderRadius: 22,
           overflow: "hidden",

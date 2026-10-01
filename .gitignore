@@ -12,6 +12,7 @@ local-voice/
 
 # Generated media / render outputs
 public/generated/
+public/assets/
 public/renders/
 public/senior-club/narration*.wav
 public/senior-club/narration*.m4a

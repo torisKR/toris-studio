@@ -34,6 +34,7 @@ export async function getQwen3TtsConfiguration() {
 
     const health = (await response.json()) as {
       ok?: boolean;
+      provider?: string;
       model?: string;
       speaker?: string;
       language?: string;
@@ -41,7 +42,7 @@ export async function getQwen3TtsConfiguration() {
 
     return {
       configured: health.ok === true,
-      provider: "qwen3-tts-mlx",
+      provider: health.provider ?? "qwen3-tts-mlx",
       model: health.model ?? null,
       speaker: health.speaker ?? null,
       language: health.language ?? null,
@@ -50,12 +51,14 @@ export async function getQwen3TtsConfiguration() {
   } catch {
     return {
       configured: false,
-      provider: "qwen3-tts-mlx",
+      provider: "local-qwen3",
       model: null,
       speaker: null,
       language: null,
       reason:
-        "로컬 Qwen3-TTS 서버가 실행 중이 아닙니다. bash scripts/start-qwen3-tts-macos.sh 를 실행하세요."
+        process.platform === "linux"
+          ? "로컬 음성 서버가 없습니다. Linux 음성 설정을 완료하거나 준비된 음성을 연결하세요 (docs/LINUX.md)."
+          : "로컬 Qwen3-TTS 서버가 없습니다. bash scripts/start-qwen3-tts-macos.sh 를 실행하세요."
     };
   }
 }
@@ -106,6 +109,6 @@ export async function synthesizeWithQwen3Tts(options: Qwen3TtsOptions) {
     durationSec,
     sampleRate,
     speaker,
-    provider: "qwen3-tts-mlx" as const
+    provider: response.headers.get("x-tts-provider") ?? "qwen3-tts-mlx"
   };
 }

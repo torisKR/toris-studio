@@ -13,6 +13,7 @@ import {
 import { Audio } from "@remotion/media";
 import type { CSSProperties, ReactNode } from "react";
 import type { VideoProject, VideoScene } from "../../lib/video/types";
+import { SocialFocusScene } from "./SocialFocusScene";
 
 type Props = { project: VideoProject };
 
@@ -53,7 +54,6 @@ function GlassCard({
         border: "1px solid rgba(255,255,255,.11)",
         background: "linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.025))",
         boxShadow: "0 30px 90px rgba(0,0,0,.34)",
-        backdropFilter: "blur(18px)",
         ...style
       }}
     >
@@ -180,8 +180,8 @@ function MediaFrame({
   const common: CSSProperties = {
     width: "100%",
     height: "100%",
-    objectFit: "cover",
-    transform: `scale(${scale})`
+    objectFit: scene.mediaFit ?? "contain",
+    transform: scene.mediaFit === "cover" ? `scale(${scale})` : undefined
   };
 
   return (
@@ -432,8 +432,12 @@ function Scene({
     Math.max(0, captions.length - 1),
     Math.floor((frame / totalFrames) * captions.length)
   );
-  const caption = captions[captionIndex] ?? "";
-  const layout = scene.layout ?? "split";
+  const caption = scene.captionCues
+    ? scene.captionCues.find(cue => frame / fps >= cue.startSec && frame / fps < cue.endSec)?.text ?? ""
+    : captions[captionIndex] ?? "";
+  const layout = scene.layout === "social-hook" ? "hero"
+    : scene.layout === "social-cta" ? "action-card"
+    : scene.layout ?? "split";
 
   let content: ReactNode;
   if (layout === "hero") {
@@ -529,7 +533,7 @@ function Scene({
         background:
           "radial-gradient(circle at 10% 0%, rgba(74,98,132,.26), transparent 38%), linear-gradient(135deg,#05070B 0%,#0B1019 58%,#080A0F 100%)",
         fontFamily:
-          '"Pretendard Variable", Pretendard, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          '"Pretendard Variable", Pretendard, "Noto Sans CJK KR", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         padding: pagePad,
         overflow: "hidden",
         opacity: fadeOut
@@ -541,8 +545,7 @@ function Scene({
           width: vertical ? 620 : 720,
           height: vertical ? 620 : 720,
           borderRadius: "50%",
-          background: scene.accent ?? "#77E0B5",
-          filter: "blur(160px)",
+          background: `radial-gradient(circle, ${scene.accent ?? "#77E0B5"}, transparent 70%)`,
           opacity: 0.08,
           right: vertical ? -300 : -220,
           top: vertical ? 80 : -320
@@ -574,7 +577,7 @@ function Scene({
             position: "absolute",
             left: pagePad,
             right: pagePad,
-            bottom: vertical ? 112 : 90,
+            bottom: vertical ? 240 : 90,
             display: "flex",
             justifyContent: "center"
           }}
@@ -587,7 +590,7 @@ function Scene({
               background: "rgba(3,5,9,.8)",
               border: "1px solid rgba(255,255,255,.1)",
               boxShadow: "0 16px 50px rgba(0,0,0,.35)",
-              fontSize: vertical ? 32 : 25,
+              fontSize: vertical ? 44 : 36,
               lineHeight: 1.42,
               letterSpacing: "-.025em",
               fontWeight: 760,
@@ -618,7 +621,7 @@ function Scene({
           }}
         >
           <span>{projectTitle}</span>
-          <span>{scene.sourceUrl ? "SOURCE VERIFIED" : "TORIS STUDIO"}</span>
+          <span>{scene.sourceLabel ?? (scene.sourceUrl ? "SOURCE LINK" : "TORIS STUDIO")}</span>
         </div>
         <div
           style={{
@@ -643,7 +646,7 @@ function Scene({
 }
 
 export function NewsBriefingVideo({ project }: Props) {
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   let cursor = 0;
 
   return (
@@ -654,12 +657,12 @@ export function NewsBriefingVideo({ project }: Props) {
         cursor += duration;
         return (
           <Sequence key={scene.id} from={from} durationInFrames={duration}>
-            <Scene
+            {height > width && scene.layout?.startsWith("social-") ? <SocialFocusScene scene={scene} /> : <Scene
               scene={scene}
               index={index}
               sceneCount={project.scenes.length}
               projectTitle={project.title}
-            />
+            />}
             {scene.audioPath ? (
               <Audio src={mediaSource(scene.audioPath)} volume={1} />
             ) : null}

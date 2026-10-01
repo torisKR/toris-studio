@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { VideoProject } from "@/lib/video/types";
 
@@ -7,6 +8,8 @@ type ProjectStore = {
 };
 
 const EMPTY_STORE: ProjectStore = { projects: [] };
+// Serialize writes within this local single-process MVP to avoid lost updates.
+let pendingWrite: Promise<unknown> = Promise.resolve();
 
 function getDataFile() {
   const configured = process.env.TORIS_STUDIO_DATA_DIR ?? ".toris-studio";
@@ -38,7 +41,13 @@ async function readStore(): Promise<ProjectStore> {
 async function writeStore(store: ProjectStore) {
   const { base, file } = getDataFile();
   await mkdir(base, { recursive: true });
-  await writeFile(file, JSON.stringify(store, null, 2), "utf8");
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(store, null, 2), "utf8");
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 export async function listLocalProjects() {
@@ -54,9 +63,13 @@ export async function getLocalProject(id: string) {
 }
 
 export async function saveLocalProject(project: VideoProject) {
-  const store = await readStore();
-  const next = store.projects.filter((item) => item.id !== project.id);
-  next.push(project);
-  await writeStore({ projects: next });
-  return project;
+  const write = pendingWrite.then(async () => {
+    const store = await readStore();
+    const next = store.projects.filter((item) => item.id !== project.id);
+    next.push(project);
+    await writeStore({ projects: next });
+    return project;
+  });
+  pendingWrite = write.catch(() => undefined);
+  return write;
 }

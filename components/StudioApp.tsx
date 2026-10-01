@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { VideoPreview } from "./VideoPreview";
 import { VIDEO_PRESETS } from "@/lib/video/presets";
 import { VIDEO_TEMPLATES, applyTemplate } from "@/lib/video/templates";
+import { updateProjectScene } from "@/lib/video/update-scene";
 import { evaluateVideoQuality } from "@/lib/video/quality";
 import type {
   VideoFormat,
@@ -88,6 +89,7 @@ export function StudioApp({ initialProject }: Props) {
   const [selectedSceneId, setSelectedSceneId] = useState(
     initialProject.scenes[0]?.id ?? ""
   );
+  const [savedProjects, setSavedProjects] = useState<VideoProject[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
@@ -121,6 +123,7 @@ export function StudioApp({ initialProject }: Props) {
           const data = (await projectsResponse.json()) as {
             projects: VideoProject[];
           };
+          setSavedProjects(data.projects);
           if (data.projects[0]) {
             setProject(data.projects[0]);
             setSelectedSceneId(data.projects[0].scenes[0]?.id ?? "");
@@ -145,11 +148,9 @@ export function StudioApp({ initialProject }: Props) {
   function patchScene(patch: Partial<VideoScene>) {
     if (!selectedScene) return;
 
-    patchProject({
-      scenes: project.scenes.map((scene) =>
-        scene.id === selectedScene.id ? { ...scene, ...patch } : scene
-      )
-    });
+    const projectId = project.id;
+    const sceneId = selectedScene.id;
+    setProject(current => updateProjectScene(current, projectId, sceneId, patch));
   }
 
   function changeFormat(format: VideoFormat) {
@@ -176,7 +177,8 @@ export function StudioApp({ initialProject }: Props) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "저장 실패");
-      setProject(data.project);
+      setProject(current => current === project ? data.project : current);
+      setSavedProjects(current => [data.project, ...current.filter(item => item.id !== data.project.id)]);
       setMessage("프로젝트를 저장했습니다.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "저장 실패");
@@ -207,7 +209,8 @@ export function StudioApp({ initialProject }: Props) {
       );
       patchScene({
         audioPath: data.audioPath,
-        durationSec
+        durationSec,
+        captionCues: undefined
       });
       setMessage(`현재 장면 음성을 생성하고 길이를 ${durationSec}초로 맞췄습니다.`);
     } catch (error) {
@@ -264,6 +267,34 @@ export function StudioApp({ initialProject }: Props) {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "미디어 업로드 실패");
     } finally {
+      setAssetUploading(false);
+    }
+  }
+
+  async function importNarration(file: File) {
+    setAssetUploading(true);
+    setMessage("");
+    const url = URL.createObjectURL(file);
+    try {
+      const duration = await new Promise<number>((resolve, reject) => {
+        const audio = new window.Audio();
+        const timer = window.setTimeout(() => reject(new Error("음성 길이를 읽을 수 없습니다.")), 10000);
+        audio.onloadedmetadata = () => { window.clearTimeout(timer); resolve(audio.duration); };
+        audio.onerror = () => { window.clearTimeout(timer); reject(new Error("지원하지 않는 음성 파일입니다.")); };
+        audio.src = url;
+      });
+      if (!Number.isFinite(duration) || duration <= 0) throw new Error("유효한 음성 길이가 필요합니다.");
+      const form = new FormData();
+      form.set("file", file);
+      const response = await fetch("/api/assets", { method: "POST", body: form });
+      const data = await response.json();
+      if (!response.ok || !data.audioPath) throw new Error(data.error ?? "음성 업로드 실패");
+      patchScene({ audioPath: data.audioPath, durationSec: Math.ceil((duration + 0.3) * 30) / 30, captionCues: undefined });
+      setMessage("음성을 연결하고 장면 길이를 맞췄습니다. 대본과 자막도 확인하세요.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "음성 업로드 실패");
+    } finally {
+      URL.revokeObjectURL(url);
       setAssetUploading(false);
     }
   }
@@ -398,6 +429,19 @@ export function StudioApp({ initialProject }: Props) {
   return (
     <main className="studio">
       <header className="topbar">
+        <label className="field">
+          <span>저장된 프로젝트</span>
+          <select aria-label="저장된 프로젝트" value={savedProjects.some(item => item.id === project.id) ? project.id : ""} onChange={event => {
+            const next = savedProjects.find(item => item.id === event.target.value);
+            if (!next) return;
+            setProject(next);
+            setSelectedSceneId(next.scenes[0]?.id ?? "");
+            setRenderUrl("");
+          }}>
+            <option value="" disabled>프로젝트 선택</option>
+            {savedProjects.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+          </select>
+        </label>
         <div className="brand">
           <div className="brand-mark">
             <Clapperboard size={19} />
@@ -501,7 +545,7 @@ export function StudioApp({ initialProject }: Props) {
                 </span>
                 <span className="scene-copy">
                   <strong>{scene.headline}</strong>
-                  <small>{scene.durationSec}s · {scene.sourceLabel}</small>
+                  <small>{scene.durationSec.toFixed(1)}s · {scene.sourceLabel}</small>
                 </span>
                 <ChevronRight size={16} />
               </button>
@@ -782,6 +826,9 @@ export function StudioApp({ initialProject }: Props) {
                     <option value="media-focus">Media Focus</option>
                     <option value="reaction-grid">Reaction Grid</option>
                     <option value="action-card">Action Card</option>
+                    <option value="social-hook">Social Hook</option>
+                    <option value="social-point">Social Point</option>
+                    <option value="social-cta">Social CTA</option>
                   </select>
                 </label>
               </div>
@@ -815,6 +862,25 @@ export function StudioApp({ initialProject }: Props) {
                 </label>
               </div>
 
+              <label className="field">
+                <span>미디어 맞춤</span>
+                <select value={selectedScene.mediaFit ?? "contain"} onChange={event => patchScene({ mediaFit: event.target.value as "contain" | "cover" })}>
+                  <option value="contain">전체 표시 (화면·그래픽)</option>
+                  <option value="cover">가득 채움 (일부 잘림)</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>준비된 내레이션 연결</span>
+                <input aria-label="내레이션 파일" type="file" accept="audio/*" disabled={assetUploading} onChange={event => {
+                  const file = event.target.files?.[0];
+                  if (file) void importNarration(file);
+                  event.currentTarget.value = "";
+                }} />
+              </label>
+              <label className="field">
+                <span>음성 public 경로</span>
+                <input value={selectedScene.audioPath ?? ""} onChange={event => patchScene({ audioPath: event.target.value || undefined })} />
+              </label>
               <label className="field">
                 <span>미디어 URL / public 경로</span>
                 <input
@@ -869,7 +935,7 @@ export function StudioApp({ initialProject }: Props) {
                     {selectedScene.audioPath
                       ? "현재 장면에 음성이 연결됨"
                       : health?.ttsConfigured
-                        ? "완전 로컬 · 한국어 Sohee · MLX"
+                        ? `로컬 · 한국어 Sohee · ${health.ttsProvider ?? "Qwen3-TTS"}`
                         : health?.ttsReason ?? "TTS 설정 필요"}
                   </small>
                 </span>
