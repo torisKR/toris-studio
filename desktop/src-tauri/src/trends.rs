@@ -640,9 +640,23 @@ async fn collect_youtube(
 }
 
 pub async fn collect(config: &AppConfig, keyword: Option<&str>) -> Result<TrendCollection, String> {
+    collect_selected(config, keyword, "all").await
+}
+
+pub async fn collect_selected(
+    config: &AppConfig,
+    keyword: Option<&str>,
+    source: &str,
+) -> Result<TrendCollection, String> {
+    if !matches!(source, "all" | "google_trends" | "youtube" | "naver_blog") {
+        return Err("지원하는 수집 출처를 선택하세요.".into());
+    }
     let client = http_client()?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let google = async {
+        if !matches!(source, "all" | "google_trends") {
+            return Ok::<_, String>(vec![]);
+        }
         let feed =
             bounded_response(client.get("https://trends.google.com/trending/rss?geo=KR")).await?;
         let mut records = parse_google_trends(&feed, &now)?;
@@ -653,6 +667,9 @@ pub async fn collect(config: &AppConfig, keyword: Option<&str>) -> Result<TrendC
         Ok::<_, String>(records)
     };
     let youtube = async {
+        if !matches!(source, "all" | "youtube") {
+            return Ok(None);
+        }
         match config
             .youtube_api_key
             .as_deref()
@@ -663,6 +680,9 @@ pub async fn collect(config: &AppConfig, keyword: Option<&str>) -> Result<TrendC
         }
     };
     let naver = async {
+        if !matches!(source, "all" | "naver_blog") {
+            return Ok(None);
+        }
         match (
             keyword,
             config.naver_client_id.as_deref(),
@@ -707,6 +727,25 @@ pub async fn collect(config: &AppConfig, keyword: Option<&str>) -> Result<TrendC
         && (config.naver_client_id.is_none() || config.naver_client_secret.is_none())
     {
         result.warnings.push("현재 키워드는 Google 인기 목록에서만 필터링됩니다. YouTube·네이버 검색에는 로컬 API 설정이 필요합니다.".into());
+    }
+    if matches!(source, "all" | "youtube")
+        && config.youtube_api_key.as_deref().is_none_or(str::is_empty)
+    {
+        result
+            .warnings
+            .push("YouTube Data API 키가 없어 YouTube 검색을 실행하지 않았습니다.".into());
+    }
+    if keyword.is_some()
+        && matches!(source, "all" | "naver_blog")
+        && (config.naver_client_id.as_deref().is_none_or(str::is_empty)
+            || config
+                .naver_client_secret
+                .as_deref()
+                .is_none_or(str::is_empty))
+    {
+        result
+            .warnings
+            .push("네이버 검색 API 설정이 없어 블로그 검색을 실행하지 않았습니다.".into());
     }
     result.trends.truncate(100);
     Ok(result)

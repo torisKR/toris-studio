@@ -7,8 +7,10 @@ use tokio::process::Command;
 const SCHEMA: &str = include_str!("../../../db/migrations/001_social.sql");
 const OPAL_SCHEMA: &str = include_str!("../../../db/migrations/004_opal_research.sql");
 const OPAL_RESULT_SHAPE: &str = include_str!("../../../db/migrations/005_opal_result_shape.sql");
+const KEYWORD_SCHEMA: &str = include_str!("../../../db/migrations/006_keyword_explorer.sql");
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
+const CRAWLER_COMPOSE: &str = include_str!("../../../infrastructure/keyword-crawler/compose.yaml");
 
 fn stack_root() -> Result<PathBuf, String> {
     crate::config::prepare_portable_data()?;
@@ -25,6 +27,11 @@ fn stack_root() -> Result<PathBuf, String> {
     fs::write(
         root.join("db/migrations/004_opal_research.sql"),
         OPAL_SCHEMA,
+    )
+    .map_err(|_| "DB 설정 저장 실패")?;
+    fs::write(
+        root.join("db/migrations/006_keyword_explorer.sql"),
+        KEYWORD_SCHEMA,
     )
     .map_err(|_| "DB 설정 저장 실패")?;
     fs::write(
@@ -98,7 +105,7 @@ fn credentials(root: &std::path::Path, create: bool) -> Result<HashMap<String, S
     }
     Ok(values)
 }
-fn docker(root: &std::path::Path) -> Command {
+fn docker_program() -> &'static str {
     // Finder does not inherit shell PATH. Resolve the standard vendor install too.
     let vendor = if cfg!(target_os = "macos") {
         ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"]
@@ -110,7 +117,10 @@ fn docker(root: &std::path::Path) -> Command {
     } else {
         None
     };
-    let mut command = Command::new(vendor.unwrap_or("docker"));
+    vendor.unwrap_or("docker")
+}
+fn docker(root: &std::path::Path) -> Command {
+    let mut command = Command::new(docker_program());
     command
         .current_dir(root)
         .arg("compose")
@@ -120,6 +130,72 @@ fn docker(root: &std::path::Path) -> Command {
         .arg(root.join("compose.yaml"));
     command.kill_on_drop(true);
     command
+}
+
+pub async fn start_keyword_crawler() -> Result<Value, String> {
+    let _permit = crate::keyword::lock_for_update()?;
+    crate::config::prepare_portable_data()?;
+    let root = config_path()
+        .parent()
+        .ok_or("설정 경로 오류")?
+        .join("crawler-stack");
+    fs::create_dir_all(&root).map_err(|_| "수집 설정 폴더 생성 실패")?;
+    if !fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err("로컬 수집 설정 폴더의 형식이 올바르지 않습니다.".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "수집 설정 폴더 권한 설정 실패")?;
+    }
+    let credential_path = root.join(".env.crawler.local");
+    if !credential_path.exists() {
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let token = bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        write_private(
+            &credential_path,
+            format!("CRAWL4AI_API_TOKEN={token}\n").as_bytes(),
+        )?;
+    }
+    // Validate an existing credential without copying or displaying it.
+    crate::keyword::crawler_token()?;
+    let compose_path = root.join("compose.yaml");
+    if compose_path.exists()
+        && !fs::symlink_metadata(&compose_path).is_ok_and(|metadata| metadata.is_file())
+    {
+        return Err("로컬 수집 구성 파일의 형식이 올바르지 않습니다.".into());
+    }
+    fs::write(&compose_path, CRAWLER_COMPOSE).map_err(|_| "수집 구성 저장 실패")?;
+    let mut command = Command::new(docker_program());
+    command
+        .current_dir(&root)
+        .args(["compose", "--env-file"])
+        .arg(&credential_path)
+        .arg("-f")
+        .arg(&compose_path)
+        .args(["up", "-d", "--wait", "crawl4ai"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let status = tokio::time::timeout(Duration::from_secs(180), command.status())
+        .await
+        .map_err(|_| {
+            "수집기 시작 시간이 초과되었습니다. Docker/OrbStack에서 컨테이너 상태를 확인하세요."
+        })?
+        .map_err(|_| "Docker/OrbStack을 설치하고 실행하세요.")?;
+    if !status.success() {
+        return Err(
+            "수집기 시작에 실패했습니다. Docker/OrbStack과 로컬 포트 11235를 확인하세요.".into(),
+        );
+    }
+    crate::keyword::check_crawler().await?;
+    Ok(json!({"ok":true,"message":"로컬 Crawl4AI 수집기가 준비되었습니다."}))
 }
 pub async fn start_database(config: &AppConfig) -> Result<AppConfig, String> {
     let root = stack_root()?;
@@ -199,6 +275,10 @@ pub async fn migrate_database() -> Result<(), String> {
         .batch_execute(OPAL_RESULT_SHAPE)
         .await
         .map_err(|_| "Opal 결과 형식 제약 갱신 실패")?;
+    transaction
+        .batch_execute(KEYWORD_SCHEMA)
+        .await
+        .map_err(|_| "키워드 탐색 DB 스키마 갱신 실패")?;
     transaction
         .commit()
         .await

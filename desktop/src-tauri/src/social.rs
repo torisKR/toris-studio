@@ -473,6 +473,15 @@ pub(crate) async fn save_trends(
     }
     let mut db = database(config).await?;
     let tx = db_result(db.client.transaction().await)?;
+    save_trends_in_transaction(&tx, trends).await?;
+    db_result(tx.commit().await)?;
+    Ok(())
+}
+
+pub(crate) async fn save_trends_in_transaction(
+    tx: &tokio_postgres::Transaction<'_>,
+    trends: &mut [SocialTrend],
+) -> Result<(), String> {
     for item in trends.iter_mut().take(100) {
         let fetched_at = DateTime::parse_from_rfc3339(&item.fetched_at)
             .map_err(|_| VALIDATION_ERROR.to_string())?
@@ -512,7 +521,6 @@ pub(crate) async fn save_trends(
             "INSERT INTO social_trends(id,source,keyword,title,url,metric,region,published_at,fetched_at,details) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(source,url,keyword) DO UPDATE SET title=EXCLUDED.title,metric=EXCLUDED.metric,published_at=EXCLUDED.published_at,fetched_at=EXCLUDED.fetched_at,details=EXCLUDED.details",
             &[&item.id, &item.source, &item.keyword, &item.title, &item.url, &item.metric, &item.region, &published_at, &fetched_at, &details]).await)?;
     }
-    db_result(tx.commit().await)?;
     Ok(())
 }
 

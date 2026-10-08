@@ -10,7 +10,7 @@ import { CONTENT_STATUSES, SOCIAL_PLATFORMS } from "./types";
 import type { ContentStatus, SocialContent, SocialDashboard, SocialPlatform, SocialTrend } from "./types";
 import "./OverviewPanel.css";
 
-export type OverviewRoute = "content" | "trends" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings" | "opal";
+export type OverviewRoute = "content" | "trends" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings" | "keywords";
 
 type Props = {
   dashboard: SocialDashboard;
@@ -102,9 +102,9 @@ export function OverviewPanel({ dashboard, loading, aiChecking, availableAiCount
       {[
         { label: "저장한 콘텐츠", value: dashboard.content.length, hint: "불러온 콘텐츠 기준", route: "content" as const },
         { label: "등록한 채널", value: dashboard.channels.length, hint: `불러온 등록 정보 · ${new Set(dashboard.channels.map((channel) => channel.platform)).size}개 플랫폼`, route: "channels" as const },
-        { label: "발견한 키워드", value: keywordCount, hint: `불러온 수집 결과 ${dashboard.trends.length}개 기준`, route: "trends" as const },
+        { label: "기존 수집 주제", value: keywordCount, hint: `불러온 수집 결과 ${dashboard.trends.length}개 기준`, route: "keywords" as const },
         { label: "발행 계획", value: dashboard.content.filter((content) => content.status === "scheduled").length, hint: nextScheduled ? `불러온 일정 중 ${dateLabel(nextScheduled.scheduledAt, true)}` : "불러온 콘텐츠의 발행 계획", route: "content" as const }
-      ].map((metric) => <button type="button" className="studio-summary-item" key={metric.label} onClick={() => onNavigate(metric.route)}><span>{metric.label}<ArrowUpRight size={13} /></span>{isInitialLoading ? <span className="studio-skeleton studio-skeleton-number" /> : <strong>{dashboard.database.connected || (metric.route === "trends" && dashboard.trends.length > 0) ? <>{countFormat.format(metric.value)}<small>개</small></> : "—"}</strong>}<small>{dashboard.database.connected || (metric.route === "trends" && dashboard.trends.length > 0) ? metric.hint : "DB 연결 후 확인할 수 있습니다"}</small></button>)}
+      ].map((metric) => <button type="button" className="studio-summary-item" key={metric.label} onClick={() => onNavigate(metric.route)}><span>{metric.label}<ArrowUpRight size={13} /></span>{isInitialLoading ? <span className="studio-skeleton studio-skeleton-number" /> : <strong>{dashboard.database.connected || (metric.route === "keywords" && dashboard.trends.length > 0) ? <>{countFormat.format(metric.value)}<small>개</small></> : "—"}</strong>}<small>{dashboard.database.connected || (metric.route === "keywords" && dashboard.trends.length > 0) ? metric.hint : "DB 연결 후 확인할 수 있습니다"}</small></button>)}
     </section>
 
     <div className="studio-discovery-bar">

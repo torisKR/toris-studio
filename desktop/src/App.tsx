@@ -3,7 +3,7 @@ import { SettingsPanel } from "./SettingsPanel";
 import { VideoPanel } from "./VideoPanel";
 import { YouTubePanel } from "./YouTubePanel";
 import { OAuthPanel } from "./OAuthPanel";
-import { OpalPanel } from "./OpalPanel";
+import { KeywordPanel } from "./KeywordPanel";
 import { External } from "./External";
 import { OverviewPanel } from "./OverviewPanel";
 import {
@@ -20,7 +20,7 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "overview" | "content" | "trends" | "opal" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings";
+type Tab = "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
@@ -49,7 +49,7 @@ const tabs = [
   { id: "overview", label: "오버뷰", icon: LayoutDashboard, group: "워크스페이스" },
   { id: "content", label: "콘텐츠 플래너", icon: FileText, group: "워크스페이스" },
   { id: "trends", label: "트렌드 탐색", icon: TrendingUp, group: "워크스페이스" },
-  { id: "opal", label: "Opal 탐색", icon: Search, group: "워크스페이스" },
+  { id: "keywords", label: "키워드 탐색", icon: Search, group: "워크스페이스" },
   { id: "ai", label: "AI 작업실", icon: Sparkles, group: "제작" },
   { id: "video", label: "영상 스튜디오", icon: Clapperboard, group: "제작" },
   { id: "channels", label: "내 채널", icon: Users, group: "채널과 연결" },
@@ -387,12 +387,12 @@ export function App() {
     openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", opal: "Opal 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", video: "영상 스튜디오", settings: "연결 설정" }[tab];
+  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", video: "영상 스튜디오", settings: "연결 설정" }[tab];
   const viewDescription = {
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
     trends: "실제 출처가 있는 콘텐츠와 키워드에서 다음 아이디어를 찾으세요.",
-    opal: "관심 주제로 키워드와 트렌드를 탐색하고, 출처와 결과를 내 기기에 보관하세요.",
+    keywords: "키워드로 콘텐츠를 찾고, 콘텐츠에 연결된 실제 검색어와 원문 근거를 확인하세요.",
     channels: "다섯 플랫폼의 채널 정보와 콘텐츠를 한 곳에서 관리하세요.",
     youtube: "YouTube Data API로 채널의 공개 성과와 최근 영상을 확인하세요.",
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
@@ -427,7 +427,7 @@ export function App() {
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
-          <div hidden={tab !== "opal"}><OpalPanel active={tab === "opal"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} /></div>
+          <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
 
           {tab === "content" && <>
             <section className="social-stats" aria-label="콘텐츠 현황"><div><span>불러온 콘텐츠</span><strong>{dashboard.content.length}<small>개</small></strong></div><div><span>검토할 초안</span><strong>{count("draft")}<small>개</small></strong></div><div><span>발행 계획</span><strong>{count("scheduled")}<small>개</small></strong></div><div><span>등록한 채널</span><strong>{dashboard.channels.length}<small>개</small></strong></div></section>

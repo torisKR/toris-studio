@@ -78,34 +78,71 @@ export interface TrendRefreshResult {
   warnings: string[];
 }
 
-export interface OpalStatus {
-  available: boolean;
-  cliAvailable: boolean;
-  workflowUrl: string | null;
-  account: string;
-  reason: string | null;
-  runActive: boolean;
+export type KeywordSearchMode = "local" | "official";
+export type KeywordSource = TrendSource | "all";
+export type KeywordCrawler = "crawl4ai" | "firecrawl";
+export interface KeywordStatus {
+  databaseConnected: boolean;
+  libraryCount: number;
+  indexLimit: number;
+  sources: { id: string; name: string; configured: boolean }[];
+  engines: { id: string; name: string; endpoint: string | null; available: boolean }[];
+  running: boolean;
 }
-
-export interface OpalResearchSource {
-  title: string;
-  url: string;
-  publishedAt: string | null;
+export interface KeywordEvidence {
+  field: "title" | "description" | "observed_query" | "source_topic" | "body";
+  terms: string[];
 }
-
-export interface OpalResearchKeyword {
+export interface ObservedKeyword {
   keyword: string;
-  rationale: string;
-  platforms: string[];
-  sources: OpalResearchSource[];
+  source: string;
+  observedAt: string;
+  rank?: number | null;
 }
-
-export interface OpalRun {
+export interface ExtractedKeyword {
+  keyword: string;
+  score: number;
+  occurrences: number;
+}
+export interface KeywordContent {
+  trend: SocialTrend;
+  matches: KeywordEvidence[];
+  observedKeywords: ObservedKeyword[];
+  extractedKeywords: ExtractedKeyword[];
+  libraryCount?: number;
+  originalKeyword?: string;
+  /** Only returned by get_content_keywords; search pages do not include full text. */
+  body?: string;
+  crawledAt?: string | null;
+  crawlEngine?: string | null;
+}
+export interface KeywordSearchResult {
+  query: string;
+  mode: KeywordSearchMode;
+  items: KeywordContent[];
+  total: number;
+  libraryCount: number;
+  indexLimit: number;
+  truncated: boolean;
+  searchedAt: string;
+  runId?: string | null;
+  warnings: string[];
+}
+export interface KeywordRun {
   id: string;
-  topic: string;
-  region: "KR";
-  lookbackDays: number;
-  generatedAt: string;
-  summary: string;
-  keywords: OpalResearchKeyword[];
+  query: string;
+  source: KeywordSource;
+  searchedAt: string;
+  resultCount: number;
+  results: { url: string; title: string; source: string; rank: number }[];
+}
+export interface KeywordCrawlResult {
+  trendId: string;
+  engine: KeywordCrawler;
+  url: string;
+  title: string;
+  text: string;
+  extractedKeywords: ExtractedKeyword[];
+  observedAt: string;
+  warnings: string[];
 }

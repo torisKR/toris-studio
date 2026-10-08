@@ -35,7 +35,7 @@ pnpm --dir desktop exec tauri build --bundles nsis
 
 결과는 `desktop/src-tauri/target/release/bundle/nsis/`에 생성됩니다. `.github/workflows/desktop.yml`에는 macOS·Windows 빌드 경로가 준비되어 있습니다. Windows CI 구성과 실제 Windows 기기에서 설치·OAuth·DB·영상 출력을 확인한 결과를 혼동하지 마세요. macOS 로컬 빌드와 별도로 Windows 실행 검증이 필요합니다.
 
-현재 로컬 개발용 산출물에는 배포 서명·macOS 공증과 자동 업데이트 운영이 구성되지 않았습니다. 일반 사용자 대상 배포 전에는 서명·공증, 업데이트 서명 및 복구 절차를 추가해야 합니다.
+공개 CI는 macOS Apple Silicon·Intel과 Windows x64 설치 파일을 빌드하며 서명한 updater 파일을 GitHub Releases·Packages에 보관합니다. 앱의 **연결 설정 → 앱 업데이트**로 설치합니다. Apple Developer ID 공증과 Windows Authenticode 서명은 아직 설정되지 않았으며 updater 서명과 별개입니다. 절차는 [배포 안내](RELEASE.md)를 참고하세요.
 
 설치 아이콘 원본은 `desktop/logo-full.png`입니다. 로고를 교체한 뒤 다음 명령으로 macOS ICNS와 Windows ICO를 함께 생성하고 앱을 다시 빌드하세요. PNG의 투명 배경을 유지합니다.
 
@@ -65,6 +65,10 @@ DB 컨테이너 실행에 필요한 비밀번호는 Git에서 제외된 `.env.db
 **내 채널 → 저장 정보 보기**에서 로컬 DB에 들어간 채널 이름·핸들·URL을 확인하고 다시 숨길 수 있습니다. 채널 등록에는 이름과 선택한 SNS의 공식 HTTPS 채널 URL이 필요합니다. 저장에 성공하면 내 채널 화면으로 이동하며 등록한 채널과 성공 메시지가 표시됩니다. 누락된 입력·저장 실패는 입력 화면에 표시하고 작성한 내용을 유지합니다.
 
 **SNS 로그인**은 계정 권한을 별도로 연결하는 화면입니다. 클라이언트 등록, 리디렉션 주소와 각 플랫폼의 제한은 [OAuth 설정](OAUTH.md)을 참고하세요. 저장된 연결 자체가 콘텐츠 자동 발행이나 다섯 플랫폼 전체의 실시간 인기 데이터 수집을 의미하지 않습니다.
+
+## 키워드 탐색
+
+Opal 메뉴를 **키워드 탐색**으로 교체합니다. 저장 자료 검색, YouTube·네이버 공식 검색과 Google Trends 주제 필터, 콘텐츠별 검색어 확인, 로컬 Crawl4AI 원문 수집을 제공합니다. 본문에서 추출한 단어와 실제 API 검색어는 구분해 표시합니다. 최신 5,000개 검색 범위·본문 앞부분 3,000자 색인·소스별 제한과 컨테이너 실행 방법은 [키워드 탐색 설계](KEYWORD_EXPLORER.md)를 참고하세요.
 
 ## AI 연결
 

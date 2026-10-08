@@ -1,0 +1,60 @@
+name: toris-studio-keywords
+
+services:
+  crawl4ai:
+    # Multi-platform release manifest verified for linux/arm64 and linux/amd64.
+    image: unclecode/crawl4ai:0.9.4@sha256:9021b3cb5c6f12570bbcd5395638495e0a06969b3148e377b953d174af2ebc9b
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11235:11235"
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?Initialize the private crawler credential first}
+      CRAWL4AI_ALLOW_INTERNAL_URLS: "false"
+      CRAWL4AI_ALLOW_INSECURE_TLS: "false"
+      CRAWL4AI_HOOKS_ENABLED: "false"
+      CRAWL4AI_EXECUTE_JS_ENABLED: "false"
+      REDIS_TASK_TTL: "600"
+    # Upstream's non-root image starts Redis, Gunicorn and Chromium internally.
+    user: "appuser"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    shm_size: "256m"
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /var/lib/redis:size=32m,uid=999,gid=999,mode=0700
+      - /var/lib/crawl4ai/outputs:size=32m,uid=999,gid=999,mode=0700
+      - /home/appuser/.crawl4ai:size=128m,uid=999,gid=999,mode=0700
+      - /home/appuser/.cache/url_seeder:size=16m,uid=999,gid=999,mode=0700
+      - /home/appuser/.gunicorn:size=16m,uid=999,gid=999,mode=0700
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+          pids: 512
+        reservations:
+          memory: 512M
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:11235/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - crawler
+
+networks:
+  crawler:
+    name: toris-studio-keywords
