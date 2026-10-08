@@ -1079,6 +1079,9 @@ mod tests {
         for account in ["u00", "u100", "u0 --permission full-access", "u", "../u0"] {
             assert!(!valid_account(account));
         }
+        #[cfg(windows)]
+        assert!(validate_cli_path(r"C:\Users\test\.local\bin\aside.exe").is_ok());
+        #[cfg(not(windows))]
         assert!(validate_cli_path("/Users/test/.local/bin/aside").is_ok());
         assert!(validate_cli_path("aside").is_err());
         assert!(validate_cli_path("/usr/bin/bash").is_err());
