@@ -371,6 +371,144 @@ fn fitting_text(
     Err("장면 제목/본문이 슬라이드 영역을 초과합니다. 텍스트를 여러 장면으로 나누세요.".into())
 }
 
+struct HeadlineToken {
+    text: String,
+    width: f32,
+    space_before: bool,
+}
+
+/// Prefer word boundaries, then balance the minimum number of measured lines.
+/// An overlong unspaced token falls back to Unicode scalars without truncation.
+fn wrap_motion_headline(font: &Font, text: &str, size: f32, width: f32) -> Vec<String> {
+    let space = font.metrics(' ', size).advance_width;
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut tokens = Vec::new();
+        for (word_index, word) in paragraph.split_whitespace().enumerate() {
+            let measured: Vec<_> = word
+                .chars()
+                .map(|character| (character, font.metrics(character, size).advance_width))
+                .collect();
+            let total: f32 = measured.iter().map(|(_, advance)| advance).sum();
+            if total <= width {
+                tokens.push(HeadlineToken {
+                    text: word.to_owned(),
+                    width: total,
+                    space_before: word_index > 0,
+                });
+                continue;
+            }
+            // Use the actual greedy line count to select a balanced target.
+            // This avoids a one-character tail in long CJK or English tokens.
+            let mut count = 1;
+            let mut occupied = 0.0;
+            for (_, advance) in &measured {
+                if occupied + advance > width && occupied > 0.0 {
+                    count += 1;
+                    occupied = 0.0;
+                }
+                occupied += advance;
+            }
+            let target = (total / count as f32).min(width);
+            let mut part = String::new();
+            let mut occupied = 0.0;
+            let mut first = true;
+            for (character, advance) in measured {
+                if occupied + advance > target && !part.is_empty() {
+                    tokens.push(HeadlineToken {
+                        text: std::mem::take(&mut part),
+                        width: occupied,
+                        space_before: first && word_index > 0,
+                    });
+                    first = false;
+                    occupied = 0.0;
+                }
+                part.push(character);
+                occupied += advance;
+            }
+            if !part.is_empty() {
+                tokens.push(HeadlineToken {
+                    text: part,
+                    width: occupied,
+                    space_before: first && word_index > 0,
+                });
+            }
+        }
+        if tokens.is_empty() {
+            if !paragraph.is_empty() {
+                lines.push(String::new());
+            }
+            continue;
+        }
+        let count = tokens.len();
+        let mut line_counts = vec![usize::MAX; count + 1];
+        let mut raggedness = vec![f64::INFINITY; count + 1];
+        let mut endings = vec![count; count];
+        line_counts[count] = 0;
+        raggedness[count] = 0.0;
+        for start in (0..count).rev() {
+            let mut occupied = 0.0;
+            for end in start..count {
+                if end > start && tokens[end].space_before {
+                    occupied += space;
+                }
+                occupied += tokens[end].width;
+                if occupied > width + 0.01 {
+                    break;
+                }
+                let candidate_count = line_counts[end + 1].saturating_add(1);
+                let candidate_raggedness =
+                    raggedness[end + 1] + ((width - occupied) as f64 / width as f64).powi(2);
+                if candidate_count < line_counts[start]
+                    || (candidate_count == line_counts[start]
+                        && candidate_raggedness < raggedness[start])
+                {
+                    line_counts[start] = candidate_count;
+                    raggedness[start] = candidate_raggedness;
+                    endings[start] = end + 1;
+                }
+            }
+        }
+        let mut start = 0;
+        while start < count {
+            let end = endings[start];
+            let mut line = String::new();
+            for (offset, token) in tokens[start..end].iter().enumerate() {
+                if offset > 0 && token.space_before {
+                    line.push(' ');
+                }
+                line.push_str(&token.text);
+            }
+            lines.push(line);
+            start = end;
+        }
+    }
+    lines
+}
+
+fn fitting_motion_headline(
+    font: &Font,
+    text: &str,
+    width: f32,
+    height: f32,
+    preferred: u32,
+) -> Result<(Vec<String>, f32), String> {
+    for size in (24..=preferred).rev() {
+        let lines = wrap_motion_headline(font, text, size as f32, width);
+        if lines.len() as f32 * size as f32 * 1.45 <= height
+            && lines.iter().all(|line| {
+                line.chars()
+                    .map(|character| font.metrics(character, size as f32).advance_width)
+                    .sum::<f32>()
+                    <= width + 0.01
+            })
+        {
+            return Ok((lines, size as f32));
+        }
+    }
+    Err("장면 제목이 모션 영역을 초과합니다. 제목을 여러 장면으로 나누세요.".into())
+}
+
 struct Canvas {
     width: u32,
     height: u32,
@@ -670,13 +808,12 @@ fn motion_assets(
 
     let headline_y = if vertical { 138 } else { 115 };
     let headline_height = if vertical { 235.0 } else { 174.0 };
-    let (headline, headline_size) = fitting_text(
+    let (headline, headline_size) = fitting_motion_headline(
         font,
         text_field(scene, "headline", 10000)?,
         available as f32,
         headline_height,
         if vertical { 54 } else { 60 },
-        24,
     )?;
     let line_height = (headline_size * 1.45).ceil() as u32;
     for (row, line) in headline.iter().enumerate() {
@@ -1454,6 +1591,53 @@ mod tests {
         assert!(motion_body_sections("   ", false).is_empty());
     }
     #[test]
+    #[ignore = "requires an installed OS font to assert measured multilingual headline wrapping"]
+    fn motion_headlines_balance_words_and_preserve_unicode() {
+        let font = load_font().unwrap();
+        let korean = "하루 정리, 크게 시작하지 마세요";
+        let (lines, size) = fitting_motion_headline(&font, korean, 632.0, 235.0, 54).unwrap();
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| line.trim().chars().count() > 1));
+        assert!(lines.iter().any(|line| line.contains("마세요")));
+        assert_eq!(lines.join(" "), korean);
+        for text in [
+            "PneumonoultramicroscopicsilicovolcanoconiosisAntidisestablishmentarianism",
+            "毎日の小さな行動を記録して無理をせずに自分らしい時間を少しずつ作ります",
+            "每天记录一个小小的行动让生活变得更加清晰轻松并且留下属于自己的时间",
+            "하루를 차분히 정리하고 작은 행동부터 시작하며 자신에게 맞는 방법을 찾아내는 시간을 꾸준히 이어가세요",
+        ] {
+            let (lines, measured_size) = fitting_motion_headline(&font, text, 632.0, 235.0, 54).unwrap();
+            let flattened: String = lines.iter().flat_map(|line| line.chars()).filter(|character| !character.is_whitespace()).collect();
+            let original: String = text.chars().filter(|character| !character.is_whitespace()).collect();
+            assert_eq!(flattened, original);
+            assert!(lines.iter().all(|line| line.chars().map(|character| font.metrics(character, measured_size).advance_width).sum::<f32>() <= 632.01));
+            assert!(lines.len() as f32 * measured_size * 1.45 <= 235.0);
+        }
+        for script in [
+            "日本語の見出し",
+            "中文标题内容",
+            "한글제목내용",
+            "LongEnglishToken",
+        ] {
+            let text: String = script.chars().cycle().take(70).collect();
+            for (width, height, preferred) in [(632.0, 235.0, 54), (1152.0, 174.0, 60)] {
+                let (lines, measured_size) =
+                    fitting_motion_headline(&font, &text, width, height, preferred).unwrap();
+                assert_eq!(lines.concat(), text);
+                assert!(lines.iter().all(|line| line.chars().count() > 1));
+                assert!(lines.iter().all(|line| line
+                    .chars()
+                    .map(|character| font.metrics(character, measured_size).advance_width)
+                    .sum::<f32>()
+                    <= width + 0.01));
+                assert!(
+                    measured_size >= 24.0 && lines.len() as f32 * measured_size * 1.45 <= height
+                );
+            }
+        }
+        assert!(size >= 24.0);
+    }
+    #[test]
     fn preserves_legacy_records_and_unknown_fields_atomically() {
         let temporary = tempfile::tempdir().unwrap();
         let file = temporary.path().join("projects.json");
@@ -1591,7 +1775,7 @@ mod tests {
             .unwrap_or_else(|| temporary.path().to_path_buf());
         let scenes: Vec<_> = crate::motion::PRESET_IDS.iter().enumerate().map(|(index, preset)| json!({
             "id":format!("motion-{index}"),"eyebrow":"MOTION / EDITORIAL",
-            "headline":"하나의 주제, 여섯 가지 움직임",
+                "headline":"하루 정리, 크게 시작하지 마세요",
             "body":"제목은 천천히 자리 잡고, 본문은 순서대로 나타납니다. 읽을 시간과 화면의 여백을 함께 설계합니다.",
             "narration":"","durationSec":2.0,"mediaType":"none",
             "motion":{"preset":preset,"intensity":0.8}
