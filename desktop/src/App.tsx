@@ -6,6 +6,8 @@ import { OAuthPanel } from "./OAuthPanel";
 import { KeywordPanel } from "./KeywordPanel";
 import { External } from "./External";
 import { OverviewPanel } from "./OverviewPanel";
+import { ContentBoard } from "./ContentBoard";
+import type { VideoResearchSeed } from "./video-research";
 import {
   ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
   CircleAlert, Clapperboard, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
@@ -128,8 +130,9 @@ function youtubeVideoId(value: string) {
   } catch { return null; }
 }
 
-function TrendCard({ trend, index, canSave, onSave }: {
+function TrendCard({ trend, index, canSave, onSave, onCreateVideo }: {
   trend: SocialTrend; index: number; canSave: boolean; onSave: (trend: SocialTrend) => void;
+  onCreateVideo: (trend: SocialTrend) => void;
 }) {
   const videoId = trend.source === "youtube" ? youtubeVideoId(trend.url) : null;
   const [playerUrl, setPlayerUrl] = useState<string | null>(null);
@@ -195,12 +198,13 @@ function TrendCard({ trend, index, canSave, onSave }: {
       <div className="social-trend-keyword"><span>#{trend.keyword}</span>{trend.metric && <strong>{trend.metric}</strong>}{trend.details?.channelTitle && <span>{trend.details.channelTitle}</span>}{trend.details?.viewCount !== undefined && <span>조회 {new Intl.NumberFormat("ko-KR").format(trend.details.viewCount)}회</span>}{trend.details?.subscriberCount !== undefined && <span>구독자 {new Intl.NumberFormat("ko-KR").format(trend.details.subscriberCount)}명</span>}{trend.details?.viewCount !== undefined && trend.details?.subscriberCount !== undefined && trend.details.subscriberCount > 0 && <span>조회 ÷ 구독자 {(trend.details.viewCount / trend.details.subscriberCount).toFixed(1)}배</span>}{trend.details?.durationSeconds !== undefined && <span>{Math.floor(trend.details.durationSeconds / 60)}분 {trend.details.durationSeconds % 60}초</span>}{trend.details?.viewGrowth !== undefined && <span>이전 수집 대비 {trend.details.viewGrowth >= 0 ? "+" : ""}{new Intl.NumberFormat("ko-KR").format(trend.details.viewGrowth)}회</span>}</div>
       {playerError && <p className="desktop-trend-player-error" role="alert">{playerError} 원본 보기로 영상을 확인할 수 있습니다.</p>}
     </div>
-    <div className="desktop-trend-card-actions"><External url={originalUrl} className="desktop-trend-original"><ExternalLink size={14} />{trend.source === "youtube" ? "YouTube에서 보기" : "원본 보기"}</External><button type="button" className="social-button compact" disabled={!canSave} onClick={() => onSave(trend)}><Plus size={15} />아이디어로 저장</button></div>
+    <div className="desktop-trend-card-actions"><External url={originalUrl} className="desktop-trend-original"><ExternalLink size={14} />{trend.source === "youtube" ? "YouTube에서 보기" : "원본 보기"}</External><div className="desktop-trend-create-actions"><button type="button" className="social-button compact" disabled={!canSave} onClick={() => onSave(trend)}><Plus size={15} />아이디어로 저장</button><button type="button" className="social-button compact primary" disabled={!canSave} onClick={() => onCreateVideo(trend)}><Clapperboard size={15} />영상 만들기</button></div></div>
   </article>;
 }
 
 export function App() {
   const [tab, setTab] = useState<Tab>("overview");
+  const [videoResearchSeed, setVideoResearchSeed] = useState<VideoResearchSeed | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -294,6 +298,23 @@ export function App() {
   ).slice(0, 10), [dashboard.trends, trendSource, trendFilter]);
   const availableAi = aiStatus.providers.filter((provider) => provider.available);
   const count = (status: ContentStatus) => dashboard.content.filter((item) => item.status === status).length;
+
+  function openResearchVideo(seed: VideoResearchSeed) {
+    setVideoResearchSeed(seed);
+    setTab("video");
+  }
+
+  function videoFromTrend(trend: SocialTrend) {
+    openResearchVideo({
+      requestId: crypto.randomUUID(), trendIds: [trend.id],
+      keyword: (trendKeyword.trim() || trend.keyword).replace(/\s+/g, " ").trim().slice(0, 100),
+      topic: trend.title.replace(/\s+/g, " ").trim().slice(0, 300)
+    });
+  }
+
+  function renderContentCard(item: SocialContent) {
+    return <article className="social-content-card" key={item.id}><div className="social-card-platform"><PlatformMark platform={item.platform} small /><span>{platforms[item.platform].label}</span><span className="social-card-account">{dashboard.channels.find((channel) => channel.id === item.channelId)?.name ?? "채널 미지정"}</span></div><button className="social-card-edit" onClick={() => openContent(item)}><h3>{item.title}</h3><p>{item.body || "본문을 작성해 아이디어를 구체화하세요."}</p></button><div className="social-card-footer"><span>{item.status === "scheduled" ? <CalendarClock size={13} /> : <FileText size={13} />}{formatDate(item.status === "scheduled" ? item.scheduledAt : item.updatedAt, item.status === "scheduled")}</span>{safeUrl(item.url) ? <External url={safeUrl(item.url)} aria-label={`${item.title} 발행 링크 열기`}><ExternalLink size={14} /></External> : <button aria-label={`${item.title} 수정`} onClick={() => openContent(item)}><ArrowRight size={14} /></button>}</div></article>;
+  }
 
   function openContent(item?: SocialContent, seed?: Partial<ContentForm>) {
     setContentForm(item ? {
@@ -397,7 +418,7 @@ export function App() {
     youtube: "YouTube Data API로 채널의 공개 성과와 최근 영상을 확인하세요.",
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
     ai: "연결된 로컬 AI로 채널에 맞는 초안과 패턴 리포트를 작성하세요.",
-    video: "장면과 음성을 편집하고 Rust로 로컬 MP4를 출력하세요.",
+    video: "트렌드와 키워드를 영상 초안으로 만들고, 장면과 음성을 편집해 로컬 MP4로 출력하세요.",
     settings: "내 기기의 데이터베이스와 AI, 수집 소스를 연결하세요."
   }[tab];
 
@@ -422,33 +443,31 @@ export function App() {
           {loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
           {!loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
-          {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} />}
+          {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onCreateVideo={videoFromTrend} />}
 
-          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} /></div>
+          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} researchSeed={videoResearchSeed} onResearchSeedHandled={(id) => setVideoResearchSeed((current) => current?.requestId === id ? null : current)} onOpenKeywords={() => setTab("keywords")} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
-          <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
+          <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onCreateVideo={openResearchVideo} /></div>
 
           {tab === "content" && <>
             <section className="social-stats" aria-label="콘텐츠 현황"><div><span>불러온 콘텐츠</span><strong>{dashboard.content.length}<small>개</small></strong></div><div><span>검토할 초안</span><strong>{count("draft")}<small>개</small></strong></div><div><span>발행 계획</span><strong>{count("scheduled")}<small>개</small></strong></div><div><span>등록한 채널</span><strong>{dashboard.channels.length}<small>개</small></strong></div></section>
             <div className="social-content-toolbar"><div className="social-platform-filters" role="group" aria-label="플랫폼 필터"><button className={platformFilter === "all" ? "active" : ""} aria-pressed={platformFilter === "all"} onClick={() => setPlatformFilter("all")}>전체 채널</button>{SOCIAL_PLATFORMS.map((platform) => { const Icon = platforms[platform].icon; return <button key={platform} className={platformFilter === platform ? "active" : ""} aria-pressed={platformFilter === platform} onClick={() => setPlatformFilter(platform)}><Icon size={15} />{platforms[platform].label}</button>; })}</div><label className="social-search"><Search size={16} /><input aria-label="콘텐츠 검색" placeholder="콘텐츠 검색" value={contentSearch} onChange={(event) => setContentSearch(event.target.value)} /></label></div>
             <p className="social-plan-note"><CalendarClock size={15} />발행 계획은 한국 시간으로 관리하는 일정입니다. 플랫폼에 자동으로 게시하지 않습니다.</p>
-            {loading && dashboard.content.length === 0 ? <div className="social-loading" role="status"><LoaderCircle className="social-spin" size={22} />콘텐츠를 불러오는 중입니다.</div> : <section className="social-board" aria-label="콘텐츠 진행 상태">
-              {CONTENT_STATUSES.map((status) => { const items = visibleContent.filter((item) => item.status === status); return <section className={`social-lane ${status}`} key={status} aria-label={statusLabels[status]}><div className="social-lane-heading"><h2><span className="social-status-dot" />{statusLabels[status]}<small>{items.length}</small></h2><button className="social-add" aria-label={`${statusLabels[status]} 콘텐츠 추가`} disabled={!dashboard.database.connected} onClick={() => openContent(undefined, { status })}><Plus size={17} /></button></div><div className="social-lane-body">{items.map((item) => <article className="social-content-card" key={item.id}><div className="social-card-platform"><PlatformMark platform={item.platform} small /><span>{platforms[item.platform].label}</span><span className="social-card-account">{dashboard.channels.find((channel) => channel.id === item.channelId)?.name ?? "채널 미지정"}</span></div><button className="social-card-edit" onClick={() => openContent(item)}><h3>{item.title}</h3><p>{item.body || "본문을 작성해 아이디어를 구체화하세요."}</p></button><div className="social-card-footer"><span>{item.status === "scheduled" ? <CalendarClock size={13} /> : <FileText size={13} />}{formatDate(item.status === "scheduled" ? item.scheduledAt : item.updatedAt, item.status === "scheduled")}</span>{safeUrl(item.url) ? <External url={safeUrl(item.url)} aria-label={`${item.title} 발행 링크 열기`}><ExternalLink size={14} /></External> : <button aria-label={`${item.title} 수정`} onClick={() => openContent(item)}><ArrowRight size={14} /></button>}</div></article>)}{items.length === 0 && <div className="social-lane-empty"><span>{status === "draft" ? "첫 아이디어를 적어보세요" : status === "ready" ? "검토를 마친 초안을 모아두세요" : status === "scheduled" ? "다음 발행 일정을 계획하세요" : "발행한 콘텐츠를 기록하세요"}</span>{status === "draft" && !contentSearch && <button disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={14} />초안 만들기</button>}</div>}</div></section>; })}
-            </section>}
+            {loading && dashboard.content.length === 0 ? <div className="social-loading" role="status"><LoaderCircle className="social-spin" size={22} />콘텐츠를 불러오는 중입니다.</div> : <ContentBoard items={visibleContent} renderContentCard={renderContentCard} onAddContent={(status) => openContent(undefined, { status })} canAddContent={dashboard.database.connected} showCreateDraft={!contentSearch} />}
             <div className="social-bottom-prompt"><TrendingUp size={20} /><div><strong>오늘은 어떤 콘텐츠를 만들까요?</strong><span>최신 키워드를 살펴보고, 실제 출처에서 아이디어를 가져오세요.</span></div><button className="social-button" onClick={() => setTab("trends")}>트렌드 탐색<ArrowRight size={16} /></button></div>
           </>}
 
           {tab === "trends" && <>
             <form className="social-trend-search" onSubmit={refreshTrends}><div><label htmlFor="social-trend-keyword">관심 키워드</label><div className="social-search"><Search size={18} /><input id="social-trend-keyword" placeholder="예: AI, 생산성, 로컬 여행" value={trendKeyword} maxLength={100} onChange={(event) => setTrendKeyword(event.target.value)} /></div></div><button className="social-button primary" disabled={refreshingTrends} type="submit">{refreshingTrends ? <LoaderCircle size={17} className="social-spin" /> : <Search size={17} />}{refreshingTrends ? "수집 중" : "키워드로 수집"}</button><p>키워드가 없으면 현재 트렌드를 수집합니다. YouTube·네이버 검색은 연결 설정의 API 정보가 필요합니다.</p></form>
             {trendWarnings.length > 0 && <div className="social-collection-warnings" role="status"><CircleAlert size={17} /><div><strong>일부 소스의 수집 상태를 확인하세요</strong>{trendWarnings.map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
-            <div className="social-section-heading"><div><h2>최근 수집 콘텐츠 · 키워드</h2><p>영상과 원본 설명을 미리 보고, 관심 있는 콘텐츠를 아이디어로 저장하세요.</p></div><button className="social-button" disabled={visibleTrends.length === 0 || availableAi.length === 0 || aiBusy} onClick={patternReport}><Sparkles size={16} />패턴 리포트</button></div>
+            <div className="social-section-heading"><div><h2>최근 수집 콘텐츠 · 키워드</h2><p>원본과 설명을 확인하고, 관심 있는 콘텐츠를 영상 초안이나 아이디어로 가져오세요.</p></div><button className="social-button" disabled={visibleTrends.length === 0 || availableAi.length === 0 || aiBusy} onClick={patternReport}><Sparkles size={16} />패턴 리포트</button></div>
             <div className="social-source-filters" role="group" aria-label="트렌드 출처 필터">{(["all", "google_trends", "youtube", "naver_blog"] as const).map((source) => <button key={source} aria-pressed={trendSource === source} className={trendSource === source ? "active" : ""} onClick={() => setTrendSource(source)}>{source === "all" ? "전체 출처" : sourceLabels[source]}</button>)}</div>            <div className="desktop-trend-filters" role="group" aria-label="YouTube 콘텐츠 조건"><span>YouTube 조건</span>{([
               ["all", "전체"], ["short", "3분 이하 영상"], ["small_channel", "작은 채널 · 높은 조회"]
             ] as const).map(([filter, label]) => <button key={filter} type="button" aria-pressed={trendFilter === filter} className={trendFilter === filter ? "active" : ""} onClick={() => setTrendFilter(filter)}>{label}</button>)}</div>
             {trendFilter !== "all" && <p className="desktop-trend-filter-note">{trendFilter === "short" ? "원본에 길이가 제공된 3분 이하 영상입니다. 세로 형식이나 Shorts 분류가 확인된 것은 아닙니다." : "구독자가 1만 명 이하이고 조회수가 구독자 수의 5배 이상인 영상입니다. 실제 제공된 수치가 있는 결과만 표시합니다."}</p>}
 
-            {loading && dashboard.trends.length === 0 ? <div className="social-loading"><LoaderCircle size={22} className="social-spin" />트렌드를 불러오는 중입니다.</div> : visibleTrends.length === 0 ? <EmptyState icon={TrendingUp} title={dashboard.trends.length ? "조건에 맞는 결과가 없어요" : "아직 수집한 트렌드가 없어요"} text={dashboard.trends.length ? "조건을 바꾸거나 관심 키워드로 새 콘텐츠를 수집하세요." : "트렌드 수집을 누르면 실제 출처의 키워드와 콘텐츠가 이곳에 표시됩니다."}><button className="social-button" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={16} />첫 트렌드 수집</button></EmptyState> : <div className="social-trend-list">{visibleTrends.map((trend, index) => <TrendCard key={trend.id} trend={trend} index={index} canSave={dashboard.database.connected} onSave={useTrend} />)}</div>}
+            {loading && dashboard.trends.length === 0 ? <div className="social-loading"><LoaderCircle size={22} className="social-spin" />트렌드를 불러오는 중입니다.</div> : visibleTrends.length === 0 ? <EmptyState icon={TrendingUp} title={dashboard.trends.length ? "조건에 맞는 결과가 없어요" : "아직 수집한 트렌드가 없어요"} text={dashboard.trends.length ? "조건을 바꾸거나 관심 키워드로 새 콘텐츠를 수집하세요." : "트렌드 수집을 누르면 실제 출처의 키워드와 콘텐츠가 이곳에 표시됩니다."}><button className="social-button" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={16} />첫 트렌드 수집</button></EmptyState> : <div className="social-trend-list">{visibleTrends.map((trend, index) => <TrendCard key={trend.id} trend={trend} index={index} canSave={dashboard.database.connected} onSave={useTrend} onCreateVideo={videoFromTrend} />)}</div>}
             <div className="social-trend-footnote"><ShieldCheck size={17} /><p>검색 결과의 순서는 인기 순위를 의미하지 않습니다. Threads·TikTok·Instagram의 실시간 인기 콘텐츠는 현재 수집하지 않으며, 각 플랫폼에서 직접 확인할 수 있습니다.</p></div>
             <div className="social-external-platforms">{(["threads", "tiktok", "instagram"] as const).map((platform) => <External key={platform} url={{ threads: "https://www.threads.com/", tiktok: "https://www.tiktok.com/", instagram: "https://www.instagram.com/" }[platform]}><PlatformMark platform={platform} small /><span>{platforms[platform].label} 열기</span><ArrowUpRight size={15} /></External>)}</div>
           </>}

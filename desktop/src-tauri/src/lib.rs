@@ -12,6 +12,7 @@ pub mod trends;
 pub mod updater;
 pub mod vault;
 pub mod video_embed;
+pub mod video_research;
 pub mod youtube;
 
 #[cfg(feature = "desktop")]
@@ -273,6 +274,28 @@ mod desktop {
         media::save_project(input)
     }
     #[tauri::command]
+    pub async fn video_research_preview(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+        input: video_research::PreviewInput,
+    ) -> Result<video_research::ResearchPreview, String> {
+        updater::authorize(&window)?;
+        video_research::preview(&state.config_snapshot().await, input).await
+    }
+    #[tauri::command]
+    pub async fn video_create_research_project(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+        updates: State<'_, Arc<updater::UpdateController>>,
+        input: video_research::CreateInput,
+    ) -> Result<video_research::ResearchResult, String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 영상 초안을 만드세요.".into());
+        }
+        video_research::create(&state.config_snapshot().await, input).await
+    }
+    #[tauri::command]
     pub async fn video_render_project(project: Value) -> Result<Value, String> {
         media::render_project(project).await
     }
@@ -488,6 +511,8 @@ mod desktop {
                 start_keyword_crawler,
                 video_list_projects,
                 video_save_project,
+                video_research_preview,
+                video_create_research_project,
                 video_render_project,
                 video_generate_voice,
                 media_status,
