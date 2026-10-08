@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Toris Studio macOS·Windows 데스크톱 앱을 다운로드하세요. 채널과 콘텐츠, 트렌드, 로컬 AI 작업을 한곳에서 관리합니다.">
+  <meta name="referrer" content="no-referrer">
+  <title>Toris Studio 다운로드 — macOS · Windows</title>
+  <link rel="icon" type="image/png" href="logo.png">
+  <style>
+    :root { color-scheme: dark; --bg: #0b0f14; --panel: #111820; --border: #2c3743; --text: #eef4fa; --muted: #b0bfce; --accent: #99e7c1; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.75 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: inherit; text-underline-offset: 4px; }
+    a:hover { color: var(--accent); }
+    a:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
+    .skip { position: fixed; left: 16px; top: -100px; background: var(--accent); color: #0c2619; border-radius: 8px; padding: 10px 18px; z-index: 2; }
+    .skip:focus { top: 16px; }
+    .wrap { width: min(100% - 48px, 1050px); margin-inline: auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 96px; border-bottom: 1px solid var(--border); }
+    .brand { display: inline-flex; align-items: center; gap: 11px; font-size: 19px; font-weight: 650; letter-spacing: -.035em; text-decoration: none; }
+    .brand img { width: 42px; height: 42px; object-fit: contain; }
+    .source { font-size: 13px; color: var(--muted); }
+    main { padding-top: 72px; }
+    .eyebrow { display: block; color: var(--accent); font-size: 12px; font-weight: 650; letter-spacing: .12em; margin-bottom: 17px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) 166px; gap: 36px; align-items: center; padding-bottom: 46px; }
+    h1 { font-size: clamp(32px, 5vw, 48px); letter-spacing: -.055em; line-height: 1.25; margin: 0 0 21px; font-weight: 700; }
+    .hero p { max-width: 630px; margin: 0; color: var(--muted); font-size: 16px; line-height: 1.9; }
+    .hero > img { display: block; width: 166px; height: 166px; object-fit: contain; }
+    .installer { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, .95fr); gap: 30px; padding: 28px; border: 1px solid #3c5949; border-radius: 15px; background: #132019; }
+    h2 { margin: 0; font-size: 21px; letter-spacing: -.04em; font-weight: 650; }
+    .installer p { margin: 11px 0 0; color: #c1d4c8; font-size: 14px; }
+    .download-form label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 600; color: #d9eade; }
+    select { display: block; width: 100%; min-height: 48px; border: 1px solid #526b5c; border-radius: 8px; padding: 11px 13px; background: #0c1611; color: var(--text); font: inherit; font-size: 14px; }
+    .primary { display: flex; align-items: center; justify-content: center; min-height: 48px; border: 1px solid var(--accent); border-radius: 8px; padding: 11px 18px; background: var(--accent); color: #10261b; font-size: 14px; font-weight: 650; text-decoration: none; margin-top: 12px; text-align: center; }
+    .primary:hover { color: #10261b; background: #b5efcf; }
+    .download-meta { display: block; margin-top: 8px; color: #b2cbbc; font-size: 12px; overflow-wrap: anywhere; }
+    .help-link { display: inline-block; margin-top: 16px; font-size: 13px; color: #c5ddce; }
+    .choose-help { margin-top: 18px; padding: 17px 21px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+    .choose-help summary { font-size: 14px; cursor: pointer; color: #dce8f2; }
+    .choose-help p { margin: 13px 0 0; color: var(--muted); font-size: 13px; }
+    .section { margin-top: 54px; }
+    .section-intro { margin: 10px 0 23px; color: var(--muted); font-size: 14px; }
+    .platforms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
+    .platforms article { display: flex; flex-direction: column; padding: 23px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+    .platforms h3 { margin: 5px 0 4px; font-size: 17px; letter-spacing: -.03em; }
+    .platforms .badge { align-self: flex-start; border: 1px solid #46574b; border-radius: 5px; padding: 1px 7px; font-size: 11px; color: #bad5c4; }
+    .platforms p { margin: 8px 0 22px; color: var(--muted); font-size: 13px; line-height: 1.85; }
+    .file-link { display: block; margin-top: auto; border: 1px solid #43544b; border-radius: 7px; padding: 9px 13px; color: #d4e8dc; text-decoration: none; font-size: 13px; font-weight: 600; text-align: center; }
+    .file-link:hover { background: #1c2e24; border-color: #76a28b; }
+    .install-steps { padding: 0; margin: 23px 0 0; list-style: none; counter-reset: steps; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+    .install-steps li { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; column-gap: 15px; padding: 23px; border-bottom: 1px solid var(--border); counter-increment: steps; }
+    .install-steps li:last-child { border-bottom: 0; }
+    .install-steps li::before { content: counter(steps); display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid #3c5646; border-radius: 7px; color: #bee2ce; font-size: 13px; font-weight: 600; }
+    .install-steps strong { display: block; font-size: 15px; font-weight: 600; }
+    .install-steps p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.9; }
+    .resources { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 20px; font-size: 13px; color: #c4d6cc; }
+    .builders { margin: 40px 0 56px; padding: 18px 22px; border: 1px solid var(--border); border-radius: 10px; }
+    .builders summary { cursor: pointer; font-size: 14px; color: #c9d7e2; }
+    .builders p { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
+    .builders code { display: block; padding: 10px 13px; margin-top: 13px; background: #121922; border: 1px solid #313d49; border-radius: 6px; overflow-wrap: anywhere; font-size: 12px; color: #c1d7ca; }
+    footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 23px 0 34px; border-top: 1px solid var(--border); color: #a4b4c3; font-size: 12px; }
+    @media (max-width: 760px) { .wrap { width: min(100% - 32px, 600px); } header { min-height: 80px; } main { padding-top: 42px; } .hero { grid-template-columns: minmax(0, 1fr); gap: 23px; } .hero > img { width: 100px; height: 100px; grid-row: 1; } .hero p { font-size: 15px; } .installer { grid-template-columns: minmax(0, 1fr); gap: 23px; padding: 22px; } .platforms { grid-template-columns: minmax(0, 1fr); } .platforms article { padding: 22px; } .platforms p { margin-bottom: 16px; } .section { margin-top: 40px; } .install-steps li { padding: 20px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 이동</a>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="https://github.com/torisKR/toris-studio"><img src="logo.png" width="42" height="42" alt="">Toris Studio</a>
+      <a class="source" href="https://github.com/torisKR/toris-studio/releases/latest" rel="noreferrer">공식 릴리스 ↗</a>
+    </header>
+    <main id="main">
+      <div class="hero">
+        <div><span class="eyebrow">DESKTOP WORKSPACE</span><h1>콘텐츠 작업을<br>내 기기의 스튜디오에서.</h1><p>채널과 콘텐츠를 관리하고, 관심 키워드와 트렌드를 살펴보세요. SNS 로그인, 로컬 AI, 영상 작업을 macOS·Windows 앱 한곳에서 이어갑니다.</p></div>
+        <img src="logo.png" width="166" height="166" alt="Toris Studio 앱 아이콘">
+      </div>
+      <section class="installer" aria-labelledby="download-title">
+        <div><h2 id="download-title">내 컴퓨터에 맞는 앱 받기</h2><p>운영체제와 프로세서를 직접 선택하세요.<br>다운로드는 공식 GitHub의 최신 릴리스로 연결됩니다.</p><a class="help-link" href="#processor-help">어떤 설치 파일을 선택하나요?</a></div>
+        <div class="download-form">
+          <label for="platform">운영체제 · 프로세서</label>
+          <select id="platform"><option value="">설치할 컴퓨터를 선택하세요</option><option value="mac-arm64">macOS · Apple Silicon (M 시리즈)</option><option value="mac-x64">macOS · Intel</option><option value="windows-x64">Windows · x64 (Intel · AMD)</option></select>
+          <a class="primary" id="selected-download" href="https://github.com/torisKR/toris-studio/releases/latest" rel="noreferrer">모든 설치 파일 보기</a>
+          <span class="download-meta" id="download-description" role="status">선택하면 해당 컴퓨터의 설치 파일을 받을 수 있습니다.</span>
+        </div>
+      </section>
+      <details class="choose-help" id="processor-help"><summary>내 컴퓨터의 프로세서 확인하기</summary><p><strong>Mac:</strong> Apple 메뉴 → 이 Mac에 관하여. ‘칩’에 Apple M 시리즈가 표시되면 Apple Silicon, ‘프로세서’에 Intel이 표시되면 Intel 파일을 선택하세요.</p><p><strong>Windows:</strong> 설정 → 시스템 → 정보 → 시스템 종류에서 x64 기반 프로세서를 확인하세요. ARM 기반 Windows 전용 설치 파일은 현재 제공하지 않습니다.</p></details>
+      <section class="section" aria-labelledby="files-title">
+        <h2 id="files-title">운영체제별 설치 파일</h2><p class="section-intro">바로 다운로드할 수도 있습니다. 최신 버전의 변경 사항과 파일 목록은 공식 릴리스에서 확인하세요.</p>
+        <div class="platforms">
+          <article><span class="badge">Apple Silicon · ARM64</span><h3>macOS · M 시리즈</h3><p>DMG를 열고 Toris Studio를<br>응용 프로그램 폴더로 옮기세요.</p><a class="file-link" href="https://github.com/torisKR/toris-studio/releases/latest/download/Toris-Studio-macOS-arm64.dmg" rel="noreferrer">Mac Apple Silicon 다운로드</a></article>
+          <article><span class="badge">Intel · x64</span><h3>macOS · Intel</h3><p>Intel 프로세서를 사용하는 Mac에<br>맞는 DMG 설치 파일입니다.</p><a class="file-link" href="https://github.com/torisKR/toris-studio/releases/latest/download/Toris-Studio-macOS-x64.dmg" rel="noreferrer">Mac Intel 다운로드</a></article>
+          <article><span class="badge">Intel · AMD · x64</span><h3>Windows</h3><p>설치 프로그램을 실행하고<br>안내에 따라 설치하세요.</p><a class="file-link" href="https://github.com/torisKR/toris-studio/releases/latest/download/Toris-Studio-Windows-x64-setup.exe" rel="noreferrer">Windows 다운로드</a></article>
+        </div>
+      </section>
+      <section class="section" aria-labelledby="start-title">
+        <h2 id="start-title">처음 시작하기</h2>
+        <ol class="install-steps">
+          <li><div><strong>설치하고 Toris Studio를 실행하세요</strong><p>Mac은 응용 프로그램 폴더, Windows는 시작 메뉴에서 앱을 열 수 있습니다.</p></div></li>
+          <li><div><strong>연결 설정에서 내 작업 환경을 준비하세요</strong><p>macOS는 OrbStack, Windows는 Docker Desktop을 실행한 뒤 ‘DB 컨테이너 실행 · 초기화’를 누르세요. 수집 API와 AI 연결 정보를 등록하면 내 채널과 콘텐츠를 관리할 수 있습니다. 키와 OAuth 토큰은 기기의 보안 저장소에 보관합니다.</p></div></li>
+          <li><div><strong>다음 업데이트는 앱 안에서 확인하세요</strong><p>연결 설정 → 앱 업데이트 → 업데이트 확인. 새 버전의 안내를 확인한 뒤 작업 내용을 저장하고 설치하면 앱이 다시 시작됩니다. 수동 설치 파일도 이 페이지에서 받을 수 있습니다.</p></div></li>
+        </ol>
+        <nav class="resources" aria-label="설치 및 사용 안내"><a href="https://github.com/torisKR/toris-studio/blob/main/docs/DESKTOP.md" rel="noreferrer">데스크톱 사용 안내 ↗</a><a href="https://github.com/torisKR/toris-studio/blob/main/docs/OAUTH.md" rel="noreferrer">SNS 로그인 안내 ↗</a><a href="https://github.com/torisKR/toris-studio/releases/latest" rel="noreferrer">릴리스 · 체크섬 보기 ↗</a></nav>
+      </section>
+      <details class="builders"><summary>개발자용 GitHub Packages 배포 파일</summary><p>설치 파일과 업데이트 메타데이터는 GitHub Releases에서 제공하며, 같은 릴리스 파일을 GitHub Packages의 OCI 아티팩트로도 보관합니다. 패키지 도구에서 필요한 버전 태그를 지정해 받을 수 있습니다.</p><code>ghcr.io/toriskr/toris-studio/desktop:&lt;버전&gt;</code><p><a href="https://github.com/torisKR?tab=packages" rel="noreferrer">GitHub Packages 보기 ↗</a> · <a href="https://github.com/torisKR/toris-studio/blob/main/docs/RELEASE.md" rel="noreferrer">빌드·배포 안내 ↗</a></p></details>
+    </main>
+    <footer><span>Toris Studio · macOS / Windows</span><a href="https://github.com/torisKR/toris-studio" rel="noreferrer">공개 소스 저장소 ↗</a></footer>
+  </div>
+  <script>
+    (() => {
+      const base = "https://github.com/torisKR/toris-studio/releases/latest";
+      const installers = {
+        "mac-arm64": { file: "Toris-Studio-macOS-arm64.dmg", label: "Mac Apple Silicon 다운로드", detail: "Apple M 시리즈 · ARM64 · DMG 설치 파일" },
+        "mac-x64": { file: "Toris-Studio-macOS-x64.dmg", label: "Mac Intel 다운로드", detail: "Intel Mac · x64 · DMG 설치 파일" },
+        "windows-x64": { file: "Toris-Studio-Windows-x64-setup.exe", label: "Windows 다운로드", detail: "Intel · AMD Windows · x64 · 설치 프로그램" }
+      };
+      const selector = document.getElementById("platform");
+      const link = document.getElementById("selected-download");
+      const description = document.getElementById("download-description");
+      selector.addEventListener("change", () => {
+        const installer = installers[selector.value];
+        link.href = installer ? `${base}/download/${installer.file}` : base;
+        link.textContent = installer ? installer.label : "모든 설치 파일 보기";
+        description.textContent = installer ? installer.detail : "선택하면 해당 컴퓨터의 설치 파일을 받을 수 있습니다.";
+      });
+    })();
+  </script>
+</body>
+</html>
