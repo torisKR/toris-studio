@@ -93,15 +93,21 @@ test('retained draft resolves through authenticated pagination when REST tag ret
   }
 });
 
-test('draft upload, promotion and quarantine use one verified release ID', async () => temporary(async root => publicationFixture(root, async (directory, assetNames) => {
+test('creation response binds one release ID despite delayed draft listing through upload, promotion and quarantine', async () => temporary(async root => publicationFixture(root, async (directory, assetNames) => {
   let release = null;
   let packagePushed = false;
   const transitions = [];
   const request = async (resource, options = {}) => {
     if (resource === 'releases/tags/v0.1.10') return null; // Documented draft behavior.
-    if (resource === 'releases?per_page=100&page=1') return release ? [release] : [];
+    if (resource === 'releases?per_page=100&page=1') return []; // Still empty immediately after creation.
     if (resource === 'releases/latest') return null;
     if (resource === 'git/ref/tags/v0.1.10') return { object: { type: 'commit', sha: source } };
+    if (resource === 'releases') {
+      assert.equal(options.method, 'POST');
+      assert.deepEqual(options.body, { tag_name: 'v0.1.10', target_commitish: source, draft: true, prerelease: false, make_latest: 'false', name: 'Toris Studio 0.1.10', body: 'fixture release instructions' });
+      release = { id: 417, tag_name: 'v0.1.10', target_commitish: source, draft: true, prerelease: false, assets: [] };
+      return release;
+    }
     assert.equal(resource, 'releases/417');
     assert.ok(release);
     if (options.method === 'PATCH') {
@@ -112,9 +118,7 @@ test('draft upload, promotion and quarantine use one verified release ID', async
     return release;
   };
   const command = (program, args) => {
-    if (program === 'gh' && args[1] === 'create') {
-      release = { id: 417, tag_name: 'v0.1.10', target_commitish: source, draft: true, prerelease: false, assets: [] };
-    } else if (program === 'gh' && args[1] === 'upload') {
+    if (program === 'gh' && args[1] === 'upload') {
       release.assets = assetNames.map(name => ({ name, size: 13 }));
     } else if (program === 'oras' && args[0] === 'push') {
       packagePushed = true;
@@ -133,6 +137,16 @@ test('draft upload, promotion and quarantine use one verified release ID', async
   assert.deepEqual(transitions[1], { resource: 'releases/417', body: { prerelease: true, make_latest: 'false' } });
   await assert.rejects(quarantine({ request: async () => ({ ...release, id: 418 }) }), /ID, tag, or source/);
   assert.equal(transitions.length, 2, 'A different release must never be quarantined');
+})));
+
+test('invalid creation response cannot upload or publish assets', async () => temporary(async root => publicationFixture(root, async (directory) => {
+  for (const changed of [null, { id: 417, tag_name: 'v0.1.10', target_commitish: 'b'.repeat(40), draft: true }, { id: 417, tag_name: 'v0.1.9', target_commitish: source, draft: true }]) {
+    await assert.rejects(publish(directory, {
+      request: async resource => resource === 'releases' ? changed : resource.startsWith('releases?') ? [] : null,
+      command: () => assert.fail('An invalid release identity must not upload assets'),
+      spawn: () => assert.fail('An invalid release identity must not access the registry'),
+    }), /ID, tag, or source/);
+  }
 })));
 
 test('publisher refuses public releases and incomplete drafts before registry mutation', async () => temporary(async root => publicationFixture(root, async (directory, assetNames) => {
