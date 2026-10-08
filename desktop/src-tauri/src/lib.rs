@@ -302,6 +302,17 @@ mod desktop {
         opal::configure(input).await
     }
     #[tauri::command]
+    pub async fn open_opal_workflow(
+        window: tauri::WebviewWindow,
+        updates: State<'_, Arc<updater::UpdateController>>,
+    ) -> Result<(), String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 Opal 워크플로우를 여세요.".into());
+        }
+        opal::open_workflow().await
+    }
+    #[tauri::command]
     pub async fn run_opal_research(
         state: State<'_, Arc<AppState>>,
         input: opal::ResearchInput,
@@ -448,6 +459,7 @@ mod desktop {
                 prepare_youtube_embed,
                 get_opal_status,
                 configure_opal,
+                open_opal_workflow,
                 run_opal_research,
                 get_opal_runs,
                 oauth_status,

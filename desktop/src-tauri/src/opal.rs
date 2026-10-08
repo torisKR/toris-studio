@@ -28,6 +28,8 @@ const RESULT_MARKER: &str = "TORIS_OPAL_RESULT:";
 const BLOCKED_MARKER: &str = "TORIS_OPAL_BLOCKED:";
 const MAX_OUTPUT: usize = 128 * 1024;
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
+const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+const OPAL_HOME: &str = "https://opal.google/";
 const OUTPUT_ERROR: &str = "Opal 결과를 확인하지 못했습니다. 워크플로우가 실제 출처를 포함한 지정 JSON을 출력하는지 확인하세요.";
 const DATABASE_ERROR: &str =
     "Opal 결과를 로컬 DB에 저장할 수 없습니다. 연결 설정에서 로컬 DB 시작·갱신 후 다시 시도하세요.";
@@ -519,6 +521,9 @@ fn parse_result(output: &[u8], topic: &str) -> Result<OpalRun, String> {
             "WORKFLOW_UNAVAILABLE" => {
                 "등록된 Opal 워크플로우를 열 수 없습니다. 주소와 Google 계정을 확인하세요."
             }
+            "WORKFLOW_EMPTY" => {
+                "등록된 Opal 워크플로우에 탐색 단계가 없습니다. Aside에서 입력·생성·출력 단계를 구성한 뒤 다시 탐색하세요."
+            }
             _ => "Opal 탐색을 완료하지 못했습니다. Aside에서 워크플로우 실행 상태를 확인하세요.",
         }
         .into());
@@ -632,7 +637,19 @@ fn task_prompt(settings: &OpalSettings, topic: &str) -> Result<String, String> {
         change settings, solve CAPTCHA or accept terms. Do not obtain secrets or make filesystem/network tool calls. \
         If login, permission, CAPTCHA or workflow access blocks execution, stop and return exactly one of \
         TORIS_OPAL_BLOCKED:LOGIN_REQUIRED, TORIS_OPAL_BLOCKED:PERMISSION_REQUIRED, \
-        TORIS_OPAL_BLOCKED:CAPTCHA, TORIS_OPAL_BLOCKED:WORKFLOW_UNAVAILABLE, TORIS_OPAL_BLOCKED:RUN_FAILED. \
+        TORIS_OPAL_BLOCKED:CAPTCHA, TORIS_OPAL_BLOCKED:WORKFLOW_UNAVAILABLE, \
+        TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY, TORIS_OPAL_BLOCKED:RUN_FAILED. \
+        Open the exact saved workflow URL in the selected profile. Inspect its loaded UI including the \
+        Opal editor/app iframe, not only the outer frame. A /edit/ URL is a valid private editor view: \
+        use its Preview tab and Start button to run the existing workflow without publishing it. \
+        An editor shell, iframe, initial loading screen or missing outer-frame Run button is not \
+        evidence of unavailable access. Wait for the editor to finish loading and inspect its steps. \
+        If the loaded editor explicitly shows an empty draft with no input/generate/output steps \
+        (for example 'Add a step to get started' or 'Your app will appear here once it is built'), \
+        return TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY. Use TORIS_OPAL_BLOCKED:LOGIN_REQUIRED only for an \
+        actual Google sign-in screen; TORIS_OPAL_BLOCKED:PERMISSION_REQUIRED only for an explicit \
+        consent/permission request; TORIS_OPAL_BLOCKED:WORKFLOW_UNAVAILABLE only for an explicit \
+        missing workflow or denied workflow access. Do not create missing steps. \
         Enter the topic, region KR and lookbackDays 7 into the existing workflow inputs, run it once, \
         wait for completion, and read its ACTUAL structured output. Never substitute your own research \
         or synthesize missing citations, metrics, dates or conclusions. Return only one compact line \
@@ -726,6 +743,51 @@ fn aside_command(settings: &OpalSettings) -> Command {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     command
+}
+
+async fn open_with_settings(settings: &OpalSettings, duration: Duration) -> Result<(), String> {
+    validate_settings(settings)?;
+    if !cli_available(&settings.aside_path) {
+        return Err("Aside CLI가 없습니다. 설치 후 실행 파일 경로를 설정하세요.".into());
+    }
+    // A bare HTTPS argument opens a tab; unlike `exec`, it does not start an agent run.
+    // Account and host are explicit so manual Google login and research use one profile.
+    // No renderer-supplied URL, executable or flags reach this process.
+    let target = settings.workflow_url.as_deref().unwrap_or(OPAL_HOME);
+    let mut command = aside_command(settings);
+    command
+        .args(["--host", "local", "--account", &settings.account, target])
+        .stdout(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Aside를 실행할 수 없습니다. 앱 실행 상태와 CLI 경로를 확인하세요.")?;
+    match tokio::time::timeout(duration, child.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(_) => Err(
+            "설정한 Aside 계정에서 Opal을 열 수 없습니다. Aside 앱과 계정 상태를 확인하세요."
+                .into(),
+        ),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err(
+                "Aside에서 Opal을 여는 시간이 초과되었습니다. Aside 앱 실행 상태를 확인하세요."
+                    .into(),
+            )
+        }
+    }
+}
+
+pub async fn open_workflow() -> Result<(), String> {
+    let _permit = RUN_GATE
+        .try_lock()
+        .map_err(|_| "Opal 탐색 또는 업데이트 설치가 끝난 뒤 워크플로우를 여세요.")?;
+    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+        || CANCEL_PENDING.load(Ordering::SeqCst)
+        || CANCEL_UNCONFIRMED.load(Ordering::SeqCst)
+    {
+        return Err("Opal 브라우저 작업 종료를 확인한 뒤 워크플로우를 여세요.".into());
+    }
+    open_with_settings(&load_settings()?, OPEN_TIMEOUT).await
 }
 
 async fn stop_session(settings: &OpalSettings, output: &[u8]) -> bool {
@@ -1069,6 +1131,25 @@ mod tests {
         assert!(!parse_result(b"secret private token\n", "AI")
             .unwrap_err()
             .contains("secret"));
+        let empty = parse_result(b"TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY\n", "AI").unwrap_err();
+        assert!(empty.contains("탐색 단계가 없습니다"));
+        assert!(!empty.contains("Google 계정을 확인"));
+        assert!(
+            parse_result(b"TORIS_OPAL_BLOCKED:PERMISSION_REQUIRED\n", "AI")
+                .unwrap_err()
+                .contains("추가 권한 동의")
+        );
+        assert!(
+            parse_result(b"TORIS_OPAL_BLOCKED:WORKFLOW_UNAVAILABLE\n", "AI")
+                .unwrap_err()
+                .contains("워크플로우를 열 수 없습니다")
+        );
+        assert!(parse_result(
+            b"TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY\nTORIS_OPAL_BLOCKED:LOGIN_REQUIRED\n",
+            "AI"
+        )
+        .unwrap_err()
+        .contains("Opal 결과를 확인하지 못했습니다"));
     }
 
     #[test]
@@ -1095,6 +1176,9 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(data).unwrap();
         assert_eq!(parsed["topic"], topic);
         assert!(prompt.contains("Do not publish"));
+        assert!(prompt.contains("Opal editor/app iframe"));
+        assert!(prompt.contains("Preview tab and Start button"));
+        assert!(prompt.contains("TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY"));
     }
 
     #[test]
@@ -1118,6 +1202,49 @@ mod tests {
         );
         assert!(session_id(b"unrelated output\ncreated new session: TestSession12345\n").is_none());
         assert!(session_id(b"created new session: x; rm -rf /\n").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workflow_open_uses_saved_profile_and_url_and_bounds_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let cli = directory.path().join("aside");
+        let check_args = |target: &str| {
+            format!(
+            "#!/bin/sh\n[ \"$#\" -eq 5 ] && [ \"$1\" = \"--host\" ] && [ \"$2\" = \"local\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u2\" ] && [ \"$5\" = \"{target}\" ]\n"
+        )
+        };
+        fs::write(&cli, check_args("https://opal.google/edit/test-workflow")).unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut settings = OpalSettings {
+            workflow_url: Some("https://opal.google/edit/test-workflow".into()),
+            aside_path: cli.to_string_lossy().into(),
+            account: "u2".into(),
+        };
+        open_with_settings(&settings, Duration::from_secs(2))
+            .await
+            .unwrap();
+        settings.workflow_url = None;
+        fs::write(&cli, check_args(OPAL_HOME)).unwrap();
+        open_with_settings(&settings, Duration::from_secs(2))
+            .await
+            .unwrap();
+        fs::write(&cli, "#!/bin/sh\nprintf 'private-token'\nexit 23\n").unwrap();
+        let failure = open_with_settings(&settings, Duration::from_secs(2))
+            .await
+            .unwrap_err();
+        assert!(failure.contains("설정한 Aside 계정"));
+        assert!(!failure.contains("private-token"));
+        fs::write(&cli, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        assert!(open_with_settings(&settings, Duration::from_millis(25))
+            .await
+            .unwrap_err()
+            .contains("초과"));
+        settings.account = "u2 --permission full-access".into();
+        assert!(open_with_settings(&settings, Duration::from_secs(2))
+            .await
+            .is_err());
     }
 
     #[cfg(unix)]
@@ -1193,6 +1320,8 @@ mod tests {
         let install_permit = lock_for_update().unwrap();
         assert!(RUN_GATE.try_lock().is_err());
         assert!(lock_for_update().is_err());
+        // Opening Opal must not launch the CLI while update installation owns the gate.
+        assert!(open_workflow().await.unwrap_err().contains("업데이트 설치"));
         drop(install_permit);
         assert!(lock_for_update().is_ok());
     }
