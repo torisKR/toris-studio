@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Toris Studio",
+  "version": "0.1.9",
+  "identifier": "kr.toris.studio",
+  "build": {
+    "beforeDevCommand": "pnpm --dir .. exec vite --config desktop/vite.config.ts",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm --dir .. exec vite build --config desktop/vite.config.ts",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Toris Studio",
+        "width": 1380,
+        "height": 900,
+        "minWidth": 820,
+        "minHeight": 620
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: https://i.ytimg.com; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src http://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "로컬 채널 관리와 콘텐츠 리서치",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": [
+          "Korean",
+          "English"
+        ]
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzMERFNDNFNkI5MjIwQTcKUldTbklKSnJQdVFORTY4RnJpMzJSMlR1eCtIM1B0d1lKNnAzWEx0c3BzQmF4QVBHYTFhb1ZBUFAK",
+      "endpoints": [
+        "https://github.com/torisKR/toris-studio/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

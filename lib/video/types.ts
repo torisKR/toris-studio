@@ -1,4 +1,5 @@
 export type VideoFormat = "youtube-landscape" | "vertical" | "shorts";
+export type EditingPresetId = "project-explainer" | "project-explainer-still";
 
 export type SceneMediaType = "none" | "image" | "video" | "screen";
 export type VideoTemplateId = "reference-briefing" | "adaptive-promo";
@@ -17,6 +18,10 @@ export type VideoScene = {
   mediaType?: SceneMediaType;
   mediaUrl?: string;
   mediaFit?: "contain" | "cover";
+  mediaSize?: { width: number; height: number };
+  focusDetail?: boolean;
+  explanationSteps?: string[];
+  focusRegion?: { x: number; y: number; width: number; height: number; startSec: number; endSec: number; label: string };
   captionCues?: Array<{ startSec: number; endSec: number; text: string }>;
   audioPath?: string;
   accent?: string;
@@ -31,6 +36,7 @@ export type VideoProject = {
   subtitle?: string;
   format: VideoFormat;
   template: VideoTemplateId;
+  editingPreset?: EditingPresetId;
   language: "ko" | "ja" | "zh" | "en";
   scenes: VideoScene[];
   createdAt: string;

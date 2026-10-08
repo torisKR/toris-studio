@@ -1,0 +1,59 @@
+.desktop-update { margin-bottom: 26px; overflow: hidden; border: 1px solid var(--social-line); border-radius: 11px; background: var(--social-panel); }
+.desktop-update-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 21px 23px; border-bottom: 1px solid var(--social-line); }
+.desktop-update-icon { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border: 1px solid #40594b; border-radius: 10px; color: #ace6c7; background: #17291f; }
+.desktop-update-heading h2 { font-size: 16px; font-weight: 600; }
+.desktop-update-heading p { margin-top: 4px; font-size: 11px; line-height: 1.7; color: #acb9c9; }
+.desktop-update-version { margin-left: auto; font-size: 11px; color: #aebac8; }
+.desktop-update-version strong { margin-left: 7px; color: #dbe8f3; font-size: 13px; font-variant-numeric: tabular-nums; }
+.desktop-update-state { display: flex; align-items: flex-start; gap: 11px; padding: 22px 23px; }
+.desktop-update-phase-icon { display: flex; margin-top: 2px; color: #b2cbbd; }
+.desktop-update-state-copy { min-width: 0; flex: 1; }
+.desktop-update-state-copy strong { display: block; font-size: 13px; font-weight: 600; color: #e1ebf5; }
+.desktop-update-state-copy > span { display: block; margin-top: 6px; font-size: 11px; color: #b9dac8; }
+.desktop-update-state-copy p { margin-top: 7px; font-size: 11px; line-height: 1.8; color: #acb9c9; overflow-wrap: anywhere; }
+.desktop-update-state.success .desktop-update-phase-icon, .desktop-update-state.success strong { color: #b0e5c7; }
+.desktop-update-state.error .desktop-update-phase-icon { color: #f0b8c3; }
+.desktop-update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.desktop-update-error { margin: 0 23px 18px !important; padding: 11px 13px; border: 1px solid #71444f; border-radius: 7px; background: #2d1b24; color: #fac3ce; font-size: 11px; line-height: 1.8; }
+.desktop-update-progress { margin: 0 23px 20px; padding: 15px 16px; border: 1px solid #34483d; border-radius: 8px; background: #111e18; }
+.desktop-update-progress > div { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: #c3dece; font-size: 11px; font-variant-numeric: tabular-nums; }
+.desktop-update-progress progress { display: block; width: 100%; height: 8px; margin-top: 12px; accent-color: var(--social-accent); border: 0; border-radius: 4px; overflow: hidden; background: #243e31; }
+.desktop-update-progress progress::-webkit-progress-bar { background: #243e31; border-radius: 4px; }
+.desktop-update-progress progress::-webkit-progress-value { background: var(--social-accent); border-radius: 4px; }
+.desktop-update-progress p { margin-top: 10px; font-size: 10px; line-height: 1.8; color: #abc2b5; }
+.desktop-update-hint { display: flex; align-items: flex-start; gap: 7px; margin: 0 23px 18px !important; font-size: 11px; line-height: 1.8; color: #dfc496; }
+.desktop-update-hint > svg { flex-shrink: 0; margin-top: 2px; }
+.desktop-update-confirmation { margin: 0 23px 20px; padding: 17px; border: 1px solid #587460; border-radius: 8px; background: #14231b; }
+.desktop-update-confirmation:focus { outline: 2px solid var(--social-accent); outline-offset: 3px; }
+.desktop-update-confirmation > strong { font-size: 13px; color: #dbefe3; }
+.desktop-update-confirmation > p { margin-top: 7px; color: #b6cbbb; font-size: 11px; line-height: 1.9; }
+.desktop-update-confirmation > label { display: flex; align-items: flex-start; gap: 9px; margin: 15px 0; line-height: 1.8; font-size: 11px; color: #d5e8dc; }
+.desktop-update-confirmation input[type=checkbox] { width: 16px; height: 16px; flex-shrink: 0; margin: 2px 0 0; accent-color: var(--social-accent); }
+.desktop-update-confirmation > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.desktop-update-notes { margin: 0 23px 20px; border: 1px solid var(--social-line); border-radius: 7px; background: #10161e; }
+.desktop-update-notes summary { padding: 11px 13px; cursor: pointer; font-size: 11px; color: #c2d2c9; }
+.desktop-update-notes summary:focus-visible { outline: 2px solid var(--social-accent); outline-offset: 2px; }
+.desktop-update-notes pre { margin: 0; max-height: 280px; overflow: auto; padding: 0 13px 14px; font-family: inherit; white-space: pre-wrap; overflow-wrap: anywhere; color: #b6c3d2; font-size: 11px; line-height: 1.9; }
+.desktop-update-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 13px 23px; border-top: 1px solid var(--social-line); background: #0f151c; color: #a7baad; font-size: 10px; }
+.desktop-update-footer > span, .desktop-update-footer > div, .desktop-update-footer .social-external { display: flex; align-items: center; gap: 7px; }
+.desktop-update-footer > div { flex-wrap: wrap; gap: 16px; }
+.desktop-update-footer .social-external { color: #bed5c8; min-height: 28px; font-size: 11px; }
+.desktop-update-install-dialog { width: min(520px, calc(100% - 36px)); padding: 25px; border: 1px solid #50675a; border-radius: 12px; background: #121c17; color: #e2efe6; box-shadow: 0 24px 90px #0008; }
+.desktop-update-install-dialog::backdrop { background: #03080bba; }
+.desktop-update-dialog-heading { display: flex; align-items: center; gap: 11px; color: #b5e6cb; }
+.desktop-update-dialog-heading h2 { font-size: 17px; font-weight: 600; }
+.desktop-update-install-dialog > p { margin: 12px 0 20px; color: #b7c8be; font-size: 12px; line-height: 1.9; }
+.desktop-update-install-dialog .desktop-update-progress { margin: 0; }
+.desktop-update-install-dialog .desktop-update-error { margin: 12px 0 0 !important; }
+.desktop-update-dialog-footer { display: flex; align-items: center; justify-content: flex-end; min-height: 38px; margin-top: 18px; }
+.desktop-update-dialog-footer > span { color: #b0c4b7; font-size: 11px; }
+@media (max-width: 760px) {
+  .desktop-update-heading { padding: 17px; }
+  .desktop-update-version { width: 100%; margin-left: 52px; }
+  .desktop-update-state { padding: 18px 17px; flex-wrap: wrap; }
+  .desktop-update-state-copy { flex-basis: calc(100% - 29px); }
+  .desktop-update-actions { margin-left: 29px; }
+  .desktop-update-error, .desktop-update-hint { margin-left: 17px !important; margin-right: 17px !important; }
+  .desktop-update-confirmation, .desktop-update-progress, .desktop-update-notes { margin-left: 17px; margin-right: 17px; }
+  .desktop-update-footer { padding: 12px 17px; }
+}
