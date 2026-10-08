@@ -63,7 +63,7 @@ function researchMetadata(value: unknown): VideoResearchMetadata | null {
   if (!value || typeof value !== "object") return null;
   const metadata = value as Partial<VideoResearchMetadata>;
   if (metadata.version !== 1 || typeof metadata.keyword !== "string" || typeof metadata.topic !== "string" || typeof metadata.provider !== "string" || !Array.isArray(metadata.sources) || metadata.sources.length > 5) return null;
-  return metadata.sources.every((source) => source && typeof source.trendId === "string" && typeof source.title === "string" && typeof source.source === "string" && Object.hasOwn(sourceLabels, source.source) && typeof source.url === "string" && typeof source.fetchedAt === "string" && (source.description == null || typeof source.description === "string")) ? metadata as VideoResearchMetadata : null;
+  return metadata.sources.every((source) => source && typeof source.trendId === "string" && typeof source.title === "string" && typeof source.source === "string" && Object.prototype.hasOwnProperty.call(sourceLabels, source.source) && typeof source.url === "string" && typeof source.fetchedAt === "string" && (source.description == null || typeof source.description === "string")) ? metadata as VideoResearchMetadata : null;
 }
 
 function ResearchSources({ sources }: { sources: VideoResearchSource[] }) {
