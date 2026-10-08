@@ -1,0 +1,26 @@
+.content-board { min-width: 0; max-width: 100%; }
+.content-board-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.content-board-hint { display: flex; align-items: flex-start; gap: 8px; color: #b6c6dc; font-size: 12px; line-height: 1.55; }
+.content-board-hint > svg { flex-shrink: 0; margin-top: 2px; color: #92b8ff; }
+.content-board-hint small { display: block; color: #99abc2; font-size: 11px; }
+.content-board-controls { display: flex; flex-shrink: 0; gap: 6px; }
+.content-board-controls > button { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #354458; border-radius: 7px; background: #182334; color: #d7e5f8; }
+.content-board-controls > button:hover:not(:disabled) { background: #23354f; border-color: #759bd6; }
+.content-board-scroll { display: flex; gap: 13px; width: 100%; max-width: 100%; min-width: 0; height: clamp(400px, 65dvh, 620px); overflow-x: auto; overflow-y: hidden; padding: 5px 4px 14px; scroll-padding: 4px; border-radius: 9px; scrollbar-width: auto; scrollbar-color: #5a7497 #182334; }
+.content-board-scroll:focus-visible, .content-board-lane-body:focus-visible { outline: 2px solid #92b8ff; outline-offset: -2px; }
+.content-board-scroll::-webkit-scrollbar { height: 11px; }
+.content-board-scroll::-webkit-scrollbar-track { background: #182334; border-radius: 8px; }
+.content-board-scroll::-webkit-scrollbar-thumb { background: #5a7497; border: 2px solid #182334; border-radius: 8px; }
+.content-board > .content-board-scroll > .content-board-lane { display: flex; flex-direction: column; flex: 0 0 clamp(280px, 28vw, 330px); width: clamp(280px, 28vw, 330px); min-width: 0; height: 100%; overflow: hidden; }
+.content-board-lane > .social-lane-heading { flex: 0 0 auto; border-bottom: 1px solid #273344; margin-bottom: 9px; }
+.content-board-lane > .content-board-lane-body { flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-bottom: 12px; scrollbar-width: thin; scrollbar-color: #526b8d #111b29; }
+.content-board-card { flex: 0 0 auto; min-width: 0; }
+.content-board-lane-body > .social-lane-empty { flex: 1 0 auto; }
+@media (max-width: 820px) {
+  .content-board > .content-board-scroll > .content-board-lane { flex-basis: min(292px, calc(100vw - 48px)); width: min(292px, calc(100vw - 48px)); }
+  .content-board-scroll { height: clamp(360px, 65dvh, 560px); }
+  .content-board-toolbar { gap: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .content-board-scroll, .content-board-lane-body { scroll-behavior: auto; }
+}

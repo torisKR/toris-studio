@@ -22,6 +22,14 @@ static PROJECT_LOCK: Mutex<()> = Mutex::new(());
 static RENDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static VOICE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// One native video job at a time. Research generation shares the renderer's
+/// gate so it cannot silently race another job in the editor.
+pub(crate) fn lock_for_video_activity() -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    RENDER_LOCK
+        .try_lock()
+        .map_err(|_| "다른 영상 작업을 마친 뒤 다시 실행하세요.".into())
+}
+
 fn data_dir() -> Result<PathBuf, String> {
     crate::config::config_path()
         .parent()
@@ -613,9 +621,11 @@ fn media_kind(path: &Path, declared: &str) -> Result<&'static str, String> {
 }
 
 pub async fn render_project(project: Value) -> Result<Value, String> {
-    let _permit = RENDER_LOCK
-        .try_lock()
-        .map_err(|_| "이미 영상을 렌더링하고 있습니다.")?;
+    // The updater acquires this same barrier immediately before installing.
+    // Keep the order identical to research creation: update gate, video gate.
+    let _update_guard = crate::keyword::lock_for_update()
+        .map_err(|_| "키워드 탐색 또는 업데이트 작업이 끝난 뒤 영상을 출력하세요.")?;
+    let _permit = lock_for_video_activity()?;
     validate_project(&project)?;
     let format = project["format"].as_str().ok_or("영상 비율 오류")?;
     let (width, height) = if format == "youtube-landscape" {

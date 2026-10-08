@@ -1,12 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeftRight, ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, CircleAlert, Clock3, Database, ExternalLink, FileSearch, Hash, History, LoaderCircle, Play, RefreshCw, Search, ShieldCheck, Video, X } from "lucide-react";
+import { ArrowLeftRight, ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, CircleAlert, Clapperboard, Clock3, Database, ExternalLink, FileSearch, Hash, History, LoaderCircle, Play, RefreshCw, Search, ShieldCheck, Video, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { External } from "./External";
 import type { KeywordContent, KeywordCrawler, KeywordCrawlResult, KeywordRun, KeywordSearchMode, KeywordSearchResult, KeywordSource, KeywordStatus } from "./types";
+import type { VideoResearchSeed } from "./video-research";
 import "./KeywordPanel.css";
 
-type Props = { active?: boolean; databaseConnected?: boolean; onOpenSettings?: () => void; onChanged?: () => void };
+type Props = { active?: boolean; databaseConnected?: boolean; onOpenSettings?: () => void; onChanged?: () => void; onCreateVideo?: (seed: VideoResearchSeed) => void };
 type Direction = "keyword" | "content";
 type SearchInput = { query: string; mode: KeywordSearchMode; source: KeywordSource; limit: number; offset: number };
 const PAGE_SIZE = 25;
@@ -62,7 +63,7 @@ function KeywordVideo({ item }: { item: KeywordContent }) {
   return <div className="keyword-video-wrap"><div className="keyword-video">{url ? <><iframe src={url} title={`${item.trend.title} · YouTube 영상`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" /><button type="button" className="keyword-video-close" aria-label="영상 재생 닫기" onClick={() => { version.current += 1; setUrl(null); setLoading(false); }}><X size={17} /></button></> : id ? <button type="button" className="keyword-video-play" disabled={loading} onClick={() => void play()} aria-label={`${item.trend.title} 영상 재생`}>{!missingThumbnail && <img src={`https://i.ytimg.com/vi/${id}/hqdefault.jpg`} alt="" loading="lazy" onError={() => setMissingThumbnail(true)} />}<span>{loading ? <LoaderCircle size={23} className="social-spin" /> : <Play size={23} fill="currentColor" />}</span><small>{loading ? "플레이어 준비 중" : "영상 재생"}</small></button> : <div className="keyword-video-missing"><Video size={25} /><span>원본 링크에서 영상을 확인하세요.</span></div>}</div>{error && <p className="keyword-inline-error" role="alert">{error} 원본 보기로 확인할 수 있습니다.</p>}</div>;
 }
 
-export function KeywordPanel({ active = true, databaseConnected = true, onOpenSettings, onChanged }: Props) {
+export function KeywordPanel({ active = true, databaseConnected = true, onOpenSettings, onChanged, onCreateVideo }: Props) {
   const [direction, setDirection] = useState<Direction>("keyword");
   const [mode, setMode] = useState<KeywordSearchMode>("local");
   const [source, setSource] = useState<KeywordSource>("all");
@@ -248,6 +249,12 @@ export function KeywordPanel({ active = true, databaseConnected = true, onOpenSe
     finally { if (mounted.current && operation === operationVersion.current) { activeOperation.current = null; setBusy(null); await refreshStatus(); } }
   }
 
+  function createVideo() {
+    if (!selected || !onCreateVideo || locked || detailLoading) return;
+    const keyword = (lastInput?.query || selected.observedKeywords[0]?.keyword || (crawl?.extractedKeywords ?? selected.extractedKeywords)[0]?.keyword || "").replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim().slice(0, 100);
+    onCreateVideo({ requestId: crypto.randomUUID(), trendIds: [selected.trend.id], keyword, topic: selected.trend.title.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim().slice(0, 300) });
+  }
+
   return <div className="keyword-explorer" aria-busy={loading || detailLoading || busy === "crawl"}>
     <div className="keyword-direction" role="group" aria-label="키워드 탐색 방향">
       <button type="button" aria-pressed={direction === "keyword"} className={direction === "keyword" ? "active" : ""} onClick={() => setDirection("keyword")}><Search size={18} /><span><strong>키워드로 콘텐츠 찾기</strong><small>어떤 검색어에 어떤 콘텐츠가 보일까요?</small></span><ChevronRight size={17} /></button>
@@ -280,6 +287,7 @@ export function KeywordPanel({ active = true, databaseConnected = true, onOpenSe
       </section>
 
       <aside className="keyword-detail" aria-labelledby="keyword-detail-title"><div className="keyword-section-heading"><div><span className="keyword-kicker">Evidence</span><h2 id="keyword-detail-title">콘텐츠와 키워드의 연결 근거</h2></div><BookOpen size={19} /></div>{selected ? <div className="keyword-detail-body">{detailLoading && <p className="keyword-loading" role="status"><LoaderCircle size={16} className="social-spin" />저장된 근거 확인 중</p>}{detailError && <p className="keyword-inline-error" role="alert">{detailError}</p>}<div className="keyword-detail-source"><span>{sourceNames[selected.trend.source]}</span><span>{sourceHost(selected.trend.url)}</span></div><h3>{selected.trend.title}</h3>{selected.trend.source === "youtube" && <KeywordVideo key={selected.trend.id} item={selected} />}<p className="keyword-detail-description">{selected.trend.details?.description || "수집한 원본에는 설명이 없습니다."}</p><External url={sourceUrl(selected.trend.url)} className="keyword-original"><ExternalLink size={14} />원본 콘텐츠 보기<ArrowUpRight size={13} /></External><dl className="keyword-dates"><div><dt>원본 발행</dt><dd><time dateTime={selected.trend.publishedAt ?? undefined}>{date(selected.trend.publishedAt)}</time></dd></div><div><dt>수집 시각</dt><dd><time dateTime={selected.trend.fetchedAt}>{date(selected.trend.fetchedAt)}</time></dd></div></dl>
+        {onCreateVideo && <section className="keyword-video-action"><div><Clapperboard size={20} /><span><strong>이 콘텐츠로 영상 만들기</strong><small>선택한 자료와 키워드를 영상 스튜디오에서 확인하고 초안을 만듭니다.</small></span></div><button type="button" className="social-button primary" disabled={locked || detailLoading || !dbReady} onClick={createVideo}><Clapperboard size={16} />영상 스튜디오로 보내기</button><p>원본 영상이나 이미지를 자동 복사하지 않습니다. 제목·설명과 출처를 바탕으로 편집할 수 있는 장면을 만듭니다.</p></section>}
         <section className="keyword-evidence-section"><h4><Search size={15} />실제 검색어로 발견된 기록</h4>{selected.observedKeywords.length ? selected.observedKeywords.map((item, index) => <div className="keyword-observation" key={`${item.keyword}-${item.observedAt}-${index}`}><button type="button" className="keyword-evidence-word" disabled={loading || locked || !dbReady} onClick={() => chooseKeyword(item.keyword)}>#{item.keyword}<ArrowUpRight size={13} /></button><span>{sourceNames[item.source] ?? item.source} · {date(item.observedAt)}</span>{item.rank != null && <small>이 앱의 출처별 결과 {item.rank}번째 · 해당 수집 시점</small>}</div>) : <p>실제 검색으로 연결된 키워드 기록이 없습니다. 아래 추출 단어만으로 검색 노출을 판단할 수 없습니다.</p>}</section>
         {selected.originalKeyword && <p className="keyword-legacy-topic"><Hash size={12} />기존 수집 주제: {selected.originalKeyword}<small>실제 검색어 기록과 구분합니다.</small></p>}
         {selected.matches.length > 0 && <section className="keyword-evidence-section"><h4><Hash size={15} />현재 검색어가 일치한 부분</h4><div className="keyword-match-list">{selected.matches.map((match, index) => <div key={`${match.field}-${index}`}><strong>{fieldNames[match.field]}</strong><span>{match.terms.join(" · ")}</span></div>)}</div></section>}

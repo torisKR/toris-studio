@@ -201,6 +201,7 @@ button.social-external { border: 0; background: transparent; color: inherit; pad
 .social-trend-keyword strong { font-size: 11px; font-weight: 500; color: #c4d5df; }
 .desktop-trend-player-error { margin-top: 12px !important; padding: 9px 11px; background: #4e282f4d; border: 1px solid #80545e; border-radius: 6px; color: #f4bec5; font-size: 12px; line-height: 1.7; }
 .desktop-trend-card-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--social-line); background: #0e141b; }
+.desktop-trend-create-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .desktop-trend-original { display: inline-flex; align-items: center; gap: 6px; color: #aec0d3 !important; font-size: 12px !important; }
 .desktop-trend-original:hover { color: #acefce !important; }
 .social-trend-footnote { display: flex; gap: 9px; align-items: flex-start; padding: 17px 2px; font-size: 12px; color: #9cacbd; line-height: 1.8; }

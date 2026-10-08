@@ -96,6 +96,7 @@
 .studio-discovery-metric span { color: #8fa4bf; font-size: 11px; }
 .studio-save-idea { display: grid; place-items: center; width: 27px; height: 27px; flex-shrink: 0; padding: 0; border: 1px solid #34475e; border-radius: 5px; background: #172537; color: #b8cff0; transition: background 180ms ease; }
 .studio-save-idea:hover:not(:disabled) { background: #2a4160; }
+.studio-discovery-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex-shrink: 0; max-width: 60px; }
 .studio-section-description { padding: 0 19px 13px; color: #95a9c3; font-size: 11px; }
 .studio-channel-rows { padding: 0 18px; }
 .studio-channel-row { display: flex; align-items: center; gap: 10px; padding: 13px 0; border-top: 1px solid #293445; }

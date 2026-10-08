@@ -1,4 +1,11 @@
 .keyword-explorer { display: grid; gap: 18px; min-width: 0; }
+.keyword-video-action { display: grid; gap: 12px; margin: 19px 0 3px; padding: 15px; border: 1px solid #3e6959; border-radius: 7px; background: #182d27; }
+.keyword-video-action > div { display: flex; gap: 9px; align-items: flex-start; color: #bce6d0; }
+.keyword-video-action > div > svg { flex-shrink: 0; margin-top: 2px; }
+.keyword-video-action strong { display: block; font-size: 12px; font-weight: 600; }
+.keyword-video-action small, .keyword-video-action > p { display: block; margin-top: 5px; color: #b1c7be; font-size: 11px; line-height: 1.7; }
+.keyword-video-action > p { margin-top: 0; }
+.keyword-video-action > button { justify-content: center; }
 .keyword-direction { display: grid; grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); align-items: center; }
 .keyword-direction > button { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 76px; padding: 16px 18px; color: #a8b8ce; background: #111923; border: 1px solid #2c394c; border-radius: 9px; text-align: left; transition: border-color 160ms, background 160ms; }
 .keyword-direction > button > svg:first-child { color: #91a8c9; flex-shrink: 0; }
