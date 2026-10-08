@@ -184,8 +184,12 @@ export async function publish(directory, { request = api, command = run, spawn =
     for (let depth = 0; object.type === 'tag' && depth < 4; depth++) object = (await request(`git/tags/${object.sha}`)).object;
     if (object.type !== 'commit' || object.sha !== source) fail('Existing release tag points to a different source commit.');
   }
-  if (!existing) command('gh', ['release', 'create', tag, '--repo', REPOSITORY, '--target', source, '--draft', '--title', `Toris Studio ${releaseVersion}`, '--notes-file', path.join(directory, 'DOWNLOADS.md')]);
-  const created = existing ?? await findRelease(tag, request);
+  // A newly created draft can be absent from the listing briefly. Bind the
+  // exact numeric ID from the creation response instead of rediscovering it.
+  const created = existing ?? await request('releases', { method: 'POST', body: {
+    tag_name: tag, target_commitish: source, draft: true, prerelease: false, make_latest: 'false',
+    name: `Toris Studio ${releaseVersion}`, body: await readFile(path.join(directory, 'DOWNLOADS.md'), 'utf8'),
+  } });
   const releaseId = assertReleaseIdentity(created, tag, source);
   if (created.draft !== true) fail('This release is already public; refusing upload.');
   const state = { tag, source, releaseId, touched: true, promoted: false };

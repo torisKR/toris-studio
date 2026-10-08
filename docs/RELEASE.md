@@ -20,7 +20,7 @@
 
 배포는 검사 → Mac arm64/Intel 및 Windows x64 빌드 → Rust 서명·버전·SHA256 검증 → 완성된 draft Release와 GitHub Package 업로드 → 공개 전환 → 실제 공개 다운로드 확인 순서입니다. 세 빌드 중 하나라도 실패하면 Release를 공개하지 않습니다. 공개 후 다운로드 검증이 실패하면 해당 Release를 prerelease로 바꿔 stable 최신 다운로드 대상에서 제외하고 기존 배포는 보존합니다. 작업 실패는 GitHub Actions 상태와 run summary에서 확인합니다. GitHub의 워크플로 실패 알림을 켜면 계정 알림도 받을 수 있습니다.
 
-publish job은 태그 push·수동 실행·다른 버전 사이에서도 하나의 저장소 concurrency 그룹으로 직렬 실행합니다. REST의 tag 조회는 draft를 반환하지 않으므로 인증된 release 목록에서 draft를 찾고 numeric release ID와 태그·소스 commit을 고정합니다. 업로드 완전성 확인과 공개 전환, 실패 시 prerelease 전환은 같은 ID로 처리하며 다른 공개 버전을 변경하지 않습니다.
+publish job은 태그 push·수동 실행·다른 버전 사이에서도 하나의 저장소 concurrency 그룹으로 직렬 실행합니다. REST의 tag 조회는 draft를 반환하지 않으므로 기존 draft는 인증된 release 목록에서 찾고, 새 draft는 생성 API 응답에서 numeric release ID를 바로 고정합니다. 생성 직후 목록 반영 지연에 의존하지 않으며 ID·태그·소스 commit 검증은 유지합니다. 업로드 완전성 확인과 공개 전환, 실패 시 prerelease 전환은 같은 ID로 처리하며 다른 공개 버전을 변경하지 않습니다.
 
 실행 도중 만들어진 draft는 같은 source commit으로 재시도할 수 있습니다. 이미 같은 Package 버전이 있다면 source와 모든 파일 bytes가 같아야 하며, 다르면 새 버전을 사용합니다. 공개된 버전의 파일은 다시 덮어쓰지 않으며 변경하려면 버전을 올려야 합니다. Actions는 SHA로 고정했고 Rust 1.96.0, Node 24, frozen pnpm/Cargo lockfile을 사용합니다. publish 작업에만 `contents: write`, `packages: write`를 허용합니다. `pull_request_target`, 외부 PR에서 비밀 사용, 개인 API 키를 넣은 빌드는 사용하지 않습니다.
 
