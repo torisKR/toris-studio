@@ -101,7 +101,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm desktop:build --ci --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
+        run: |
+          # Tauri treats an empty certificate variable as a certificate to import.
+          # Absent optional signing credentials must be absent from the process.
+          for optional in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!optional:-}" ]]; then unset "$optional"; fi
+          done
+          pnpm desktop:build --ci --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
       - name: Validate macOS application signature
         if: runner.os == 'macOS'
         run: codesign --verify --deep --strict 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toris Studio.app'
