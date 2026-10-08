@@ -1,6 +1,7 @@
-//! Native project persistence, slide rendering and local speech generation.
+//! Native project persistence, trusted motion/slide rendering and local speech generation.
 //! Existing editor fields are retained even when the native slide renderer does
 //! not interpret their animation/layout metadata.
+use crate::motion::{LayerGeometry, LayerRole, MotionSpec};
 use fontdue::{Font, FontSettings};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -222,6 +223,7 @@ fn validate_project(project: &Value) -> Result<(), String> {
         for field in ["headline", "body", "narration"] {
             text_field(scene, field, 10000)?;
         }
+        MotionSpec::from_scene(scene)?;
         let duration = scene
             .get("durationSec")
             .and_then(Value::as_f64)
@@ -386,6 +388,57 @@ impl Canvas {
             pixels,
         }
     }
+    fn transparent(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            pixels: vec![0; (width * height * 4) as usize],
+        }
+    }
+    fn blend(&mut self, x: u32, y: u32, color: [u8; 3], alpha: u32) {
+        let offset = ((y * self.width + x) * 4) as usize;
+        let previous_alpha = self.pixels[offset + 3] as u32;
+        let remaining = previous_alpha * (255 - alpha) / 255;
+        let combined = alpha + remaining;
+        if combined == 0 {
+            return;
+        }
+        for (channel, foreground) in color.iter().enumerate() {
+            self.pixels[offset + channel] = ((*foreground as u32 * alpha
+                + self.pixels[offset + channel] as u32 * remaining)
+                / combined) as u8;
+        }
+        self.pixels[offset + 3] = combined as u8;
+    }
+    fn rounded_card(&mut self, radius: u32, color: [u8; 3], alpha: u32) {
+        let radius = radius.min(self.width / 2).min(self.height / 2) as i32;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let dx = (radius - x as i32)
+                    .max(0)
+                    .max(x as i32 - (self.width as i32 - 1 - radius));
+                let dy = (radius - y as i32)
+                    .max(0)
+                    .max(y as i32 - (self.height as i32 - 1 - radius));
+                if dx * dx + dy * dy <= radius * radius {
+                    self.blend(x, y, color, alpha);
+                }
+            }
+        }
+    }
+    fn motion_background(&mut self) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let dx = x as f64 / self.width as f64;
+                let dy = y as f64 / self.height as f64;
+                let glow = (1.0 - ((dx - 0.88).powi(2) + (dy - 0.08).powi(2)) * 1.9).max(0.0);
+                let offset = ((y * self.width + x) * 4) as usize;
+                self.pixels[offset] = (9.0 + 13.0 * glow) as u8;
+                self.pixels[offset + 1] = (16.0 + 17.0 * glow) as u8;
+                self.pixels[offset + 2] = (27.0 + 33.0 * glow) as u8;
+            }
+        }
+    }
     fn text(&mut self, font: &Font, lines: &[String], size: f32, x: f32, y: f32, color: [u8; 3]) {
         let ascent = font
             .horizontal_line_metrics(size)
@@ -410,14 +463,7 @@ impl Canvas {
                             continue;
                         }
                         let alpha = bitmap[py * metrics.width + px] as u32;
-                        let offset =
-                            ((target_y as u32 * self.width + target_x as u32) * 4) as usize;
-                        for (channel, foreground) in color.iter().enumerate() {
-                            self.pixels[offset + channel] =
-                                ((self.pixels[offset + channel] as u32 * (255 - alpha)
-                                    + *foreground as u32 * alpha)
-                                    / 255) as u8;
-                        }
+                        self.blend(target_x as u32, target_y as u32, color, alpha);
                     }
                 }
                 pen += metrics.advance_width;
@@ -499,6 +545,198 @@ fn slide_png(
         [100, 116, 139],
     );
     canvas.save(path)
+}
+
+struct MotionAssets {
+    files: Vec<String>,
+    layers: Vec<LayerGeometry>,
+}
+
+fn motion_body_sections(text: &str, single_card: bool) -> Vec<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    if single_card {
+        return vec![text.to_owned()];
+    }
+    let characters: Vec<_> = text.chars().collect();
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    for (index, character) in characters.iter().enumerate() {
+        current.push(*character);
+        let boundary = *character == '\n'
+            || (matches!(character, '.' | '!' | '?' | '。' | '！' | '？')
+                && characters
+                    .get(index + 1)
+                    .is_none_or(|next| next.is_whitespace()));
+        if boundary && !current.trim().is_empty() {
+            sentences.push(current.trim().to_owned());
+            current.clear();
+        }
+    }
+    if !current.trim().is_empty() {
+        sentences.push(current.trim().to_owned());
+    }
+    let chunk = sentences.len().div_ceil(3).max(1);
+    sentences.chunks(chunk).map(|part| part.join(" ")).collect()
+}
+
+fn motion_body_layout(
+    font: &Font,
+    sections: &[String],
+    width: f32,
+    height: f32,
+    preferred: u32,
+) -> Result<(Vec<Vec<String>>, f32), String> {
+    for size in (18..=preferred).rev() {
+        let lines: Vec<_> = sections
+            .iter()
+            .map(|text| wrap_text(font, text, size as f32, width))
+            .collect();
+        let total = lines
+            .iter()
+            .map(|part| (part.len() as f32 * size as f32 * 1.45).ceil() + 26.0)
+            .sum::<f32>();
+        if total <= height {
+            return Ok((lines, size as f32));
+        }
+    }
+    Err("장면 본문이 모션 영역을 초과합니다. 텍스트를 여러 장면으로 나누세요.".into())
+}
+
+fn motion_assets(
+    font: &Font,
+    project: &Value,
+    scene: &Value,
+    index: usize,
+    dimensions: (u32, u32),
+    has_media: bool,
+    directory: &Path,
+) -> Result<MotionAssets, String> {
+    let (width, height) = dimensions;
+    let vertical = height > width;
+    let margin = if vertical { 44 } else { 64 };
+    // The motion layout deliberately reserves breathing space around text.
+    let available = width - margin * 2;
+    let mut background = Canvas::new(width, height);
+    background.motion_background();
+    let background_name = format!("motion-{index:03}-background.png");
+    background.save(&directory.join(&background_name))?;
+    let mut assets = MotionAssets {
+        files: vec![background_name],
+        layers: Vec::new(),
+    };
+    let mut add = |canvas: Canvas, x: i32, y: i32, role: LayerRole| -> Result<(), String> {
+        let input = assets.files.len();
+        let name = format!("motion-{index:03}-{input:02}.png");
+        let geometry = LayerGeometry {
+            input,
+            x,
+            y,
+            width: canvas.width,
+            height: canvas.height,
+            role,
+        };
+        canvas.save(&directory.join(&name))?;
+        assets.files.push(name);
+        assets.layers.push(geometry);
+        Ok(())
+    };
+    // Small offset cards are entirely ornamental, never source screenshots or
+    // AI-generated claims. They sit behind the editorial text and media.
+    for (card, color) in [[91, 222, 202], [144, 124, 238], [68, 135, 210]]
+        .iter()
+        .enumerate()
+    {
+        let size = 64 + card as u32 * 10;
+        let mut canvas = Canvas::transparent(size, size);
+        canvas.rounded_card(18, *color, 80);
+        add(
+            canvas,
+            width as i32 - margin as i32 - 190 + card as i32 * 52,
+            height as i32 - 146 + card as i32 * 5,
+            LayerRole::Accent(card as u8),
+        )?;
+    }
+    let eyebrow = scene
+        .get("eyebrow")
+        .and_then(Value::as_str)
+        .unwrap_or("TORIS STUDIO");
+    let (label, size) = fitting_text(font, eyebrow, available as f32, 44.0, 22, 14)?;
+    let mut label_canvas = Canvas::transparent(available, 44);
+    label_canvas.text(font, &label, size, 0.0, 0.0, [105, 239, 214]);
+    add(label_canvas, margin as i32, 46, LayerRole::Eyebrow)?;
+
+    let headline_y = if vertical { 138 } else { 115 };
+    let headline_height = if vertical { 235.0 } else { 174.0 };
+    let (headline, headline_size) = fitting_text(
+        font,
+        text_field(scene, "headline", 10000)?,
+        available as f32,
+        headline_height,
+        if vertical { 54 } else { 60 },
+        24,
+    )?;
+    let line_height = (headline_size * 1.45).ceil() as u32;
+    for (row, line) in headline.iter().enumerate() {
+        let mut canvas = Canvas::transparent(available, line_height);
+        canvas.text(
+            font,
+            std::slice::from_ref(line),
+            headline_size,
+            0.0,
+            0.0,
+            [245, 248, 255],
+        );
+        add(
+            canvas,
+            margin as i32,
+            headline_y + row as i32 * line_height as i32,
+            LayerRole::Headline(row as u8),
+        )?;
+    }
+    let body_y = if vertical { 418 } else { 321 };
+    let body_height = if has_media {
+        if vertical {
+            250.0
+        } else {
+            137.0
+        }
+    } else {
+        height as f32 - body_y as f32 - 196.0
+    };
+    let sections = motion_body_sections(text_field(scene, "body", 10000)?, has_media);
+    let (body, body_size) = motion_body_layout(
+        font,
+        &sections,
+        (available - 36) as f32,
+        body_height,
+        if vertical { 33 } else { 34 },
+    )?;
+    // At most three body cards; their PNG sizes are text-sized rather than full
+    // video frames. This bounds decoder memory and avoids per-frame rasterizing.
+    let mut y = body_y;
+    for (row, lines) in body.iter().enumerate() {
+        let card_height = (lines.len() as f32 * body_size * 1.45).ceil() as u32 + 24;
+        let mut canvas = Canvas::transparent(available, card_height);
+        canvas.rounded_card(16, [24, 37, 54], 235);
+        canvas.text(font, lines, body_size, 18.0, 12.0, [197, 214, 231]);
+        add(canvas, margin as i32, y, LayerRole::Body(row as u8))?;
+        y += card_height as i32 + 2;
+    }
+    let count = project["scenes"].as_array().map(Vec::len).unwrap_or(1);
+    let mut footer = Canvas::transparent(available, 30);
+    footer.text(
+        font,
+        &[format!("{:02} / {:02} · TORIS STUDIO", index + 1, count)],
+        18.0,
+        0.0,
+        0.0,
+        [111, 137, 157],
+    );
+    add(footer, margin as i32, height as i32 - 53, LayerRole::Footer)?;
+    Ok(assets)
 }
 
 async fn run_command(
@@ -626,6 +864,16 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
     let _update_guard = crate::keyword::lock_for_update()
         .map_err(|_| "키워드 탐색 또는 업데이트 작업이 끝난 뒤 영상을 출력하세요.")?;
     let _permit = lock_for_video_activity()?;
+    render_project_at(project, &data_dir()?.join("renders"), &public_dir()?).await
+}
+
+// The renderer accepts directories only from the privileged core. This narrow
+// helper also permits real FFmpeg diagnostics without touching user projects.
+async fn render_project_at(
+    project: Value,
+    render_dir: &Path,
+    assets: &Path,
+) -> Result<Value, String> {
     validate_project(&project)?;
     let format = project["format"].as_str().ok_or("영상 비율 오류")?;
     let (width, height) = if format == "youtube-landscape" {
@@ -634,15 +882,14 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
         (720, 1280)
     };
     let font = load_font()?;
-    let render_dir = data_dir()?.join("renders");
-    fs::create_dir_all(&render_dir).map_err(|_| "렌더링 폴더를 만들 수 없습니다.")?;
+    fs::create_dir_all(render_dir).map_err(|_| "렌더링 폴더를 만들 수 없습니다.")?;
     let temporary =
-        tempfile::tempdir_in(&render_dir).map_err(|_| "렌더링 작업 폴더를 만들 수 없습니다.")?;
+        tempfile::tempdir_in(render_dir).map_err(|_| "렌더링 작업 폴더를 만들 수 없습니다.")?;
     let working = temporary.path();
-    let assets = public_dir()?;
     let scenes = project["scenes"].as_array().ok_or("장면 목록 오류")?;
     let mut total_frames = 0_u64;
     let mut concat = String::new();
+    let has_motion = scenes.iter().any(|scene| scene.get("motion").is_some());
     for (index, scene) in scenes.iter().enumerate() {
         let duration = scene["durationSec"].as_f64().ok_or("장면 길이 오류")?;
         let frames = (duration * 24.0).ceil().max(1.0) as u64;
@@ -657,7 +904,7 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
                 .get("mediaUrl")
                 .and_then(Value::as_str)
                 .ok_or("장면 미디어 파일을 연결하세요.")?;
-            let path = resolve_asset_at(&assets, reference)?;
+            let path = resolve_asset_at(assets, reference)?;
             let kind = media_kind(&path, declared)?;
             let inspected = probe(&path).await?;
             if !inspected["streams"]
@@ -674,7 +921,7 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
             .get("audioPath")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .map(|reference| resolve_asset_at(&assets, reference))
+            .map(|reference| resolve_asset_at(assets, reference))
             .transpose()?;
         if let Some(path) = &audio {
             if !matches!(
@@ -706,16 +953,35 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
                 return Err("음성 파일에 오디오 스트림이 없습니다.".into());
             }
         }
-        let slide_name = format!("slide-{index:03}.png");
-        slide_png(
-            &font,
-            &project,
-            scene,
-            index,
-            (width, height),
-            media.is_some(),
-            &working.join(&slide_name),
-        )?;
+        let motion = MotionSpec::from_scene(scene)?;
+        let motion_assets = motion
+            .map(|_| {
+                motion_assets(
+                    &font,
+                    &project,
+                    scene,
+                    index,
+                    (width, height),
+                    media.is_some(),
+                    working,
+                )
+            })
+            .transpose()?;
+        let slide_name = if let Some(assets) = &motion_assets {
+            assets.files[0].clone()
+        } else {
+            let slide_name = format!("slide-{index:03}.png");
+            slide_png(
+                &font,
+                &project,
+                scene,
+                index,
+                (width, height),
+                media.is_some(),
+                &working.join(&slide_name),
+            )?;
+            slide_name
+        };
         let mut arguments = args(&[
             "-hide_banner",
             "-loglevel",
@@ -734,6 +1000,24 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
         ]);
         arguments.push(slide_name);
         let mut input_count = 1;
+        if let Some(assets) = &motion_assets {
+            for name in assets.files.iter().skip(1) {
+                arguments.extend(args(&[
+                    "-threads",
+                    "1",
+                    "-protocol_whitelist",
+                    "file,pipe",
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    "24",
+                    "-i",
+                ]));
+                arguments.push(name.clone());
+                input_count += 1;
+            }
+        }
+        let media_index = input_count;
         if let Some((path, kind)) = &media {
             arguments.extend(args(&[
                 "-protocol_whitelist",
@@ -763,6 +1047,18 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
         } else {
             arguments.extend(args(&["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]));
         }
+        let (base_filter, base_video) = if let (Some(spec), Some(assets)) = (motion, &motion_assets)
+        {
+            (
+                format!(
+                    "{};",
+                    crate::motion::filter_graph(spec, &assets.layers, duration)
+                ),
+                "[motionvideo]",
+            )
+        } else {
+            (String::new(), "[0:v]")
+        };
         let video_filter = if media.is_some() {
             let (x, y, media_width, media_height) = if height > width {
                 (44, 710, 632, 470)
@@ -775,9 +1071,9 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
             } else {
                 format!("scale={media_width}:{media_height}:force_original_aspect_ratio=decrease,pad={media_width}:{media_height}:(ow-iw)/2:(oh-ih)/2:color=0x0f172a")
             };
-            format!("[1:v]{scaling},setsar=1,fps=24[media];[0:v][media]overlay={x}:{y}:shortest=1,format=yuv420p[v]")
+            format!("{base_filter}[{media_index}:v]{scaling},setsar=1,fps=24[media];{base_video}[media]overlay={x}:{y}:shortest=1,format=yuv420p[v]")
         } else {
-            "[0:v]format=yuv420p[v]".into()
+            format!("{base_filter}{base_video}format=yuv420p[v]")
         };
         let segment_name = format!("segment-{index:03}.mp4");
         arguments.extend(args(&["-filter_complex_threads", "1", "-filter_complex"]));
@@ -850,7 +1146,7 @@ pub async fn render_project(project: Value) -> Result<Value, String> {
             .map_err(|_| "완성 영상의 로컬 접근 권한을 설정할 수 없습니다.")?;
     }
     Ok(
-        json!({"path": output.to_string_lossy(), "durationSec": total_frames as f64 / 24.0, "format":format, "renderer":"rust-ffmpeg-slides", "width":width, "height":height, "fps":24}),
+        json!({"path": output.to_string_lossy(), "durationSec": total_frames as f64 / 24.0, "format":format, "renderer":if has_motion {"rust-ffmpeg-motion"} else {"rust-ffmpeg-slides"}, "width":width, "height":height, "fps":24}),
     )
 }
 
@@ -1080,7 +1376,7 @@ pub async fn status() -> Result<Value, String> {
         _ => false,
     };
     Ok(
-        json!({"ffmpegAvailable":ffmpeg.is_ok(),"ffprobeAvailable":ffprobe.is_ok(),"fontAvailable":font_path().is_some(),"ttsConfigured":tts,"ttsEndpoint":TTS_BASE,"dataPath":data_dir()?.to_string_lossy(),"renderer":"rust-ffmpeg-slides","note":"Rust 슬라이드·로컬 미디어 합성. 음성 모델 추론은 별도 Qwen3 로컬 서버에서 실행됩니다."}),
+        json!({"ffmpegAvailable":ffmpeg.is_ok(),"ffprobeAvailable":ffprobe.is_ok(),"fontAvailable":font_path().is_some(),"ttsConfigured":tts,"ttsEndpoint":TTS_BASE,"dataPath":data_dir()?.to_string_lossy(),"renderer":"rust-ffmpeg-motion","motionPresets":crate::motion::PRESET_IDS,"note":"Rust 모션·슬라이드·로컬 미디어 합성. 음성 모델 추론은 별도 Qwen3 로컬 서버에서 실행됩니다."}),
     )
 }
 
@@ -1109,6 +1405,53 @@ mod tests {
         invalid = project();
         invalid["scenes"][1]["id"] = json!("first");
         assert!(validate_project(&invalid).is_err());
+    }
+    #[test]
+    fn validates_motion_without_rewriting_legacy_scenes() {
+        let legacy = project();
+        assert!(validate_project(&legacy).is_ok());
+        for preset in crate::motion::PRESET_IDS {
+            let mut animated = legacy.clone();
+            animated["scenes"][0]["motion"] = json!({"preset":preset,"intensity":0.6});
+            assert!(validate_project(&animated).is_ok());
+            assert_eq!(animated["scenes"][1], legacy["scenes"][1]);
+        }
+        for motion in [
+            json!(null),
+            json!({"preset":"movie=/tmp/key","intensity":0.5}),
+            json!({"preset":"stagger-rise","intensity":1.01}),
+        ] {
+            let mut invalid = legacy.clone();
+            invalid["scenes"][0]["motion"] = motion;
+            assert!(validate_project(&invalid).is_err());
+        }
+    }
+    #[test]
+    fn motion_cards_keep_sentence_and_domain_boundaries() {
+        assert_eq!(
+            motion_body_sections(
+                "제목을 보여줍니다. 본문을 소개합니다. 다음으로 넘어갑니다.",
+                false
+            ),
+            vec![
+                "제목을 보여줍니다.",
+                "본문을 소개합니다.",
+                "다음으로 넘어갑니다."
+            ]
+        );
+        assert_eq!(
+            motion_body_sections("example.com과 2.5초를 표시합니다. 문장이 끝납니다.", false),
+            vec!["example.com과 2.5초를 표시합니다.", "문장이 끝납니다."]
+        );
+        assert_eq!(
+            motion_body_sections("첫째. 둘째. 셋째. 넷째. 다섯째.", false).len(),
+            3
+        );
+        assert_eq!(
+            motion_body_sections("첫째. 둘째.", true),
+            vec!["첫째. 둘째."]
+        );
+        assert!(motion_body_sections("   ", false).is_empty());
     }
     #[test]
     fn preserves_legacy_records_and_unknown_fields_atomically() {
@@ -1169,9 +1512,12 @@ mod tests {
         assert!(pcm16_wav(&invalid).is_err());
     }
     #[tokio::test]
-    #[ignore = "requires installed FFmpeg, FFprobe and OS font; creates an actual MP4"]
+    #[ignore = "requires installed FFmpeg, FFprobe and OS font; creates an actual MP4 in a temporary directory"]
     async fn native_two_scene_render() {
-        let output = render_project(project()).await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let output = render_project_at(project(), temporary.path(), temporary.path())
+            .await
+            .unwrap();
         let path = PathBuf::from(output["path"].as_str().unwrap());
         let result = probe(&path).await.unwrap();
         assert!(fs::metadata(&path).unwrap().len() > 1000);
@@ -1189,5 +1535,123 @@ mod tests {
             .unwrap();
         assert!((duration - 1.0).abs() < 0.1);
         fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FFmpeg and OS font; verifies synthetic local image and PCM audio with motion"]
+    async fn native_motion_preserves_local_media_and_audio() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut image = Canvas::new(320, 180);
+        image.motion_background();
+        image.save(&temporary.path().join("sample.png")).unwrap();
+        let samples: Vec<_> = (0..24000)
+            .map(|index| {
+                ((index as f64 * 440.0 * std::f64::consts::TAU / 24000.0).sin() * 3000.0) as i16
+            })
+            .collect();
+        fs::write(temporary.path().join("sample.wav"), wav(&samples)).unwrap();
+        for format in ["shorts", "youtube-landscape"] {
+            let mut sample = project();
+            sample["format"] = json!(format);
+            sample["scenes"] = json!([{"id":"media","headline":"로컬 미디어 합성","body":"이미지와 음성을 보존합니다.","narration":"","durationSec":2.0,"mediaType":"image","mediaUrl":"/sample.png","audioPath":"/sample.wav","motion":{"preset":"focus-pulse","intensity":0.6}}]);
+            let output = render_project_at(sample, temporary.path(), temporary.path())
+                .await
+                .unwrap();
+            let path = Path::new(output["path"].as_str().unwrap());
+            let inspected = probe(path).await.unwrap();
+            assert!(inspected["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|stream| stream["codec_type"] == "audio"));
+            assert!(inspected["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|stream| stream["codec_type"] == "video"
+                    && stream["width"] == output["width"]
+                    && stream["height"] == output["height"]));
+            let mut arguments = args(&["-hide_banner", "-loglevel", "error", "-nostdin", "-i"]);
+            arguments.push(path.to_string_lossy().into_owned());
+            arguments.extend(args(&[
+                "-map", "0:a:0", "-f", "s16le", "-ac", "1", "-ar", "8000", "pipe:1",
+            ]));
+            let audio = run_command("ffmpeg", &arguments, None, 30).await.unwrap();
+            assert!(audio.chunks_exact(2).any(|sample| sample != [0, 0]));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FFmpeg and OS font; writes synthetic samples only under a temporary directory"]
+    async fn native_six_preset_motion_probe() {
+        use sha2::{Digest, Sha256};
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = std::env::var_os("TORIS_MOTION_PROBE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temporary.path().to_path_buf());
+        let scenes: Vec<_> = crate::motion::PRESET_IDS.iter().enumerate().map(|(index, preset)| json!({
+            "id":format!("motion-{index}"),"eyebrow":"MOTION / EDITORIAL",
+            "headline":"하나의 주제, 여섯 가지 움직임",
+            "body":"제목은 천천히 자리 잡고, 본문은 순서대로 나타납니다. 읽을 시간과 화면의 여백을 함께 설계합니다.",
+            "narration":"","durationSec":2.0,"mediaType":"none",
+            "motion":{"preset":preset,"intensity":0.8}
+        })).collect();
+        let mut observations = Vec::new();
+        for format in ["shorts", "youtube-landscape"] {
+            let mut sample = project();
+            sample["format"] = json!(format);
+            sample["scenes"] = json!(scenes);
+            let render = render_project_at(sample, &destination, temporary.path())
+                .await
+                .unwrap();
+            let path = Path::new(render["path"].as_str().unwrap());
+            let inspected = probe(path).await.unwrap();
+            assert!(inspected["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|stream| stream["codec_type"] == "video"
+                    && stream["width"] == render["width"]
+                    && stream["height"] == render["height"]));
+            let duration = inspected["format"]["duration"]
+                .as_str()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap();
+            assert!((duration - 12.0).abs() < 0.1);
+            for (index, preset) in crate::motion::PRESET_IDS.iter().enumerate() {
+                let mut hashes = Vec::new();
+                let mut frames = Vec::new();
+                for (moment, offset) in [("entrance", 0.20), ("hold", 1.45)] {
+                    let frame = destination.join(format!("{format}-{preset}-{moment}.png"));
+                    let mut arguments = args(&[
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-nostdin",
+                        "-y",
+                        "-ss",
+                    ]);
+                    arguments.push(format!("{:.3}", index as f64 * 2.0 + offset));
+                    arguments.extend(args(&["-i"]));
+                    arguments.push(path.to_string_lossy().into_owned());
+                    arguments.extend(args(&["-frames:v", "1", "-update", "1"]));
+                    arguments.push(frame.to_string_lossy().into_owned());
+                    run_command("ffmpeg", &arguments, None, 30).await.unwrap();
+                    hashes.push(format!("{:x}", Sha256::digest(fs::read(&frame).unwrap())));
+                    frames.push(frame.to_string_lossy().into_owned());
+                }
+                assert_ne!(
+                    hashes[0], hashes[1],
+                    "{format}/{preset} must visibly animate"
+                );
+                observations.push(
+                    json!({"format":format,"preset":preset,"frameHashes":hashes,"frames":frames}),
+                );
+            }
+            println!("motion_sample={}", render);
+        }
+        fs::write(destination.join("motion-evidence.json"), serde_json::to_vec_pretty(&json!({"synthetic":true,"userProjectWrites":false,"fps":24,"observations":observations})).unwrap()).unwrap();
+        println!("motion_probe_directory={}", destination.display());
     }
 }

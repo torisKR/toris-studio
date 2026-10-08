@@ -4,6 +4,7 @@ pub mod credentials;
 pub mod keyword;
 pub mod media;
 pub mod models;
+pub mod motion;
 pub mod oauth;
 pub mod ops;
 pub mod scheduler;
@@ -12,6 +13,7 @@ pub mod trends;
 pub mod updater;
 pub mod vault;
 pub mod video_embed;
+pub mod video_idea;
 pub mod video_research;
 pub mod youtube;
 
@@ -296,6 +298,19 @@ mod desktop {
         video_research::create(&state.config_snapshot().await, input).await
     }
     #[tauri::command]
+    pub async fn video_create_idea_project(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+        updates: State<'_, Arc<updater::UpdateController>>,
+        input: video_idea::CreateInput,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 영상 기획을 생성하세요.".into());
+        }
+        video_idea::create(&state.config_snapshot().await, input).await
+    }
+    #[tauri::command]
     pub async fn video_render_project(project: Value) -> Result<Value, String> {
         media::render_project(project).await
     }
@@ -513,6 +528,7 @@ mod desktop {
                 video_save_project,
                 video_research_preview,
                 video_create_research_project,
+                video_create_idea_project,
                 video_render_project,
                 video_generate_voice,
                 media_status,
