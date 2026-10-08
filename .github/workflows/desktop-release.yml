@@ -125,6 +125,10 @@ jobs:
           retention-days: 14
 
   publish:
+    # Serialize all versions and trigger types before checking drafts and latest.
+    concurrency:
+      group: desktop-publish-toris-studio
+      cancel-in-progress: false
     needs: [prepare, native]
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncRead, AsyncReadExt},
     process::Command,
     sync::{Mutex, Notify},
 };
@@ -27,6 +27,8 @@ use uuid::Uuid;
 const RESULT_MARKER: &str = "TORIS_OPAL_RESULT:";
 const BLOCKED_MARKER: &str = "TORIS_OPAL_BLOCKED:";
 const MAX_OUTPUT: usize = 128 * 1024;
+const MAX_SESSION_METADATA: usize = 8 * 1024;
+const METADATA_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 const OPAL_HOME: &str = "https://opal.google/";
@@ -34,6 +36,7 @@ const OUTPUT_ERROR: &str = "Opal 결과를 확인하지 못했습니다. 워크�
 const DATABASE_ERROR: &str =
     "Opal 결과를 로컬 DB에 저장할 수 없습니다. 연결 설정에서 로컬 DB 시작·갱신 후 다시 시도하세요.";
 const CANCEL_ERROR: &str = "Aside 실행 중단을 확인하지 못했습니다. Aside에서 이 Opal 작업이 종료되었는지 확인한 뒤 앱을 다시 실행하세요.";
+const SESSION_METADATA_ERROR: &str = "Aside 실행 세션 정보를 확인하지 못했습니다. Aside에서 이 Opal 작업이 종료되었는지 확인한 뒤 앱을 다시 실행하세요.";
 static RUN_GATE: Mutex<()> = Mutex::const_new(());
 static CANCEL_UNCONFIRMED: AtomicBool = AtomicBool::new(false);
 static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -612,15 +615,27 @@ fn strip_ansi(value: &str) -> String {
     plain
 }
 
-fn session_id(output: &[u8]) -> Option<String> {
-    // Only the CLI bootstrap line may identify our session; never select other sessions.
-    let first = output.split(|b| *b == b'\n').next()?;
-    if first.len() > 512 {
-        return None;
+fn session_id(metadata: &[u8]) -> Option<String> {
+    // The CLI emits bootstrap metadata to stderr, possibly after account warnings.
+    // Never pass task/result stdout here. Require one complete, exact bootstrap line.
+    let mut found = None;
+    for line in metadata.split_inclusive(|byte| *byte == b'\n') {
+        if line.len() > 512 || !line.ends_with(b"\n") {
+            continue;
+        }
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let plain = strip_ansi(line);
+        let Some(id) = plain.trim_end().strip_prefix("created new session: ") else {
+            continue;
+        };
+        if found.is_some() || id.len() != 16 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        found = Some(id.to_owned());
     }
-    let first = strip_ansi(std::str::from_utf8(first).ok()?);
-    let id = first.trim().strip_prefix("created new session: ")?.trim();
-    (id.len() == 16 && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| id.into())
+    found
 }
 
 fn korean_reference_date(now: DateTime<Utc>) -> String {
@@ -685,7 +700,8 @@ enum ProcessFailure {
 
 struct ProcessSessionGuard {
     settings: OpalSettings,
-    output: Arc<StdMutex<Vec<u8>>>,
+    metadata: Arc<StdMutex<Vec<u8>>>,
+    metadata_reader: Option<tokio::task::JoinHandle<Result<(), ProcessFailure>>>,
     armed: bool,
 }
 
@@ -695,24 +711,74 @@ impl Drop for ProcessSessionGuard {
             return;
         }
         CANCEL_UNCONFIRMED.store(true, Ordering::SeqCst);
-        let output = self
-            .output
-            .lock()
-            .ok()
-            .map(|raw| raw.clone())
-            .unwrap_or_default();
-        if session_id(&output).is_none() {
-            return;
-        }
+        let metadata = self.metadata.clone();
+        let mut reader = self.metadata_reader.take();
         let settings = self.settings.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             CANCEL_PENDING.store(true, Ordering::SeqCst);
             runtime.spawn(async move {
-                let stopped = stop_session(&settings, &output).await;
+                // The pipe reader survives IPC cancellation and drains buffered bootstrap
+                // bytes after the CLI child is killed. Taking an immediate snapshot races it.
+                drain_metadata_reader(&mut reader).await;
+                let bytes = metadata
+                    .lock()
+                    .ok()
+                    .map(|raw| raw.clone())
+                    .unwrap_or_default();
+                let stopped = stop_session(&settings, &bytes).await;
                 CANCEL_UNCONFIRMED.store(!stopped, Ordering::SeqCst);
                 CANCEL_PENDING.store(false, Ordering::SeqCst);
                 CANCEL_NOTICE.notify_one();
             });
+        }
+    }
+}
+
+async fn read_bounded<R: AsyncRead + Unpin>(
+    mut stream: R,
+    buffer: Arc<StdMutex<Vec<u8>>>,
+    limit: usize,
+) -> Result<(), ProcessFailure> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        let count = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| ProcessFailure::Launch)?;
+        if count == 0 {
+            return Ok(());
+        }
+        let mut output = buffer.lock().map_err(|_| ProcessFailure::Launch)?;
+        let remaining = limit.saturating_sub(output.len());
+        output.extend_from_slice(&chunk[..count.min(remaining)]);
+        if count > remaining {
+            return Err(ProcessFailure::OutputLimit);
+        }
+    }
+}
+
+async fn finish_metadata_reader(
+    reader: &mut Option<tokio::task::JoinHandle<Result<(), ProcessFailure>>>,
+) -> Result<(), ProcessFailure> {
+    let Some(task) = reader.as_mut() else {
+        return Ok(());
+    };
+    let result = task.await.map_err(|_| ProcessFailure::Launch);
+    // Leave the handle in the guard while awaiting, so cancellation can drain it.
+    reader.take();
+    result?
+}
+
+async fn drain_metadata_reader(
+    reader: &mut Option<tokio::task::JoinHandle<Result<(), ProcessFailure>>>,
+) {
+    if tokio::time::timeout(METADATA_DRAIN_TIMEOUT, finish_metadata_reader(reader))
+        .await
+        .is_err()
+    {
+        if let Some(task) = reader.take() {
+            task.abort();
+            let _ = task.await;
         }
     }
 }
@@ -803,8 +869,8 @@ pub async fn open_workflow() -> Result<(), String> {
     open_with_settings(&load_settings()?, OPEN_TIMEOUT).await
 }
 
-async fn stop_session(settings: &OpalSettings, output: &[u8]) -> bool {
-    let Some(id) = session_id(output) else {
+async fn stop_session(settings: &OpalSettings, metadata: &[u8]) -> bool {
+    let Some(id) = session_id(metadata) else {
         return false;
     };
     for _ in 0..2 {
@@ -840,41 +906,34 @@ async fn execute_with_timeout(
             &settings.account,
             prompt,
         ])
-        .stdout(Stdio::piped());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|_| "Aside를 실행할 수 없습니다. 앱 실행 상태와 CLI 경로를 확인하세요.")?;
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or("Aside 출력을 읽을 수 없습니다.")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Aside 세션 정보를 읽을 수 없습니다.")?;
     let collected = Arc::new(StdMutex::new(Vec::<u8>::new()));
+    let metadata = Arc::new(StdMutex::new(Vec::<u8>::new()));
+    let metadata_reader =
+        tokio::spawn(read_bounded(stderr, metadata.clone(), MAX_SESSION_METADATA));
     let mut session_guard = ProcessSessionGuard {
         settings: settings.clone(),
-        output: collected.clone(),
+        metadata: metadata.clone(),
+        metadata_reader: Some(metadata_reader),
         armed: true,
     };
     let buffer = collected.clone();
     let result = {
         let work = async {
-            let read = async move {
-                let mut chunk = [0u8; 8192];
-                loop {
-                    let count = stdout
-                        .read(&mut chunk)
-                        .await
-                        .map_err(|_| ProcessFailure::Launch)?;
-                    if count == 0 {
-                        break;
-                    }
-                    let mut output = buffer.lock().map_err(|_| ProcessFailure::Launch)?;
-                    if output.len() + count > MAX_OUTPUT {
-                        return Err(ProcessFailure::OutputLimit);
-                    }
-                    output.extend_from_slice(&chunk[..count]);
-                }
-                Ok(())
-            };
+            let read = read_bounded(stdout, buffer, MAX_OUTPUT);
+            let read_metadata = finish_metadata_reader(&mut session_guard.metadata_reader);
             let wait = async {
                 let exit = child.wait().await.map_err(|_| ProcessFailure::Launch)?;
                 if exit.success() {
@@ -883,7 +942,7 @@ async fn execute_with_timeout(
                     Err(ProcessFailure::Exit)
                 }
             };
-            tokio::try_join!(read, wait).map(|_| ())
+            tokio::try_join!(read, read_metadata, wait).map(|_| ())
         };
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             Err(ProcessFailure::Cancelled)
@@ -900,7 +959,12 @@ async fn execute_with_timeout(
         .clone();
     if let Err(failure) = result {
         let _ = child.kill().await;
-        if !stop_session(settings, &output).await {
+        drain_metadata_reader(&mut session_guard.metadata_reader).await;
+        let bytes = metadata
+            .lock()
+            .map_err(|_| SESSION_METADATA_ERROR.to_string())?
+            .clone();
+        if !stop_session(settings, &bytes).await {
             CANCEL_UNCONFIRMED.store(true, Ordering::SeqCst);
             session_guard.armed = false;
             return Err(CANCEL_ERROR.into());
@@ -912,6 +976,17 @@ async fn execute_with_timeout(
             ProcessFailure::Cancelled => "앱 종료 요청으로 이 Opal 탐색을 중단했습니다.",
             _ => "Aside가 Opal 탐색을 완료하지 못했습니다. 워크플로우와 로그인 상태를 확인하세요.",
         }.into());
+    }
+    if session_id(
+        &metadata
+            .lock()
+            .map_err(|_| SESSION_METADATA_ERROR.to_string())?,
+    )
+    .is_none()
+    {
+        CANCEL_UNCONFIRMED.store(true, Ordering::SeqCst);
+        session_guard.armed = false;
+        return Err(SESSION_METADATA_ERROR.into());
     }
     session_guard.armed = false;
     Ok(output)
@@ -1235,8 +1310,17 @@ mod tests {
             session_id(b"\x1b[32mcreated new session: TestSession12345\x1b[0m\n").as_deref(),
             Some("TestSession12345")
         );
-        assert!(session_id(b"unrelated output\ncreated new session: TestSession12345\n").is_none());
+        assert_eq!(
+            session_id(b"account warning\ncreated new session: TestSession12345\n").as_deref(),
+            Some("TestSession12345")
+        );
         assert!(session_id(b"created new session: x; rm -rf /\n").is_none());
+        assert!(session_id(b"created new session: TestSession12345").is_none());
+        assert!(session_id(
+            b"created new session: TestSession12345\ncreated new session: UntrustedId12345\n"
+        )
+        .is_none());
+        assert!(session_id(b"").is_none());
     }
 
     #[cfg(unix)]
@@ -1289,7 +1373,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let cli = directory.path().join("aside");
-        let fixture = format!("#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then exit 0; fi\nif [ \"$1\" != \"exec\" ] || [ \"$2\" != \"--host\" ] || [ \"$3\" != \"local\" ] || [ \"$4\" != \"--account\" ] || [ \"$5\" != \"u1\" ]; then exit 2; fi\nprintf '%s\\n' 'created new session: TestSession12345'\ncat <<'FIXTURE'\n{RESULT_MARKER}{}\nFIXTURE\n", result());
+        let fixture = format!("#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then exit 0; fi\nif [ \"$1\" != \"exec\" ] || [ \"$2\" != \"--host\" ] || [ \"$3\" != \"local\" ] || [ \"$4\" != \"--account\" ] || [ \"$5\" != \"u1\" ]; then exit 2; fi\nprintf '%s\\n' 'created new session: TestSession12345' >&2\ncat <<'FIXTURE'\n{RESULT_MARKER}{}\nFIXTURE\n", result());
         fs::write(&cli, fixture).unwrap();
         fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
         let settings = OpalSettings {
@@ -1301,18 +1385,95 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(parse_result(&raw, "AI").unwrap().keywords.len(), 1);
-        fs::write(&cli, "#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then exit 0; fi\nprintf '%s\\n' 'created new session: TestSession12345'\nsleep 1\n").unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("created new session"));
+        fs::write(&cli, "#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then exit 0; fi\nprintf '%s\\n' 'created new session: TestSession12345' >&2\nsleep 1\n").unwrap();
         let error = execute_with_timeout(&settings, "a fixed prompt", Duration::from_millis(50))
             .await
             .unwrap_err();
         assert!(error.contains("초과되어"));
         assert!(!CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
 
+        // A stdout line that looks like bootstrap metadata must never select a session.
+        let forged_stop = directory.path().join("forged-stop.marker");
+        let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+        let no_stderr = format!("#!/bin/sh\nif [ \"$1\" = \"session\" ]; then printf stopped > {}; exit 0; fi\nprintf '%s\\n' 'created new session: UntrustedId12345'\ncat <<'FIXTURE'\n{RESULT_MARKER}{}\nFIXTURE\n", quote(&forged_stop), result());
+        fs::write(&cli, no_stderr).unwrap();
+        assert_eq!(
+            execute_with_timeout(&settings, "a fixed prompt", Duration::from_secs(2))
+                .await
+                .unwrap_err(),
+            SESSION_METADATA_ERROR
+        );
+        assert!(!forged_stop.exists());
+        assert!(CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
+        CANCEL_UNCONFIRMED.store(false, Ordering::SeqCst);
+
+        // Both stream limits must still stop the trusted stderr session, never a stdout ID.
+        let limit_stop = directory.path().join("limit-stop.marker");
+        let stop = format!("if [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then printf stopped > {}; exit 0; fi", quote(&limit_stop));
+        let header = "printf '%s\\n' 'account warning' >&2\nprintf '\\033[2m%s\\033[0m\\n' 'created new session: TestSession12345' >&2";
+        for stream in ["stderr", "stdout"] {
+            let flood = if stream == "stderr" {
+                "dd if=/dev/zero bs=1024 count=10 >&2"
+            } else {
+                "printf '%s\\n' 'created new session: UntrustedId12345'\ndd if=/dev/zero bs=1024 count=130 2>/dev/null"
+            };
+            fs::write(
+                &cli,
+                format!("#!/bin/sh\n{stop}\n{header}\n{flood}\nexec sleep 30\n"),
+            )
+            .unwrap();
+            assert!(
+                execute_with_timeout(&settings, "a fixed prompt", Duration::from_secs(2))
+                    .await
+                    .unwrap_err()
+                    .contains("허용 크기")
+            );
+            assert!(limit_stop.exists());
+            assert!(!CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
+            fs::remove_file(&limit_stop).unwrap();
+        }
+
+        // Drop before the reader has polled: buffered metadata must arrive before cleanup.
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, reader) = tokio::io::duplex(128);
+        let release_reader = Arc::new(Notify::new());
+        let release = release_reader.clone();
+        let metadata = Arc::new(StdMutex::new(Vec::new()));
+        let capture = metadata.clone();
+        let reader_task = tokio::spawn(async move {
+            release.notified().await;
+            read_bounded(reader, capture, MAX_SESSION_METADATA).await
+        });
+        fs::write(&cli, format!("#!/bin/sh\n{stop}\nexit 2\n")).unwrap();
+        let guard = ProcessSessionGuard {
+            settings: settings.clone(),
+            metadata,
+            metadata_reader: Some(reader_task),
+            armed: true,
+        };
+        writer
+            .write_all(b"created new session: TestSession12345\n")
+            .await
+            .unwrap();
+        drop(guard);
+        assert!(CANCEL_PENDING.load(Ordering::SeqCst));
+        drop(writer);
+        release_reader.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !limit_stop.exists() || CANCEL_PENDING.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
+
         // Dropping an IPC future must also stop its own account's remote session.
         let started = directory.path().join("started.marker");
         let stopped = directory.path().join("stopped.marker");
         let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
-        let script = format!("#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then printf stopped > {}; exit 0; fi\nprintf '%s\\n' 'created new session: TestSession12345'\nprintf started > {}\nexec sleep 30\n", quote(&stopped), quote(&started));
+        let script = format!("#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"stop\" ] && [ \"$3\" = \"--account\" ] && [ \"$4\" = \"u1\" ] && [ \"$5\" = \"TestSession12345\" ]; then printf stopped > {}; exit 0; fi\nprintf '%s\\n' 'created new session: TestSession12345' >&2\nprintf started > {}\nexec sleep 30\n", quote(&stopped), quote(&started));
         fs::write(&cli, script).unwrap();
         let task_settings = settings.clone();
         let task = tokio::spawn(async move {
@@ -1336,6 +1497,33 @@ mod tests {
         .await
         .unwrap();
         assert!(!CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
+
+        // A normal application quit also stops the stderr-identified live session.
+        fs::remove_file(&started).unwrap();
+        fs::remove_file(&stopped).unwrap();
+        RUN_ACTIVE.store(true, Ordering::SeqCst);
+        let task_settings = settings.clone();
+        let task = tokio::spawn(async move {
+            execute_with_timeout(&task_settings, "a fixed prompt", Duration::from_secs(60)).await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(request_shutdown());
+        let quit_error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(quit_error.contains("앱 종료 요청"));
+        assert!(stopped.exists());
+        assert!(!CANCEL_UNCONFIRMED.load(Ordering::SeqCst));
+        RUN_ACTIVE.store(false, Ordering::SeqCst);
+        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
 
         // Repeated graceful quit remains prevented until the cleanup waiter finishes.
         let gate = RUN_GATE.lock().await;

@@ -114,14 +114,47 @@ async function notes(directory) {
     '\nWindows 설치 프로그램은 Tauri 업데이트 서명을 검증합니다. Windows Authenticode 인증서는 별도 설정이며 미설정 시 SmartScreen 확인이 표시될 수 있습니다.\n';
   await writeFile(path.join(directory, 'DOWNLOADS.md'), body);
 }
-async function api(resource, { allowMissing = false } = {}) {
+async function api(resource, { allowMissing = false, method = 'GET', body } = {}) {
   if (!process.env.GH_TOKEN) fail('GitHub publication token is missing.');
-  const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/${resource}`, { headers: {
+  const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/${resource}`, { method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }), headers: {
     Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+    ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
   } });
   if (allowMissing && response.status === 404) return null;
   if (!response.ok) fail(`GitHub API returned HTTP ${response.status}.`);
   return response.json();
+}
+// REST's tag endpoint excludes drafts. Authenticated listing includes drafts;
+// fix the exact numeric ID before any upload or publication transition.
+export async function findRelease(tag, request = api) {
+  if (tag !== `v${version(tag?.slice(1))}`) fail('Invalid release tag.');
+  const published = await request(`releases/tags/${tag}`, { allowMissing: true });
+  if (published) return published;
+  for (let page = 1; page <= 20; page++) {
+    const releases = await request(`releases?per_page=100&page=${page}`);
+    if (!Array.isArray(releases)) fail('Invalid GitHub release listing.');
+    const matching = releases.filter(release => release.tag_name === tag);
+    if (matching.length > 1) fail('Release tag is ambiguous; refusing publication.');
+    if (matching.length === 1) return matching[0];
+    if (releases.length < 100) return null;
+  }
+  fail('Release listing limit exceeded; refusing duplicate draft creation.');
+}
+export function assertReleaseIdentity(release, tag, source, id = release?.id) {
+  if (!Number.isSafeInteger(id) || id <= 0 || release?.id !== id ||
+      release.tag_name !== tag || release.target_commitish !== source) {
+    fail('Release ID, tag, or source changed; refusing publication.');
+  }
+  return id;
+}
+export function assertCompleteDraft(release, tag, source, id, assetNames) {
+  assertReleaseIdentity(release, tag, source, id);
+  if (release.draft !== true || !Array.isArray(release.assets) ||
+      release.assets.length !== assetNames.length ||
+      !assetNames.every(name => release.assets.some(asset => asset.name === name && asset.size > 0))) {
+    fail('Draft upload is incomplete or already public; refusing publication.');
+  }
 }
 async function packageDoesNotExist() {
   const response = await fetch('https://api.github.com/users/torisKR/packages/container/toris-studio%2Fdesktop', { headers: {
@@ -134,33 +167,36 @@ async function packageDoesNotExist() {
 function publicationStatePath() {
   return path.join(process.env.RUNNER_TEMP || '/tmp', `toris-release-${process.env.GITHUB_RUN_ID || 'local'}.json`);
 }
-async function publish(directory) {
+export async function publish(directory, { request = api, command = run, spawn = spawnSync } = {}) {
   const { releaseVersion, tag, source } = releaseContext();
   const assetNames = await files(directory);
   if (!assetNames.includes('latest.json') || !assetNames.includes('SHA256SUMS') || !assetNames.includes('release-manifest.json')) fail('Verified aggregate manifest and checksums are required.');
   const manifest = JSON.parse(await readFile(path.join(directory, 'release-manifest.json'), 'utf8'));
   if (manifest.version !== releaseVersion || manifest.commit !== source || manifest.files.length !== 8) fail('Verified release manifest does not match source/version.');
-  const existing = await api(`releases/tags/${tag}`, { allowMissing: true });
+  const existing = await findRelease(tag, request);
   if (existing && !existing.draft) fail('This version is already public. Publish a new version instead of replacing signed assets.');
   if (existing && existing.target_commitish !== source) fail('Existing draft belongs to a different source commit.');
-  const stable = await api('releases/latest', { allowMissing: true });
+  const stable = await request('releases/latest', { allowMissing: true });
   if (stable && !newerThan(releaseVersion, stable.tag_name.replace(/^v/, ''))) fail('Stable release must advance the current public version.');
-  let gitReference = await api(`git/ref/tags/${tag}`, { allowMissing: true });
+  let gitReference = await request(`git/ref/tags/${tag}`, { allowMissing: true });
   if (gitReference) {
     let object = gitReference.object;
-    for (let depth = 0; object.type === 'tag' && depth < 4; depth++) object = (await api(`git/tags/${object.sha}`)).object;
+    for (let depth = 0; object.type === 'tag' && depth < 4; depth++) object = (await request(`git/tags/${object.sha}`)).object;
     if (object.type !== 'commit' || object.sha !== source) fail('Existing release tag points to a different source commit.');
   }
-  if (!existing) run('gh', ['release', 'create', tag, '--repo', REPOSITORY, '--target', source, '--draft', '--title', `Toris Studio ${releaseVersion}`, '--notes-file', path.join(directory, 'DOWNLOADS.md')]);
-  await writeFile(publicationStatePath(), JSON.stringify({ tag, source, touched: true, promoted: false }));
-  run('gh', ['release', 'upload', tag, ...assetNames.map(name => path.join(directory, name)), '--repo', REPOSITORY, '--clobber']);
-  const draft = await api(`releases/tags/${tag}`);
-  if (!draft?.draft || draft.assets.length !== assetNames.length || !assetNames.every(name => draft.assets.some(asset => asset.name === name && asset.size > 0))) fail('Draft upload is incomplete; it remains unpublished.');
+  if (!existing) command('gh', ['release', 'create', tag, '--repo', REPOSITORY, '--target', source, '--draft', '--title', `Toris Studio ${releaseVersion}`, '--notes-file', path.join(directory, 'DOWNLOADS.md')]);
+  const created = existing ?? await findRelease(tag, request);
+  const releaseId = assertReleaseIdentity(created, tag, source);
+  if (created.draft !== true) fail('This release is already public; refusing upload.');
+  const state = { tag, source, releaseId, touched: true, promoted: false };
+  await writeFile(publicationStatePath(), JSON.stringify(state));
+  command('gh', ['release', 'upload', tag, ...assetNames.map(name => path.join(directory, name)), '--repo', REPOSITORY, '--clobber']);
+  assertCompleteDraft(await request(`releases/${releaseId}`), tag, source, releaseId, assetNames);
   if (!process.env.GHCR_TOKEN) fail('GitHub Packages token is missing. Draft remains unpublished.');
-  run('oras', ['login', 'ghcr.io', '--username', process.env.GITHUB_ACTOR || 'torisKR', '--password-stdin'], { input: process.env.GHCR_TOKEN, stdio: ['pipe', 'pipe', 'pipe'] });
+  command('oras', ['login', 'ghcr.io', '--username', process.env.GITHUB_ACTOR || 'torisKR', '--password-stdin'], { input: process.env.GHCR_TOKEN, stdio: ['pipe', 'pipe', 'pipe'] });
   try {
     const reference = `${PACKAGE}:${releaseVersion}`;
-    const priorPackage = spawnSync('oras', ['manifest', 'fetch', reference], { encoding: 'utf8', shell: false });
+    const priorPackage = spawn('oras', ['manifest', 'fetch', reference], { encoding: 'utf8', shell: false });
     let packageExists = false;
     if (priorPackage.status === 0) {
       packageExists = true;
@@ -175,14 +211,20 @@ async function publish(directory) {
       // Only permit creation if the authenticated GitHub package API confirms its absence.
       if (!await packageDoesNotExist()) fail('Cannot inspect existing Package; refusing to overwrite it.');
     }
-    if (!packageExists) run('oras', ['push', reference, '--artifact-type', 'application/vnd.toris.studio.desktop.v1', '--annotation', `org.opencontainers.image.source=https://github.com/${REPOSITORY}`, '--annotation', `org.opencontainers.image.version=${releaseVersion}`, '--annotation', `org.opencontainers.image.revision=${source}`, ...assetNames.map(name => `${name}:application/octet-stream`)], { cwd: path.resolve(directory) });
-    const fetched = JSON.parse(run('oras', ['manifest', 'fetch', reference]));
+    if (!packageExists) command('oras', ['push', reference, '--artifact-type', 'application/vnd.toris.studio.desktop.v1', '--annotation', `org.opencontainers.image.source=https://github.com/${REPOSITORY}`, '--annotation', `org.opencontainers.image.version=${releaseVersion}`, '--annotation', `org.opencontainers.image.revision=${source}`, ...assetNames.map(name => `${name}:application/octet-stream`)], { cwd: path.resolve(directory) });
+    const fetched = JSON.parse(command('oras', ['manifest', 'fetch', reference]));
     if (fetched.layers?.length !== assetNames.length || !assetNames.every(name => fetched.layers.some(layer => layer.annotations?.['org.opencontainers.image.title'] === name))) fail('GitHub Package manifest is incomplete; draft remains unpublished.');
-    run('gh', ['release', 'edit', tag, '--repo', REPOSITORY, '--draft=false', '--latest', '--notes-file', path.join(directory, 'DOWNLOADS.md')]);
-    await writeFile(publicationStatePath(), JSON.stringify({ tag, source, touched: true, promoted: true }));
+    assertCompleteDraft(await request(`releases/${releaseId}`), tag, source, releaseId, assetNames);
+    await writeFile(publicationStatePath(), JSON.stringify({ ...state, promotionAttempted: true }));
+    const published = await request(`releases/${releaseId}`, { method: 'PATCH', body: {
+      draft: false, prerelease: false, make_latest: 'true', body: await readFile(path.join(directory, 'DOWNLOADS.md'), 'utf8'),
+    } });
+    assertReleaseIdentity(published, tag, source, releaseId);
+    if (published.draft || published.prerelease) fail('Release promotion did not complete.');
+    await writeFile(publicationStatePath(), JSON.stringify({ ...state, promoted: true }));
     console.log(`Published ${tag}: GitHub Releases and ${reference}.`);
   } finally {
-    run('oras', ['logout', 'ghcr.io']);
+    command('oras', ['logout', 'ghcr.io']);
   }
 }
 export async function hashResponse(response, limit = 512 * 1024 * 1024) {
@@ -197,10 +239,13 @@ export async function hashResponse(response, limit = 512 * 1024 * 1024) {
   return { sha256: digest.digest('hex'), size };
 }
 async function verifyLive(directory) {
-  const { releaseVersion, tag } = releaseContext();
+  const { releaseVersion, tag, source } = releaseContext();
+  const state = JSON.parse(await readFile(publicationStatePath(), 'utf8'));
+  if (state.tag !== tag || state.source !== source || !state.promoted) fail('This run did not promote the release.');
   const expected = JSON.parse(await readFile(path.join(directory, 'release-manifest.json'), 'utf8'));
   const base = `https://github.com/${REPOSITORY}/releases/download/${tag}`;
-  const release = await api(`releases/tags/${tag}`);
+  const release = await api(`releases/${state.releaseId}`);
+  assertReleaseIdentity(release, tag, source, state.releaseId);
   if (release.draft || release.prerelease) fail('Release is not public stable.');
   for (const file of expected.files) {
     const actual = await hashResponse(await fetch(`${base}/${file.name}`, { signal: AbortSignal.timeout(180_000) }));
@@ -217,19 +262,24 @@ async function verifyLive(directory) {
   if (!feedMatches) fail('Latest updater feed does not match the verified complete release.');
   console.log(`Verified public installers, update signatures, checksums, and latest.json for ${tag}.`);
 }
-async function quarantine() {
+export async function quarantine({ request = api } = {}) {
   let state;
   try { state = JSON.parse(await readFile(publicationStatePath(), 'utf8')); } catch { console.log('No release created by this run; nothing to quarantine.'); return; }
   const { tag, source } = releaseContext();
-  if (state.tag !== tag || state.source !== source || !state.promoted) return;
-  run('gh', ['release', 'edit', tag, '--repo', REPOSITORY, '--prerelease']);
+  if (state.tag !== tag || state.source !== source || !(state.promoted || state.promotionAttempted)) return;
+  const release = await request(`releases/${state.releaseId}`);
+  assertReleaseIdentity(release, tag, source, state.releaseId);
+  if (release.draft || release.prerelease) return;
+  const quarantined = await request(`releases/${state.releaseId}`, { method: 'PATCH', body: { prerelease: true, make_latest: 'false' } });
+  assertReleaseIdentity(quarantined, tag, source, state.releaseId);
+  if (!quarantined.prerelease) fail('Failed release was not removed from the stable channel.');
   console.log(`Marked ${tag} prerelease after failed public verification. It is excluded from stable latest downloads; no previous version was changed.`);
 }
 async function summary(directory) {
   const { releaseVersion, tag } = releaseContext();
   let status = 'Build or publication failed; inspect job logs.';
   try {
-    const release = await api(`releases/tags/${tag}`, { allowMissing: true });
+    const release = await findRelease(tag);
     status = release ? release.draft ? 'Draft retained: public downloads were not promoted.' : release.prerelease ? 'Verification failed: release removed from the stable channel.' : 'Complete public release published.' : status;
   } catch { /* The failure's diagnostic is already in the workflow step. */ }
   const content = `## Toris Studio ${releaseVersion}\n\n${status}\n\n[GitHub Release](https://github.com/${REPOSITORY}/releases/tag/${tag}) · [Download page](https://toriskr.github.io/toris-studio/)\n\nGitHub Packages: \`${PACKAGE}:${releaseVersion}\`\n`;
