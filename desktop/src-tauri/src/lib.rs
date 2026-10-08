@@ -1,10 +1,10 @@
 pub mod ai;
 pub mod config;
 pub mod credentials;
+pub mod keyword;
 pub mod media;
 pub mod models;
 pub mod oauth;
-pub mod opal;
 pub mod ops;
 pub mod scheduler;
 pub mod social;
@@ -254,6 +254,17 @@ mod desktop {
         ops::backup_database().await
     }
     #[tauri::command]
+    pub async fn start_keyword_crawler(
+        window: tauri::WebviewWindow,
+        updates: State<'_, Arc<updater::UpdateController>>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 수집기를 시작하세요.".into());
+        }
+        ops::start_keyword_crawler().await
+    }
+    #[tauri::command]
     pub fn video_list_projects() -> Result<Value, String> {
         media::list_projects()
     }
@@ -294,38 +305,64 @@ mod desktop {
         video_embed::prepare(video_id).await
     }
     #[tauri::command]
-    pub async fn get_opal_status() -> Result<opal::OpalStatus, String> {
-        opal::status().await
-    }
-    #[tauri::command]
-    pub async fn configure_opal(input: opal::ConfigureInput) -> Result<opal::OpalStatus, String> {
-        opal::configure(input).await
-    }
-    #[tauri::command]
-    pub async fn open_opal_workflow(
+    pub async fn get_keyword_status(
         window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        Ok(keyword::status(&state.config_snapshot().await).await)
+    }
+    #[tauri::command]
+    pub async fn search_keywords(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
         updates: State<'_, Arc<updater::UpdateController>>,
-    ) -> Result<(), String> {
+        input: keyword::SearchInput,
+    ) -> Result<keyword::SearchResult, String> {
         updater::authorize(&window)?;
         if updates.installing() {
-            return Err("업데이트 설치가 끝난 뒤 Opal 워크플로우를 여세요.".into());
+            return Err("업데이트 설치가 끝난 뒤 키워드 탐색을 실행하세요.".into());
         }
-        opal::open_workflow().await
+        let _permit = state
+            .trend_lock
+            .try_lock()
+            .map_err(|_| "기존 트렌드 수집을 마친 뒤 실행하세요.")?;
+        keyword::search(&state.config_snapshot().await, input).await
     }
     #[tauri::command]
-    pub async fn run_opal_research(
+    pub async fn get_content_keywords(
+        window: tauri::WebviewWindow,
         state: State<'_, Arc<AppState>>,
-        input: opal::ResearchInput,
-    ) -> Result<opal::OpalRun, String> {
-        let config = state.config_snapshot().await;
-        opal::run_research(&config, input).await
+        input: keyword::ContentInput,
+    ) -> Result<keyword::ContentResult, String> {
+        updater::authorize(&window)?;
+        keyword::content(&state.config_snapshot().await, input).await
     }
     #[tauri::command]
-    pub async fn get_opal_runs(
+    pub async fn get_keyword_runs(
+        window: tauri::WebviewWindow,
         state: State<'_, Arc<AppState>>,
-    ) -> Result<Vec<opal::OpalRun>, String> {
-        let config = state.config_snapshot().await;
-        opal::runs(&config).await
+    ) -> Result<Vec<keyword::SearchRun>, String> {
+        updater::authorize(&window)?;
+        keyword::runs(&state.config_snapshot().await).await
+    }
+    #[tauri::command]
+    pub async fn crawl_keyword_content(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+        updates: State<'_, Arc<updater::UpdateController>>,
+        input: keyword::CrawlInput,
+    ) -> Result<keyword::CrawlResult, String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 콘텐츠를 수집하세요.".into());
+        }
+        keyword::crawl(&state.config_snapshot().await, input).await
+    }
+    #[tauri::command]
+    pub fn cancel_keyword_search(window: tauri::WebviewWindow) -> Result<(), String> {
+        updater::authorize(&window)?;
+        keyword::cancel()
     }
     #[tauri::command]
     pub async fn oauth_status() -> Result<Value, String> {
@@ -448,6 +485,7 @@ mod desktop {
                 copy_text,
                 start_database,
                 backup_database,
+                start_keyword_crawler,
                 video_list_projects,
                 video_save_project,
                 video_render_project,
@@ -457,11 +495,12 @@ mod desktop {
                 youtube_lookup_channel,
                 youtube_channel_videos,
                 prepare_youtube_embed,
-                get_opal_status,
-                configure_opal,
-                open_opal_workflow,
-                run_opal_research,
-                get_opal_runs,
+                get_keyword_status,
+                search_keywords,
+                get_content_keywords,
+                get_keyword_runs,
+                crawl_keyword_content,
+                cancel_keyword_search,
                 oauth_status,
                 oauth_save_client,
                 oauth_begin_login,
@@ -472,20 +511,15 @@ mod desktop {
             .build(tauri::generate_context!())
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {
-                if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if let tauri::RunEvent::ExitRequested { api, .. } = event {
                     use tauri::Manager;
                     if app.state::<Arc<updater::UpdateController>>().installing() {
                         // Never interrupt replacement of the signed application bundle.
                         api.prevent_exit();
-                    } else if opal::shutdown_pending() {
-                        // Keep repeated quit requests from abandoning our browser task.
-                        api.prevent_exit();
-                        if opal::request_shutdown() {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                opal::wait_for_shutdown().await;
-                                handle.exit(code.unwrap_or(0));
-                            });
+                    } else if keyword::running() {
+                        if keyword::cancel().is_err() && keyword::running() {
+                            // Never interrupt committing an observation transaction.
+                            api.prevent_exit();
                         }
                     }
                 }

@@ -1,6 +1,6 @@
 [package]
 name = "toris-studio-desktop"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 rust-version = "1.90"
 default-run = "toris-studio-desktop"
@@ -33,6 +33,7 @@ quick-xml = { version = "0.41", features = ["serialize"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
+unicode-normalization = "0.1"
 sha2 = "0.10"
 futures-util = "0.3"
 dotenvy = "0.15"

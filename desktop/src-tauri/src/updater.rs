@@ -388,8 +388,8 @@ mod native {
             }
             configured_public_key()?;
             validate_asset_url(&update.download_url)?;
-            // Fail early for active browser work. Reacquire immediately before installation.
-            drop(crate::opal::lock_for_update()?);
+            // Fail early for active research. Reacquire immediately before installation.
+            drop(crate::keyword::lock_for_update()?);
             let mut cancellation = self.cancellation();
             let _cleanup = CancellationGuard(self);
             self.publish(app, |status| {
@@ -458,7 +458,7 @@ mod native {
             if verified.phase == UpdatePhase::Cancelled {
                 return Ok(verified);
             }
-            let _opal_guard = match crate::opal::lock_for_update() {
+            let _research_guard = match crate::keyword::lock_for_update() {
                 Ok(permit) => permit,
                 Err(error) => return Ok(self.phase(app, UpdatePhase::Error, &error)),
             };
