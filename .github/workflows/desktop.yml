@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['desktop/**', 'db/**', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
   pull_request:
-    paths: ['desktop/**', 'db/**', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
 
 permissions:
   contents: read

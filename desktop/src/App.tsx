@@ -418,7 +418,7 @@ export function App() {
     youtube: "YouTube Data API로 채널의 공개 성과와 최근 영상을 확인하세요.",
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
     ai: "연결된 로컬 AI로 채널에 맞는 초안과 패턴 리포트를 작성하세요.",
-    video: "트렌드와 키워드를 영상 초안으로 만들고, 장면과 음성을 편집해 로컬 MP4로 출력하세요.",
+    video: "주제·카테고리 또는 수집 자료로 영상 초안을 만들고, 모션과 음성을 편집해 MP4로 출력하세요.",
     settings: "내 기기의 데이터베이스와 AI, 수집 소스를 연결하세요."
   }[tab];
 
@@ -445,7 +445,7 @@ export function App() {
 
           {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onCreateVideo={videoFromTrend} />}
 
-          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} researchSeed={videoResearchSeed} onResearchSeedHandled={(id) => setVideoResearchSeed((current) => current?.requestId === id ? null : current)} onOpenKeywords={() => setTab("keywords")} /></div>
+          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} researchSeed={videoResearchSeed} onResearchSeedHandled={(id) => setVideoResearchSeed((current) => current?.requestId === id ? null : current)} onOpenKeywords={() => setTab("keywords")} onOpenSettings={() => setTab("settings")} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onCreateVideo={openResearchVideo} /></div>
