@@ -5,6 +5,7 @@ import { YouTubePanel } from "./YouTubePanel";
 import { OAuthPanel } from "./OAuthPanel";
 import { OpalPanel } from "./OpalPanel";
 import { External } from "./External";
+import { OverviewPanel } from "./OverviewPanel";
 import {
   ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
   CircleAlert, Clapperboard, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
@@ -19,7 +20,7 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "content" | "trends" | "opal" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings";
+type Tab = "overview" | "content" | "trends" | "opal" | "channels" | "youtube" | "oauth" | "ai" | "video" | "settings";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
@@ -45,15 +46,16 @@ const sourceLabels: Record<TrendSource, string> = {
   google_trends: "Google 트렌드", youtube: "YouTube", naver_blog: "네이버 블로그"
 };
 const tabs = [
-  { id: "content", label: "콘텐츠 플래너", icon: LayoutDashboard },
-  { id: "trends", label: "트렌드 탐색", icon: TrendingUp },
-  { id: "opal", label: "Opal 탐색", icon: Search },
-  { id: "channels", label: "내 채널", icon: Users },
-  { id: "youtube", label: "YouTube 관리", icon: Youtube },
-  { id: "oauth", label: "SNS 로그인", icon: ShieldCheck },
-  { id: "ai", label: "AI 작업실", icon: Sparkles },
-  { id: "video", label: "영상 스튜디오", icon: Clapperboard },
-  { id: "settings", label: "연결 설정", icon: Settings2 }
+  { id: "overview", label: "오버뷰", icon: LayoutDashboard, group: "워크스페이스" },
+  { id: "content", label: "콘텐츠 플래너", icon: FileText, group: "워크스페이스" },
+  { id: "trends", label: "트렌드 탐색", icon: TrendingUp, group: "워크스페이스" },
+  { id: "opal", label: "Opal 탐색", icon: Search, group: "워크스페이스" },
+  { id: "ai", label: "AI 작업실", icon: Sparkles, group: "제작" },
+  { id: "video", label: "영상 스튜디오", icon: Clapperboard, group: "제작" },
+  { id: "channels", label: "내 채널", icon: Users, group: "채널과 연결" },
+  { id: "youtube", label: "YouTube 관리", icon: Youtube, group: "채널과 연결" },
+  { id: "oauth", label: "SNS 로그인", icon: ShieldCheck, group: "채널과 연결" },
+  { id: "settings", label: "연결 설정", icon: Settings2, group: "채널과 연결" }
 ] as const;
 const emptyDashboard: DashboardData = {
   channels: [], content: [], trends: [], integrations: [],
@@ -198,7 +200,7 @@ function TrendCard({ trend, index, canSave, onSave }: {
 }
 
 export function App() {
-  const [tab, setTab] = useState<Tab>("content");
+  const [tab, setTab] = useState<Tab>("overview");
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -380,12 +382,14 @@ export function App() {
     void generateAi(topic, context.slice(0, 6000));
   }
 
-  function useTrend(trend: SocialTrend) {
-    openContent(undefined, { title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
+  function useTrend(trend: SocialTrend, selectedPlatform?: SocialPlatform) {
+    const platform = selectedPlatform ?? (trend.source === "youtube" || trend.source === "naver_blog" ? trend.source : undefined);
+    openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { content: "콘텐츠 플래너", trends: "트렌드 탐색", opal: "Opal 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", video: "영상 스튜디오", settings: "연결 설정" }[tab];
+  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", opal: "Opal 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", video: "영상 스튜디오", settings: "연결 설정" }[tab];
   const viewDescription = {
+    overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
     trends: "실제 출처가 있는 콘텐츠와 키워드에서 다음 아이디어를 찾으세요.",
     opal: "관심 주제로 키워드와 트렌드를 탐색하고, 출처와 결과를 내 기기에 보관하세요.",
@@ -401,16 +405,16 @@ export function App() {
     <div className="social-workspace">
       <a className="social-skip-link" href="#social-main">본문으로 이동</a>
       <aside className="social-sidebar" aria-label="워크스페이스 메뉴">
-        <button type="button" onClick={() => setTab("content")} className="social-brand"><span className="social-brand-mark"><Clapperboard size={22} /></span><span><strong>Toris Studio</strong><small>DESKTOP WORKSPACE</small></span></button>
-        <div className="social-workspace-label">내 워크스페이스 <span>LOCAL</span></div>
+        <button type="button" onClick={() => setTab("overview")} className="social-brand" aria-label="Toris Studio 오버뷰"><span className="social-brand-mark"><img src="./brand/toris-logo.png" alt="" width={40} height={40} /></span><span><strong>Toris Studio</strong><small>Creator workspace</small></span></button>
+        <div className="social-workspace-label"><span className="social-workspace-dot" />내 작업실 <span>LOCAL</span></div>
         <nav className="social-nav" aria-label="콘텐츠 관리">
-          {tabs.map(({ id, label, icon: Icon }) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{label}</span>{id === "content" && dashboard.content.length > 0 && <small>{dashboard.content.length}</small>}</button>)}
+          {(["워크스페이스", "제작", "채널과 연결"] as const).map((group) => <div className="social-nav-group" key={group}><span className="social-nav-group-label">{group}</span>{tabs.filter((item) => item.group === group).map(({ id, label, icon: Icon }) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{label}</span>{id === "content" && dashboard.content.length > 0 && <small>{dashboard.content.length}</small>}</button>)}</div>)}
         </nav>
         <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 선택한 제공자에게 전달됩니다.</p></div>
       </aside>
 
       <div className="social-shell">
-        <header className="social-topbar"><span className="social-breadcrumb">워크스페이스 <ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><Database size={14} /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div></header>
+        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("overview")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><span className="social-local-label">DESKTOP</span><div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div></div></header>
         <main id="social-main" className="social-main">
           <div className="social-page-heading"><div><h1>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={loading} onClick={() => { void loadDashboard(); void checkAi(); }}><RefreshCw size={17} className={loading ? "social-spin" : ""} /></button>{tab === "channels" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openChannel()}><Plus size={17} />채널 등록</button> : tab === "content" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17} />새 콘텐츠</button> : tab === "trends" ? <button className="social-button primary" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={17} className={refreshingTrends ? "social-spin" : ""} />{refreshingTrends ? "수집 중" : "트렌드 수집"}</button> : tab === "ai" ? <button className="social-button" disabled={aiChecking} onClick={() => void checkAi()}><RefreshCw size={17} className={aiChecking ? "social-spin" : ""} />연결 확인</button> : null}</div></div>
 
@@ -418,13 +422,15 @@ export function App() {
           {loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
           {!loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
+          {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} />}
+
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
           <div hidden={tab !== "opal"}><OpalPanel active={tab === "opal"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} /></div>
 
           {tab === "content" && <>
-            <section className="social-stats" aria-label="콘텐츠 현황"><div><span>전체 콘텐츠</span><strong>{dashboard.content.length}<small>개</small></strong></div><div><span>검토할 초안</span><strong>{count("draft")}<small>개</small></strong></div><div><span>발행 계획</span><strong>{count("scheduled")}<small>개</small></strong></div><div><span>등록한 채널</span><strong>{dashboard.channels.length}<small>개</small></strong></div></section>
+            <section className="social-stats" aria-label="콘텐츠 현황"><div><span>불러온 콘텐츠</span><strong>{dashboard.content.length}<small>개</small></strong></div><div><span>검토할 초안</span><strong>{count("draft")}<small>개</small></strong></div><div><span>발행 계획</span><strong>{count("scheduled")}<small>개</small></strong></div><div><span>등록한 채널</span><strong>{dashboard.channels.length}<small>개</small></strong></div></section>
             <div className="social-content-toolbar"><div className="social-platform-filters" role="group" aria-label="플랫폼 필터"><button className={platformFilter === "all" ? "active" : ""} aria-pressed={platformFilter === "all"} onClick={() => setPlatformFilter("all")}>전체 채널</button>{SOCIAL_PLATFORMS.map((platform) => { const Icon = platforms[platform].icon; return <button key={platform} className={platformFilter === platform ? "active" : ""} aria-pressed={platformFilter === platform} onClick={() => setPlatformFilter(platform)}><Icon size={15} />{platforms[platform].label}</button>; })}</div><label className="social-search"><Search size={16} /><input aria-label="콘텐츠 검색" placeholder="콘텐츠 검색" value={contentSearch} onChange={(event) => setContentSearch(event.target.value)} /></label></div>
             <p className="social-plan-note"><CalendarClock size={15} />발행 계획은 한국 시간으로 관리하는 일정입니다. 플랫폼에 자동으로 게시하지 않습니다.</p>
             {loading && dashboard.content.length === 0 ? <div className="social-loading" role="status"><LoaderCircle className="social-spin" size={22} />콘텐츠를 불러오는 중입니다.</div> : <section className="social-board" aria-label="콘텐츠 진행 상태">
