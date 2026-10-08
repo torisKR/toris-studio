@@ -623,9 +623,15 @@ fn session_id(output: &[u8]) -> Option<String> {
     (id.len() == 16 && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| id.into())
 }
 
+fn korean_reference_date(now: DateTime<Utc>) -> String {
+    let offset = chrono::FixedOffset::east_opt(32_400).expect("UTC+09:00 is a valid fixed offset");
+    now.with_timezone(&offset).format("%Y-%m-%d").to_string()
+}
+
 fn task_prompt(settings: &OpalSettings, topic: &str) -> Result<String, String> {
     let scope = serde_json::to_string(&serde_json::json!({
-        "workflowUrl": settings.workflow_url, "topic": topic, "region":"KR", "lookbackDays":7
+        "workflowUrl": settings.workflow_url, "topic": topic, "region":"KR", "lookbackDays":7,
+        "asOfDate": korean_reference_date(Utc::now())
     }))
     .map_err(|_| OUTPUT_ERROR.to_string())?;
     Ok(format!(
@@ -650,7 +656,14 @@ fn task_prompt(settings: &OpalSettings, topic: &str) -> Result<String, String> {
         actual Google sign-in screen; TORIS_OPAL_BLOCKED:PERMISSION_REQUIRED only for an explicit \
         consent/permission request; TORIS_OPAL_BLOCKED:WORKFLOW_UNAVAILABLE only for an explicit \
         missing workflow or denied workflow access. Do not create missing steps. \
-        Enter the topic, region KR and lookbackDays 7 into the existing workflow inputs, run it once, \
+        TASK_DATA.asOfDate is the current execution date in Korea (UTC+09:00), calculated by the app \
+        for this run. Never infer today's date from model knowledge or use a fixed historical date. \
+        Enter the topic, region KR and lookbackDays 7 into the existing workflow inputs. If the \
+        existing workflow has an asOfDate, Reference Date or 기준 날짜 input, enter TASK_DATA.asOfDate \
+        into that input. If it has no such input, use only the original three inputs; do not edit \
+        the workflow or add an input. Preserve the exact topic without appending the date or \
+        any instructions. The reference date is execution input only, not a new output JSON field. \
+        Run the workflow once, \
         wait for completion, and read its ACTUAL structured output. Never substitute your own research \
         or synthesize missing citations, metrics, dates or conclusions. Return only one compact line \
         starting TORIS_OPAL_RESULT: followed by this JSON object: \
@@ -1153,6 +1166,20 @@ mod tests {
     }
 
     #[test]
+    fn reference_date_uses_korean_midnight_and_year_boundary() {
+        let date = |timestamp: &str| {
+            korean_reference_date(
+                DateTime::parse_from_rfc3339(timestamp)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            )
+        };
+        assert_eq!(date("2026-10-07T14:59:59Z"), "2026-10-07");
+        assert_eq!(date("2026-10-07T15:00:00Z"), "2026-10-08");
+        assert_eq!(date("2026-12-31T15:00:00Z"), "2027-01-01");
+    }
+
+    #[test]
     fn account_paths_and_untrusted_topic_cannot_change_command_scope() {
         for account in ["u0", "u1", "u99"] {
             assert!(valid_account(account));
@@ -1175,10 +1202,18 @@ mod tests {
         let data = prompt.split_once("TASK_DATA:\n").unwrap().1;
         let parsed: serde_json::Value = serde_json::from_str(data).unwrap();
         assert_eq!(parsed["topic"], topic);
+        assert!(chrono::NaiveDate::parse_from_str(
+            parsed["asOfDate"].as_str().unwrap(),
+            "%Y-%m-%d"
+        )
+        .is_ok());
         assert!(prompt.contains("Do not publish"));
         assert!(prompt.contains("Opal editor/app iframe"));
         assert!(prompt.contains("Preview tab and Start button"));
         assert!(prompt.contains("TORIS_OPAL_BLOCKED:WORKFLOW_EMPTY"));
+        assert!(prompt.contains("Reference Date or 기준 날짜 input"));
+        assert!(prompt.contains("use only the original three inputs"));
+        assert!(prompt.contains("without appending the date"));
     }
 
     #[test]
