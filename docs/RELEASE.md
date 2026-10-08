@@ -15,12 +15,14 @@
 배포와 PR 모두 공식 Gitleaks 8.30.1의 고정 SHA256을 확인한 뒤 Git 이력의 자격 증명을 검사합니다. 발견 결과는 redact하며 검사가 실패하면 빌드·배포를 중단합니다.
 
 - `desktop.yml`: main과 PR의 UI·Rust·배포 도구 검사 후 세 플랫폼의 미리보기 설치 파일을 Actions artifact에 저장합니다. PR에는 배포 키와 쓰기 권한이 전달되지 않습니다.
-- `desktop-release.yml`: `v0.1.8` 같은 stable version tag 또는 main에서 `workflow_dispatch`로 실행합니다. Tauri/Cargo/desktop package 버전이 모두 같아야 하며 서명 키가 없으면 배포 전에 실패합니다.
+- `desktop-release.yml`: `v0.1.10` 같은 stable version tag 또는 main에서 `workflow_dispatch`로 실행합니다. Tauri/Cargo/desktop package 버전이 모두 같아야 하며 서명 키가 없으면 배포 전에 실패합니다.
 - `release-downloads.yml`: `docs/download/`를 GitHub Pages로 배포합니다. 저장소 **Settings → Pages → Source → GitHub Actions**를 처음 한 번 설정해야 합니다.
 
 배포는 검사 → Mac arm64/Intel 및 Windows x64 빌드 → Rust 서명·버전·SHA256 검증 → 완성된 draft Release와 GitHub Package 업로드 → 공개 전환 → 실제 공개 다운로드 확인 순서입니다. 세 빌드 중 하나라도 실패하면 Release를 공개하지 않습니다. 공개 후 다운로드 검증이 실패하면 해당 Release를 prerelease로 바꿔 stable 최신 다운로드 대상에서 제외하고 기존 배포는 보존합니다. 작업 실패는 GitHub Actions 상태와 run summary에서 확인합니다. GitHub의 워크플로 실패 알림을 켜면 계정 알림도 받을 수 있습니다.
 
-실행 도중 만들어진 draft는 재시도할 수 있습니다. 공개된 버전의 파일은 다시 덮어쓰지 않으며 변경하려면 버전을 올려야 합니다. Actions는 SHA로 고정했고 Rust 1.96.0, Node 24, frozen pnpm/Cargo lockfile을 사용합니다. publish 작업에만 `contents: write`, `packages: write`를 허용합니다. `pull_request_target`, 외부 PR에서 비밀 사용, 개인 API 키를 넣은 빌드는 사용하지 않습니다.
+publish job은 태그 push·수동 실행·다른 버전 사이에서도 하나의 저장소 concurrency 그룹으로 직렬 실행합니다. REST의 tag 조회는 draft를 반환하지 않으므로 인증된 release 목록에서 draft를 찾고 numeric release ID와 태그·소스 commit을 고정합니다. 업로드 완전성 확인과 공개 전환, 실패 시 prerelease 전환은 같은 ID로 처리하며 다른 공개 버전을 변경하지 않습니다.
+
+실행 도중 만들어진 draft는 같은 source commit으로 재시도할 수 있습니다. 이미 같은 Package 버전이 있다면 source와 모든 파일 bytes가 같아야 하며, 다르면 새 버전을 사용합니다. 공개된 버전의 파일은 다시 덮어쓰지 않으며 변경하려면 버전을 올려야 합니다. Actions는 SHA로 고정했고 Rust 1.96.0, Node 24, frozen pnpm/Cargo lockfile을 사용합니다. publish 작업에만 `contents: write`, `packages: write`를 허용합니다. `pull_request_target`, 외부 PR에서 비밀 사용, 개인 API 키를 넣은 빌드는 사용하지 않습니다.
 
 ## 서명 키 설정
 
@@ -59,7 +61,7 @@ GitHub는 새 container package의 visibility를 기본 **Private**으로 만듭
 개발·보관용 ORAS 명령:
 
 ```sh
-oras pull ghcr.io/toriskr/toris-studio/desktop:0.1.8 --output ./toris-studio-0.1.8
+oras pull ghcr.io/toriskr/toris-studio/desktop:0.1.10 --output ./toris-studio-0.1.10
 ```
 
 Public 설정 전에는 읽기 권한이 있는 registry 인증이 필요합니다. 버전별 OCI artifact가 모두 세 OS/아키텍처의 설치 파일, updater 파일, 서명, feed 및 검증 manifest를 포함하므로 `docker run`으로 실행하는 컨테이너 이미지가 아닙니다.
@@ -75,3 +77,11 @@ cargo test --locked --manifest-path scripts/release-verify/Cargo.toml
 빌드 결과 검증은 `cargo run --locked --manifest-path scripts/release-verify/Cargo.toml -- <release-assets> desktop/src-tauri/tauri.conf.json <버전> <40자리 commit>`을 사용합니다. 이 검사는 세 타깃이 모두 있어야 성공합니다. 로컬 Mac 빌드만으로 Windows installer나 공개 배포 성공을 대신 확인하지 않습니다.
 
 공식 기준: [Tauri updater](https://v2.tauri.app/plugin/updater/), [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/), [GitHub Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry), [ORAS remote registry](https://oras.land/docs/1.2/how_to_guides/remote_registries/).
+
+## ORAS 설치 호환성
+
+ORAS CLI 1.3.4는 공식 stable release이지만, 고정한 `setup-oras` action commit의 내장 release catalog는 1.3.0까지만 포함합니다. 배포 워크플로는 action SHA를 유지하면서 공식 Linux amd64 asset URL과 SHA256 `f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454`를 명시합니다. 해당 action의 공식 `url`/`checksum` 입력은 catalog 조회 대신 다운로드한 archive의 SHA256을 확인합니다. 버전을 지정하는 것만으로 실제 action의 catalog 호환성이 확인되었다고 가정하지 않습니다.
+
+`v0.1.9`는 세 플랫폼 빌드와 통합 서명 검증에 성공했으나 ORAS catalog 조회 단계에서 게시 전에 실패했습니다. 실패 기록과 태그는 유지하며, 다음 UI 배포와 설치 호환성 수정은 `v0.1.10`에서 진행합니다. 아직 공개되지 않은 버전의 installer 또는 Package를 다운로드 가능하다고 안내하지 않습니다.
+
+검증 근거: [ORAS 1.3.4 공식 release](https://github.com/oras-project/oras/releases/tag/v1.3.4), [고정 action의 지원 catalog](https://github.com/oras-project/setup-oras/blob/22ce207df3b08e061f537244349aac6ae1d214f6/src/lib/data/releases.json), [URL·checksum 입력 처리](https://github.com/oras-project/setup-oras/blob/22ce207df3b08e061f537244349aac6ae1d214f6/src/lib/release.ts).

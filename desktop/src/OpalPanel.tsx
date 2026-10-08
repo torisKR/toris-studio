@@ -5,7 +5,6 @@ import type { FormEvent } from "react";
 import { External } from "./External";
 import type { OpalRun, OpalStatus } from "./types";
 
-const OPAL_HOME = "https://opal.google/";
 const OPAL_FAQ = "https://developers.google.com/opal/faq";
 const platformLabels: Record<string, string> = {
   youtube: "YouTube", threads: "Threads", naver_blog: "네이버 블로그",
@@ -64,6 +63,9 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
   const running = busy === "run" || status?.runActive === true;
   const locked = busy !== null || running;
   const selectedRun = runs.find((run) => run.id === selectedId) ?? null;
+  const configurationChanged = status !== null && (
+    workflowUrl.trim() !== (status.workflowUrl ?? "") || account.trim() !== status.account || asidePath.trim() !== ""
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -133,7 +135,7 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
       queryVersion.current += 1;
       configDirty.current = false;
       setStatus(next); setStatusError(""); setWorkflowUrl(next.workflowUrl ?? ""); setAccount(next.account); setAsidePath("");
-      setNotice({ tone: "success", text: next.available ? "Opal 연결 설정을 저장했습니다. 주제를 입력해 키워드 탐색을 시작하세요." : `Opal 연결 설정을 저장했습니다. ${next.reason ?? "실행 환경을 확인하세요."}` });
+      setNotice({ tone: "success", text: next.available ? "Opal 연결 설정을 저장했습니다. 등록한 워크플로에 접근할 수 있는 Google 계정으로 Aside에 로그인한 뒤 탐색하세요." : `Opal 연결 설정을 저장했습니다. ${next.reason ?? "실행 환경을 확인하세요."}` });
       if (next.available) setSetupOpen(false);
     } catch (error) {
       if (mounted.current) setNotice({ tone: "error", text: failure(error) });
@@ -143,6 +145,11 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
   async function research(event: FormEvent) {
     event.preventDefault();
     if (locked || !status?.available || statusError || !databaseConnected) return;
+    if (configurationChanged) {
+      setSetupOpen(true);
+      setNotice({ tone: "error", text: "워크플로 URL이나 Aside 계정을 변경했습니다. 연결 설정을 먼저 저장한 뒤 탐색하세요." });
+      return;
+    }
     if (!topic.trim()) {
       setNotice({ tone: "error", text: "탐색할 주제를 입력하세요. 예: AI 생산성, K-POP 숏폼, 서울 주말 여행" });
       topicField.current?.focus(); return;
@@ -159,7 +166,11 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
       setSelectedId(result.id); setHistoryError("");
       setNotice({ tone: "success", text: `${result.keywords.length}개 키워드와 출처를 확인하고 탐색 결과를 로컬 DB에 저장했습니다.` });
     } catch (error) {
-      if (mounted.current) setNotice({ tone: "error", text: failure(error) });
+      if (mounted.current) {
+        const message = failure(error);
+        setNotice({ tone: "error", text: message });
+        if (message.includes("워크플로") || message.includes("Google 계정") || message.includes("Google 로그인")) setSetupOpen(true);
+      }
     } finally {
       if (mounted.current) { await refresh(); setBusy(null); }
     }
@@ -167,10 +178,15 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
 
   async function openWorkflow() {
     if (locked) return;
+    if (configurationChanged) {
+      setSetupOpen(true);
+      setNotice({ tone: "error", text: "변경한 연결 설정을 먼저 저장하세요. 저장 후 해당 워크플로를 열 수 있습니다." });
+      return;
+    }
     setBusy("open"); setNotice(null);
     try {
-      await invoke("open_external", { url: status?.workflowUrl ?? OPAL_HOME, browser: "aside" });
-      if (mounted.current) setNotice({ tone: "success", text: "Opal을 브라우저에서 열었습니다. 탐색에 사용할 Google 계정으로 로그인하세요." });
+      await invoke("open_opal_workflow");
+      if (mounted.current) setNotice({ tone: "success", text: `Aside 계정 ${status?.account ?? account}에서 Opal 열기를 요청했습니다. 워크플로를 만든 Google 계정으로 로그인했는지 확인하세요.` });
     } catch (error) {
       if (mounted.current) setNotice({ tone: "error", text: failure(error) });
     } finally { if (mounted.current) setBusy(null); }
@@ -178,13 +194,14 @@ export function OpalPanel({ active = true, databaseConnected = true, onOpenSetti
 
   return <div className="desktop-opal">
     <section className="desktop-opal-connection" aria-label="Opal 연결 상태">
-      <div className="desktop-opal-connection-title"><span className="desktop-opal-mark" aria-hidden="true"><Sparkles size={23} /></span><div><strong>Google Labs · Opal</strong><p>탐색은 Google Opal에서 실행하고 결과는 로컬 DB에 저장합니다.</p></div><span className={`desktop-opal-state${status?.available && !statusError ? " ready" : ""}`}>{statusError ? "연결 확인 필요" : status === null ? "확인 중" : running ? "탐색 진행 중" : status.available ? "탐색 준비됨" : "설정 필요"}</span></div>
-      <div className="desktop-opal-connection-footer"><div><span>{status?.cliAvailable ? <Check size={13} aria-hidden="true" /> : <CircleAlert size={13} aria-hidden="true" />}{status === null ? "Aside 확인 중" : status.cliAvailable ? "Aside CLI 확인됨" : "Aside CLI 필요"}</span><span><ExternalLink size={13} aria-hidden="true" />{status?.workflowUrl ? "워크플로 저장됨" : "워크플로 미등록"}</span></div><button type="button" className="social-button compact subtle" disabled={loading || busy === "configure"} onClick={() => void refresh()}><RefreshIcon spinning={loading} />상태 새로고침</button></div>
+      <div className="desktop-opal-connection-title"><span className="desktop-opal-mark" aria-hidden="true"><Sparkles size={23} /></span><div><strong>Google Labs · Opal</strong><p>탐색은 Google Opal에서 실행하고 결과는 로컬 DB에 저장합니다.</p></div><span className={`desktop-opal-state${status?.available && !statusError && !configurationChanged ? " ready" : ""}`}>{statusError ? "연결 확인 필요" : status === null ? "확인 중" : running ? "탐색 진행 중" : configurationChanged ? "변경 사항 저장 필요" : status.available ? "실행 환경 설정됨" : "설정 필요"}</span></div>
+      <div className="desktop-opal-connection-footer"><div><span>{status?.cliAvailable ? <Check size={13} aria-hidden="true" /> : <CircleAlert size={13} aria-hidden="true" />}{status === null ? "Aside 확인 중" : status.cliAvailable ? `Aside CLI 확인됨 · ${status.account}` : "Aside CLI 필요"}</span><span><ExternalLink size={13} aria-hidden="true" />{status?.workflowUrl ? "워크플로 저장됨" : "워크플로 미등록"}</span></div><button type="button" className="social-button compact subtle" disabled={loading || busy === "configure"} onClick={() => void refresh()}><RefreshIcon spinning={loading} />상태 새로고침</button></div>
     </section>
 
     {statusError && <div className="social-notice error" role="alert"><CircleAlert size={17} aria-hidden="true" /><span>{statusError}</span></div>}
     {notice && <div ref={feedback} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={17} aria-hidden="true" /> : <CircleAlert size={17} aria-hidden="true" />}<span>{notice.text}</span></div>}
     {!statusError && status?.reason && !status.available && <div className="desktop-opal-setup-hint"><CircleAlert size={16} aria-hidden="true" /><span>{status.reason}</span><button type="button" onClick={() => setSetupOpen(true)}>연결 설정 확인<ChevronRight size={14} aria-hidden="true" /></button></div>}
+    {configurationChanged && <div className="desktop-opal-setup-hint" role="status"><CircleAlert size={16} aria-hidden="true" /><span>연결 설정에 저장하지 않은 변경이 있습니다. 저장 후 새 워크플로와 계정으로 탐색합니다.</span><button type="button" onClick={() => setSetupOpen(true)}>변경 사항 저장<ChevronRight size={14} aria-hidden="true" /></button></div>}
 
     <div className="desktop-opal-layout">
       <div className="desktop-opal-research-column">
