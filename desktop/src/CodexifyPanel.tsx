@@ -4,6 +4,7 @@ import { Check, Copy, ExternalLink, MessageSquare, RefreshCw, Save, Send } from 
 import { codexifyOverlay } from "./codexify";
 import { agentWaiting, bootstrapPrompt, connectedChatUrl, getProfile, profileKey, projectChats, receiptState, sendToConnectedChat } from "./codexify-client";
 import type { ChatReceipt, ChatState, CodexifyChats, CodexifyConnection, CodexifyProfile } from "./codexify-client";
+import { CodexifyRuntimePanel } from "./CodexifyRuntimePanel";
 import "./CodexifyPanel.css";
 
 const emptyProfile: CodexifyProfile = { mcpUrl: "http://127.0.0.1:21228/mcp", pluginUrl: "", conversationUrl: "", projectRoot: "", conversationId: "" };
@@ -60,6 +61,10 @@ export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt }: {
     } finally { reading.current = false; }
   }, []);
 
+  const runtimeChanged = useCallback(() => {
+    needsCheck.current = true; setConnection(null); void refresh(true);
+  }, [refresh]);
+
   useEffect(() => {
     if (!active) return;
     mounted.current = true;
@@ -111,6 +116,7 @@ export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt }: {
   if (!active) return null;
   return <section className="codexify-panel" aria-label="Codexify 앱 연결" aria-busy={Boolean(busy)}>
     <header className="codexify-heading"><div><span className="codexify-eyebrow">CHATGPT MCP</span><h2>앱에서 요청하고, 결과를 확인하세요</h2><p>등록한 Codexify 대화에 요청을 보내고 ChatGPT의 도구 응답을 이 화면에서 받습니다.</p></div><button className="social-button" disabled={!profile || Boolean(busy)} onClick={() => void run("연결 확인", () => refresh(true))}><RefreshCw size={16}/>연결 확인</button></header>
+    <CodexifyRuntimePanel active={active} onRuntimeChange={runtimeChanged}/>
     {(error || pollError) && <p className="social-notice error" role="alert">{error || pollError}</p>}
     {notice && <p className="social-notice success" role="status">{notice}</p>}
     {busy && <p className="codexify-working" role="status">{busy} 중…</p>}

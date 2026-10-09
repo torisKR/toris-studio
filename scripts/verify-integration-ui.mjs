@@ -13,6 +13,8 @@ await page.exposeFunction('__qaInvoke',async(command,args={})=>{
  calls.push({command,args});
  if(command==='get_dashboard')return {channels:[],content:[],trends:[],integrations:[],database:{connected:false,message:'fixture'}};
  if(command==='ai_status')return {providers:[],defaultProvider:null};
+ if(command==='codexify_runtime_status')return {binaryAvailable:true,bundled:true,version:'1.7.0',configPath:'/fixture/config/codexify.json',sourceRoot:'/projects',port:21228,running:false,managed:false,pid:null,service:null,message:'QA idle fixture'};
+ if(command==='codexify_proxy_status')return {available:true,running:false,managed:false,mcpUrl:null,message:'QA idle proxy fixture'};
  if(command==='codexify_connection_get')return {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
  if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
  if(command==='codexify_connection_check')return {reachable:false,fileReceiverReady:false,ownerReady:false,toolCount:0,message:'QA disconnected fixture'};

@@ -9,6 +9,8 @@ const project = '/projects/studio';
 const conversationId = 'a'.repeat(64);
 let profile = {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
 let messages = [], waiting = false, acknowledged = false;
+let runtime = {binaryAvailable:true,bundled:true,version:'1.7.0',configPath:'/fixture/config/codexify.json',sourceRoot:'/projects',port:21228,running:true,managed:false,pid:700,service:{installed:true,running:false,enabled:true},message:'기존 브리지에 연결했습니다.'};
+let proxy = {available:true,running:false,managed:false,mcpUrl:null,message:'프록시 시작 준비됨'};
 const calls = [], errors = [];
 const server = await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false}});
 await server.listen();
@@ -20,11 +22,23 @@ await page.exposeFunction('__qaInvoke', async (command,args={}) => {
   if(command==='ai_status')return {providers:[],defaultProvider:null};
   if(command==='search_keywords')return {items:[],total:0,libraryCount:0,warnings:[]};
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{studio:{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'test'};
+  if(command==='codexify_runtime_status')return {...runtime};
+  if(command==='codexify_runtime_configure'){
+    assert.equal(runtime.running,false,'Running external bridge settings must not be mutated');
+    assert.equal(args.input.port,21228,'Existing MCP port must stay unchanged');
+    runtime={...runtime,sourceRoot:args.input.sourceRoot==='~/projects'?'/fixture-home/projects':args.input.sourceRoot,message:'Source를 저장했습니다.'};return {...runtime};
+  }
+  if(command==='codexify_runtime_start'){if(!runtime.running)runtime={...runtime,running:true,managed:true,pid:701,message:'앱 Codexify 시작됨'};return {...runtime};}
+  if(command==='codexify_runtime_stop'){assert.equal(runtime.managed,true);runtime={...runtime,running:false,managed:false,pid:null,message:'앱 Codexify 종료됨'};proxy={...proxy,running:false,managed:false,mcpUrl:null};return {...runtime};}
+  if(command==='codexify_runtime_doctor')return {checks:[{id:'runtime',status:'pass',label:'Codexify 실행 파일',message:'앱 포함 버전 v1.7.0'},{id:'service',status:'failure',label:'시스템 서비스',message:'시스템 서비스는 실행 중이 아닙니다.'},{id:'health',status:'pass',label:'앱 브리지',message:'로컬 MCP 상태 확인됨'}],failures:1,bridgeHealthy:true,message:'앱 브리지는 정상이며 시스템 서비스 상태를 확인하세요.'};
+  if(command==='codexify_proxy_status')return {...proxy};
+  if(command==='codexify_proxy_start'){assert.equal(runtime.running,true,'Bridge must start before proxy');proxy={...proxy,running:true,managed:true,mcpUrl:'https://fixture-tunnel.trycloudflare.com/mcp',message:'공개 MCP 프록시 시작됨'};return {...proxy};}
+  if(command==='codexify_proxy_stop'){assert.equal(proxy.managed,true);proxy={...proxy,running:false,managed:false,mcpUrl:null,message:'앱 프록시 종료됨'};return {...proxy};}
   if(command==='codexify_connection_get')return {...profile};
   if(command==='codexify_connection_save'){profile={...args.input};return {...profile};}
   if(command==='codexify_connection_check')return {reachable:true,serverName:'Codexify',protocolVersion:'2025-11-25',toolCount:64,studioTools:['studio__studio_asset_receive'],missingStudioTools:[],fileReceiverReady:true,ownerReady:true,checkedAt:new Date().toISOString(),message:'QA bridge ready'};
   if(command==='codexify_chats')return {chats:[{id:conversationId,title:'Studio fixture chat',workspace:'studio',lastEntryEnd:100,lastEntryAtMs:1000,lastAgentCallAtMs:1000,agentWaitingUntilMs:null,totalToolCalls:1}],serverTimeMs:1000};
-  if(command==='codexify_chat_read')return {messages,revision:1,delivered_through:acknowledged?300:0,read_through:acknowledged?300:0,last_agent_call_at_ms:1000,agent_waiting_until_ms:waiting?60000:null,server_time_ms:1000,has_more:false,before:null,unchanged:false};
+  if(command==='codexify_chat_read')return {messages,revision:'1',delivered_through:acknowledged?300:0,read_through:acknowledged?300:0,last_agent_call_at_ms:1000,agent_waiting_until_ms:waiting?60000:null,server_time_ms:1000,has_more:false,before:null,unchanged:false};
   if(command==='codexify_chat_send'){
     assert.ok(args.input.requestId);assert.ok(args.input.message.trim());
     const sent={id:'message-1',end:300,created_at_ms:1001,tool_call_count:0};
@@ -40,10 +54,65 @@ try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`,{waitUntil:'networkidle'});
   await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
   const panel=page.getByRole('region',{name:'Codexify 앱 연결'});
+  const runtimePanel=panel.getByRole('region',{name:'앱 내 Codexify 관리'});
+  await runtimePanel.getByText('기존 브리지 사용 중',{exact:true}).waitFor();
+  assert.equal(await runtimePanel.getByLabel('Codexify Source 폴더').isDisabled(),true);
+  assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),true);
+  assert.equal(await runtimePanel.getByLabel('Codexify 로컬 포트').getAttribute('readonly'),'');
+  await runtimePanel.getByRole('button',{name:'진단 실행',exact:true}).click();
+  const diagnostic=runtimePanel.getByRole('region',{name:'Codexify 진단 결과'});
+  await diagnostic.getByText('진단 · 1개 항목 확인 필요',{exact:true}).waitFor();
+  await diagnostic.getByText('앱 브리지 연결 정상',{exact:true}).waitFor();
+  assert.match(await diagnostic.innerText(),/시스템 서비스는 실행 중이 아닙니다/);
+  assert.equal(calls.filter(c=>c.command==='codexify_runtime_stop').length,0);
+  await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).click();
+  await runtimePanel.getByText('앱 프록시 실행 중',{exact:true}).waitFor();
+  assert.equal(runtime.managed,false,'An existing external bridge stays externally owned');
+  assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),true);
+  await runtimePanel.getByRole('button',{name:'앱 프록시 종료',exact:true}).click();
+  await runtimePanel.getByText('앱 프록시 종료됨',{exact:true}).waitFor();
+  runtime={...runtime,running:false,pid:null,message:'기존 실행 프로그램이 브리지를 종료했습니다.'};
+  await runtimePanel.getByRole('button',{name:'Codexify 실행 상태 새로고침',exact:true}).click();
+  await runtimePanel.getByText('시작할 준비가 됐습니다',{exact:true}).waitFor();
+  await runtimePanel.getByLabel('Codexify Source 폴더').fill('~/projects');
+  assert.equal(await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).isDisabled(),true,'Unsaved Source cannot launch the bridge');
+  await runtimePanel.getByRole('button',{name:'Source 저장',exact:true}).click();
+  await runtimePanel.getByText('Source를 저장했습니다.',{exact:true}).waitFor();
+  assert.equal(await runtimePanel.getByLabel('Codexify Source 폴더').inputValue(),'/fixture-home/projects');
+  await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).click();
+  await runtimePanel.getByText('앱에서 실행 중',{exact:true}).waitFor();
+  await runtimePanel.getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
+  const startIndices=calls.map((c,index)=>c.command==='codexify_runtime_start'?index:-1).filter(index=>index>=0);
+  assert.equal(startIndices.length,2);
+  for(const startIndex of startIndices)assert.ok(calls[startIndex+1]?.command==='codexify_proxy_start','Start must create or reuse the bridge before the public proxy');
+  assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),false);
+  await runtimePanel.getByRole('button',{name:'공개 MCP 주소 복사',exact:true}).click();
+  await runtimePanel.getByText('공개 MCP 주소를 복사했습니다. ChatGPT 플러그인의 서버 URL에 입력하세요.',{exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.command==='copy_text').at(-1).args.text,'https://fixture-tunnel.trycloudflare.com/mcp');
+  runtime={...runtime,running:false,managed:true,message:'앱 프로세스가 응답하지 않습니다.'};
+  proxy={...proxy,mcpUrl:null,message:'Source 변경으로 공개 MCP 주소를 확인할 수 없습니다.'};
+  await runtimePanel.getByRole('button',{name:'Codexify 실행 상태 새로고침',exact:true}).click();
+  await runtimePanel.getByText('앱 실행 중 · 응답 확인 필요',{exact:true}).waitFor();
+  await runtimePanel.getByText('Source 변경으로 공개 MCP 주소를 확인할 수 없습니다.',{exact:true}).waitFor();
+  assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),false,'Unhealthy app-owned child must remain stoppable');
+  assert.equal(await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).isDisabled(),true,'Unhealthy owned child must be stopped before starting again');
+  assert.equal(await runtimePanel.getByLabel('Codexify Source 폴더').isDisabled(),true);
+  assert.equal(await runtimePanel.getByRole('button',{name:'공개 MCP 주소 복사',exact:true}).isDisabled(),true,'Unknown proxy URL must not copy a stale endpoint');
+  assert.equal(await runtimePanel.getByRole('button',{name:'앱 프록시 종료',exact:true}).isDisabled(),false,'Owned proxy with unknown URL remains stoppable');
+  assert.equal(await runtimePanel.getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).count(),0);
+  await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).click();
+  await runtimePanel.getByText('앱 Codexify 종료됨',{exact:true}).waitFor();
+  await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).click();
+  await runtimePanel.getByText('앱에서 실행 중',{exact:true}).waitFor();
+  await runtimePanel.getByRole('button',{name:'진단 실행',exact:true}).click();
+  await diagnostic.getByText('진단 · 1개 항목 확인 필요',{exact:true}).waitFor();
+  await diagnostic.getByText('앱 브리지 연결 정상',{exact:true}).waitFor();
   await panel.getByLabel('등록한 ChatGPT 플러그인 주소').fill('https://chatgpt.com/plugins/plugin_fixture');
   await panel.getByLabel('Codexify 작업 프로젝트').fill(project);
   await panel.getByRole('button',{name:'연결 설정 저장',exact:true}).click();
   await panel.getByText('Codexify 연결 설정을 이 기기에 저장했습니다.',{exact:true}).waitFor();
+  assert.equal(profile.projectRoot,project,'Runtime Source must not replace the connected chat project');
+  assert.equal(runtime.sourceRoot,'/fixture-home/projects');
   await panel.getByLabel('Codexify 연결 대화').selectOption(conversationId);
   await panel.getByRole('button',{name:'앱 요청 보내기',exact:true}).waitFor();
   await panel.getByLabel('Codexify ChatGPT 요청').fill('<img src=x onerror=alert(1)> 테스트 요청');
@@ -69,11 +138,16 @@ try {
   await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
   await panel.getByText('연결 설정',{exact:true}).click();
   assert.equal(await panel.getByLabel('Codexify 작업 프로젝트').inputValue(),project);
+  await runtimePanel.getByText('앱에서 실행 중',{exact:true}).waitFor();
+  await runtimePanel.getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
+  await runtimePanel.getByRole('button',{name:'진단 실행',exact:true}).click();
+  await diagnostic.getByText('앱 브리지 연결 정상',{exact:true}).waitFor();
   const out=resolve('docs/review/codexify-app');await mkdir(out,{recursive:true});
+  await runtimePanel.screenshot({path:resolve(out,'runtime.png')});
   await page.screenshot({path:resolve(out,'desktop.png'),fullPage:true});
   await page.setViewportSize({width:820,height:720});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   await page.screenshot({path:resolve(out,'narrow.png'),fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow'],adapter:'Chromium IPC fixtures; no live model calls'},null,2));
+  console.log(JSON.stringify({passed:true,checks:['external process controls protected','source saved without changing chat project','bridge starts before proxy','canonical public MCP copied','unhealthy app-owned process remains stoppable','unknown proxy URL is not exposed or copied','system service failure separated from healthy app bridge','saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow'],adapter:'Chromium IPC fixtures; no live model calls or public tunnel'},null,2));
 } finally {await browser.close();await server.close();}

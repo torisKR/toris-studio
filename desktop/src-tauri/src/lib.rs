@@ -1,6 +1,8 @@
 pub mod ai;
 pub mod assets;
 pub mod codexify_connection;
+pub mod codexify_proxy;
+pub mod codexify_runtime;
 pub mod config;
 pub mod credentials;
 #[cfg(feature = "desktop")]
@@ -477,6 +479,8 @@ mod desktop {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .manage(state.clone())
             .manage(updater::shared())
+            .manage(codexify_runtime::shared())
+            .manage(Arc::new(codexify_proxy::ProxyController::default()))
             .on_window_event(|window, event| {
                 use tauri::Manager;
                 if window.label() == "main" {
@@ -514,6 +518,14 @@ mod desktop {
                 crate::integration_native::codexify_chats,
                 crate::integration_native::codexify_chat_read,
                 crate::integration_native::codexify_chat_send,
+                crate::integration_native::codexify_runtime_status,
+                crate::integration_native::codexify_runtime_configure,
+                crate::integration_native::codexify_runtime_start,
+                crate::integration_native::codexify_runtime_stop,
+                crate::integration_native::codexify_runtime_doctor,
+                crate::integration_native::codexify_proxy_status,
+                crate::integration_native::codexify_proxy_start,
+                crate::integration_native::codexify_proxy_stop,
                 crate::integration_native::integration_status,
                 crate::integration_native::integration_upload_login,
                 crate::integration_native::integration_channels,
@@ -577,6 +589,13 @@ mod desktop {
             .build(tauri::generate_context!())
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {
+                if let tauri::RunEvent::Exit = event {
+                    use tauri::Manager;
+                    app.state::<Arc<codexify_proxy::ProxyController>>()
+                        .shutdown();
+                    app.state::<Arc<codexify_runtime::RuntimeController>>()
+                        .shutdown();
+                }
                 if let tauri::RunEvent::ExitRequested { api, .. } = event {
                     use tauri::Manager;
                     if app.state::<Arc<updater::UpdateController>>().installing() {

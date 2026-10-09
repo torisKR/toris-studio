@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/ai-discovery.test.ts', 'tests/codexify-bridge.test.ts', 'tests/codexify-client.test.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/ai-discovery.test.ts', 'tests/codexify-bridge.test.ts', 'tests/codexify-client.test.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
   pull_request:
-    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/ai-discovery.test.ts', 'tests/codexify-bridge.test.ts', 'tests/codexify-client.test.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/ai-discovery.test.ts', 'tests/codexify-bridge.test.ts', 'tests/codexify-client.test.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
 
 permissions:
   contents: read
@@ -44,6 +44,8 @@ jobs:
         run: |
           pnpm ai:test
           node --test infrastructure/oauth-callback/callback.test.mjs
+      - name: Check pinned runtime packaging contracts without downloads
+        run: node --test scripts/prepare-codexify.test.mjs
   native:
     needs: [security, contracts]
     timeout-minutes: 60
@@ -79,6 +81,11 @@ jobs:
           toolchain: '1.96.0'
           targets: ${{ matrix.target }}
           components: rustfmt
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: runner.os == 'macOS'
+        with:
+          go-version: '1.26.9'
+          cache: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target
@@ -96,8 +103,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: '-'
         run: |
-          node scripts/release-assets.mjs preview-config "$RUNNER_TEMP/tauri-preview.json"
-          pnpm desktop:build --ci --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}' --config "$RUNNER_TEMP/tauri-preview.json"
+          pnpm desktop:preview --ci --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: preview-${{ matrix.platform }}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/codexify", "binaries/cloudflared"],
+    "resources": {
+      "resources/codexify/LICENSE": "codexify-notices/LICENSE",
+      "resources/codexify/NOTICE": "codexify-notices/NOTICE",
+      "resources/codexify/manifest.json": "codexify-notices/manifest.json",
+      "resources/cloudflared/LICENSE": "cloudflared-notices/LICENSE",
+      "resources/cloudflared/NOTICE": "cloudflared-notices/NOTICE",
+      "resources/cloudflared/manifest.json": "cloudflared-notices/manifest.json"
+    }
+  }
+}

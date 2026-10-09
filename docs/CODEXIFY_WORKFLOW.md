@@ -6,6 +6,22 @@ v0.1.16은 등록한 Codexify 연결을 설치 앱 안에서 저장하고 사용
 
 AI-first DAG 실행기 전체 구현과는 별개입니다. ChatGPT가 생성과 판단을 수행하고 Codexify가 로컬 도구를 연결합니다. 앱에서 요청을 등록하거나 복사한 것만으로 AI 작업이 시작된 것으로 표시하지 않습니다.
 
+## 앱에 포함된 실행 파일과 프록시
+
+0.1.17부터 공식 설치 파일은 Codexify 1.7.0과 Cloudflare CLI를 함께 포함합니다. 빌드에서 공식 배포 파일의 SHA256을 검증하고 라이선스를 동봉합니다. 앱의 Rust 백엔드만 정해진 실행 파일과 인자를 실행하며, React에는 셸 실행 권한이나 owner chat 토큰을 전달하지 않습니다.
+
+**연결·게시 QA → Codexify 관리**에서 포함된 버전, Source, 로컬 포트, 실행 상태, Doctor를 확인합니다. Source는 기본적으로 `~/projects`이며 특정 대화의 작업 프로젝트와 별개입니다. 기존 외부 브리지가 응답하면 이를 재사용합니다. 앱에서 시작한 프로세스만 종료하고, 별도로 설치된 시스템 서비스의 설정·시작·중지와 기존 Cloudflare 터널은 건드리지 않습니다. 앱에서 시작한 Codexify와 프록시는 앱 종료·업데이트 재시작 때 함께 종료합니다.
+
+**Codexify · 프록시 시작**은 로컬 브리지를 확인한 뒤 앱 소유의 Cloudflare Quick Tunnel을 실행합니다. 공개 주소의 HTTPS `/health` 응답까지 확인한 후 `https://…trycloudflare.com/mcp`를 로컬 앱 설정의 `codexify-proxy.json`에 저장합니다. 앱이 사용하는 owner chat 및 MCP 연결 주소는 계속 localhost이며 공개 주소로 대체하지 않습니다. 기존 외부 설정의 `port`는 실행 중인 실제 포트와 일치해야 합니다. 설정에 3000이 남아 있는데 실행 옵션은 21228이면 Doctor가 다른 주소를 검사하므로 설정만 정정합니다.
+
+**공개 MCP 주소 복사**로 ChatGPT의 플러그인 등록 화면에 주소를 입력합니다. 앱의 주소 저장은 ChatGPT 플러그인 등록 완료를 뜻하지 않습니다. 공개 문서의 등록 절차는 ChatGPT 화면에서 수행하며, 앱은 비공개 API나 브라우저 세션 쿠키로 이를 우회하지 않습니다. Quick Tunnel은 재시작할 때 주소가 바뀌므로 등록 주소 갱신이 필요합니다. 기존 플러그인 URL·대화 연결은 자동으로 덮어쓰지 않습니다. 고정 주소가 필요하면 계정에 연결한 named tunnel을 별도로 구성해야 합니다.
+
+일부 로컬 DNS가 새 Quick Tunnel 주소를 찾지 못하면, 공개 주소 검증에 한해 Cloudflare의 공식 HTTPS DNS 조회 결과를 사용합니다. 생성된 호스트의 공개 IP만 허용하고 HTTPS 인증서 검증을 유지하며 시스템 DNS 설정은 변경하지 않습니다.
+
+Doctor의 시스템 서비스 결과와 선택된 앱 브리지의 연결 상태를 각각 표시합니다. 다른 포트·다른 설정으로 실행된 시스템 서비스가 정상이라고 해서 이 앱 브리지의 연결을 확인한 것으로 표시하지 않습니다.
+
+공식 참고: [Codexify 1.7.0](https://github.com/devnoname120/codexify/releases/tag/v1.7.0), [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/), [ChatGPT MCP 플러그인 연결](https://developers.openai.com/plugins/build/app-quickstart).
+
 ## 주제 발견과 자료 선택
 
 AI 작업실 상단의 ‘오늘의 주제 후보’는 현재 조회한 트렌드에서 수집 시각이 최근인 서로 다른 출처 최대 6개입니다. 인기 순위나 조회수 추정치를 만들지 않습니다. 관련 키워드는 저장된 로컬 키워드 API의 최근 조회 자료 최대 25개에서 가져옵니다. 실제 검색어와 추출 키워드를 각각 최대 8개 표시하며 출처를 구분합니다. 자동 조회는 외부 검색 API나 AI를 호출하지 않습니다.
@@ -77,11 +93,10 @@ UI 테스트는 Chromium과 명시적인 IPC fixture를 사용합니다. 실제 
 로컬 앱은 아래처럼 빌드합니다. 첫 기본 debug build에서 업데이트 서명 private key가 없다는 오류를 확인했으므로 기존 preview-config 도구로 **업데이트 배포 산출물 생성만** 끕니다. 설치된 앱의 업데이트 서명 검증 설정은 바꾸지 않습니다.
 
 ```sh
-node scripts/release-assets.mjs preview-config /tmp/toris-studio-ai-preview.json
-pnpm --dir desktop exec tauri build --debug --bundles app --config /tmp/toris-studio-ai-preview.json
+APPLE_SIGNING_IDENTITY='-' pnpm desktop:preview --debug --bundles app
 ```
 
-공개 release/tag/GitHub Packages는 이번 변경으로 갱신하지 않았습니다. 기존 설치 앱도 덮어쓰지 않았습니다. 변경은 로컬 개발 빌드입니다.
+공식 배포는 `pnpm desktop:build`로 플랫폼별 실행 파일을 준비하고 번들 설정을 적용합니다. 서명된 업데이트 배포에는 기존 CI의 signing 설정을 사용합니다. 로컬 debug 빌드는 공식 공개 릴리스나 실제 설치 검증을 대신하지 않습니다.
 
 공식 참고 자료(2026-10-09 확인):
 - https://github.com/devnoname120/codexify

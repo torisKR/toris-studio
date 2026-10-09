@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "version": "1.7.0",
+  "repository": "https://github.com/devnoname120/codexify",
+  "sourceCommit": "f269d563ff278075c357b3170960cefdfa0e155a",
+  "license": "MIT",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "archive": "codexify-v1.7.0-darwin-arm64.tar.gz",
+      "sha256": "21bb7bbfea08f841e03ac0703bd15bcec7e31cea54871b788c9cdaa10981e52d"
+    },
+    "x86_64-apple-darwin": {
+      "archive": "codexify-v1.7.0-darwin-x64.tar.gz",
+      "sha256": "8e5e2af103a65206b25b65ca0ab6b678959c442b4f9a9ad00ced63eaa9139858"
+    },
+    "x86_64-pc-windows-msvc": {
+      "archive": "codexify-v1.7.0-windows-x64.zip",
+      "sha256": "e2cc1cee26a7c19d597ec72505597247c121c5bba1e16533b428ccb2b67178a9"
+    }
+  }
+}

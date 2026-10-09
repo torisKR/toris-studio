@@ -3,6 +3,76 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
+pub async fn codexify_runtime_status(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+) -> Result<crate::codexify_runtime::RuntimeStatus, String> {
+    crate::updater::authorize(&window)?;
+    runtime.status().await
+}
+#[tauri::command]
+pub async fn codexify_runtime_configure(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+    input: crate::codexify_runtime::ConfigureInput,
+) -> Result<crate::codexify_runtime::RuntimeStatus, String> {
+    crate::updater::authorize(&window)?;
+    runtime.configure(input).await
+}
+#[tauri::command]
+pub async fn codexify_runtime_start(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+) -> Result<crate::codexify_runtime::RuntimeStatus, String> {
+    crate::updater::authorize(&window)?;
+    runtime.start().await
+}
+#[tauri::command]
+pub async fn codexify_runtime_stop(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+    proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+) -> Result<crate::codexify_runtime::RuntimeStatus, String> {
+    crate::updater::authorize(&window)?;
+    proxy.stop().await?;
+    runtime.stop().await
+}
+#[tauri::command]
+pub async fn codexify_runtime_doctor(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+) -> Result<crate::codexify_runtime::DoctorReport, String> {
+    crate::updater::authorize(&window)?;
+    runtime.doctor().await
+}
+
+#[tauri::command]
+pub async fn codexify_proxy_status(
+    window: tauri::WebviewWindow,
+    proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+) -> Result<crate::codexify_proxy::ProxyStatus, String> {
+    crate::updater::authorize(&window)?;
+    proxy.status().await
+}
+#[tauri::command]
+pub async fn codexify_proxy_start(
+    window: tauri::WebviewWindow,
+    proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+    runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+) -> Result<crate::codexify_proxy::ProxyStatus, String> {
+    crate::updater::authorize(&window)?;
+    proxy.start(runtime.status().await?.port).await
+}
+#[tauri::command]
+pub async fn codexify_proxy_stop(
+    window: tauri::WebviewWindow,
+    proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+) -> Result<crate::codexify_proxy::ProxyStatus, String> {
+    crate::updater::authorize(&window)?;
+    proxy.stop().await
+}
+
+#[tauri::command]
 pub fn codexify_connection_get(
     window: tauri::WebviewWindow,
 ) -> Result<crate::codexify_connection::Profile, String> {
@@ -13,9 +83,15 @@ pub fn codexify_connection_get(
 pub fn codexify_connection_save(
     window: tauri::WebviewWindow,
     input: crate::codexify_connection::Profile,
+    proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
 ) -> Result<crate::codexify_connection::Profile, String> {
     crate::updater::authorize(&window)?;
-    crate::codexify_connection::save(input)
+    let before = crate::codexify_connection::load()?;
+    let saved = crate::codexify_connection::save(input)?;
+    if before.mcp_url != saved.mcp_url {
+        proxy.shutdown();
+    }
+    Ok(saved)
 }
 #[tauri::command]
 pub async fn codexify_connection_check(window: tauri::WebviewWindow) -> Result<Value, String> {

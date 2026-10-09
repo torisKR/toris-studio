@@ -1,0 +1,11 @@
+Toris Studio includes the unmodified Codexify 1.7.0 executable, distributed
+under the accompanying MIT LICENSE. Copyright (c) 2026 devnoname120.
+
+Upstream: https://github.com/devnoname120/codexify
+Release: https://github.com/devnoname120/codexify/releases/tag/v1.7.0
+Source commit: f269d563ff278075c357b3170960cefdfa0e155a
+
+The pinned upstream archive hashes and supported targets are recorded in
+manifest.json. macOS application signing may replace the executable's
+upstream code signature. Updates to this bundled executable are delivered
+through the signed Toris Studio application updater.

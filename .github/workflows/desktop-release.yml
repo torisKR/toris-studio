@@ -79,6 +79,11 @@ jobs:
           toolchain: '1.96.0'
           targets: ${{ matrix.target }}
           components: rustfmt
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: runner.os == 'macOS'
+        with:
+          go-version: '1.26.9'
+          cache: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target
@@ -92,7 +97,9 @@ jobs:
           pnpm desktop:check
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs
+          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs
+      - name: Prepare pinned Codexify and Cloudflare runtimes
+        run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -113,6 +120,13 @@ jobs:
       - name: Validate macOS application signature
         if: runner.os == 'macOS'
         run: codesign --verify --deep --strict 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toris Studio.app'
+      - name: Verify bundled runtimes and redistribution licenses
+        run: |
+          if [[ '${{ runner.os }}' == 'macOS' ]]; then
+            node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toris Studio.app'
+          else
+            node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
+          fi
       - name: Collect only public release assets
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
