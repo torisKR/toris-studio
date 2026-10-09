@@ -226,7 +226,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
       dirtyFields.current.clear();
       applySavedSettings(next, false);
       setSecretResetToken((current) => current + 1);
-      setNotice("내 기기의 설정을 저장했습니다. DB와 AI의 실제 연결 상태는 각 화면에서 확인할 수 있습니다.");
+      setNotice("내 기기의 설정을 저장했습니다. DB 연결과 ChatGPT 수신 상태는 각 화면에서 확인할 수 있습니다.");
       onSaved();
       try { setScheduler(await invoke<SchedulerStatus>("get_scheduler_status")); }
       catch { setFollowupNotice("설정은 저장되었습니다. 자동 수집 상태를 불러오지 못했으므로 아래의 상태 확인 버튼을 눌러 주세요."); }
@@ -311,22 +311,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
         <label htmlFor="settings-database">데이터베이스 연결 주소</label><input id="settings-database" type="password" value={form.databaseUrl} onChange={(event) => update("databaseUrl", event.target.value)} placeholder={settings.databaseConfigured ? "저장된 주소 사용 중 · 변경할 때만 입력" : "postgresql://사용자:비밀번호@127.0.0.1:포트/DB"} maxLength={2000} autoComplete="new-password" spellCheck={false} />
         <p className="social-form-hint">컨테이너가 실행 중이어야 연결됩니다. 주소를 저장하면 실제 DB 연결 상태를 다시 확인합니다.</p>
       </fieldset>
-      <fieldset disabled={locked} className="desktop-settings-section"><legend><Sparkles size={18} />AI 연결</legend>
-        <p>구독 계정 로그인은 사용하는 로컬 AI 서비스에서 완료하세요. 이 프로그램에 계정 비밀번호나 구독 로그인 토큰을 붙여넣지 않습니다.</p>
-        <div className="desktop-settings-columns"><section><h3>OpenCodex</h3>
-          <label htmlFor="settings-opencodex-url">로컬 API 주소</label><input id="settings-opencodex-url" type="url" value={form.opencodexBaseUrl} onChange={(event) => update("opencodexBaseUrl", event.target.value)} placeholder="http://127.0.0.1:10100/v1" required maxLength={2000} spellCheck={false} />
-          <label htmlFor="settings-opencodex-model">사용할 모델</label><input id="settings-opencodex-model" value={form.opencodexModel} onChange={(event) => update("opencodexModel", event.target.value)} placeholder="로컬 서비스의 모델 ID" required maxLength={120} spellCheck={false} />
-          <label htmlFor="settings-opencodex-models">허용할 모델 <small>쉼표로 구분</small></label><input id="settings-opencodex-models" value={form.opencodexAllowedModels} onChange={(event) => update("opencodexAllowedModels", event.target.value)} placeholder="모델 ID, 모델 ID" required maxLength={1500} spellCheck={false} />
-          <label htmlFor="settings-opencodex-key">로컬 서비스 API 키 <small>필요할 때만</small></label><input id="settings-opencodex-key" type="password" value={form.opencodexApiKey} onChange={(event) => update("opencodexApiKey", event.target.value)} maxLength={2000} placeholder="빈 입력은 저장된 키 유지" autoComplete="new-password" spellCheck={false} />
-          <div className="desktop-settings-link"><External url={`${new URL(settings.opencodexBaseUrl).origin}/#dashboard`}><ExternalLink size={14} />OpenCodex 대시보드 열기</External></div>
-        </section><section><h3>teamclaude</h3>
-          <label htmlFor="settings-teamclaude-url">로컬 API 주소</label><input id="settings-teamclaude-url" type="url" value={form.teamclaudeBaseUrl} onChange={(event) => update("teamclaudeBaseUrl", event.target.value)} placeholder="http://127.0.0.1:포트/v1" maxLength={2000} spellCheck={false} />
-          <label htmlFor="settings-teamclaude-model">사용할 모델</label><input id="settings-teamclaude-model" value={form.teamclaudeModel} onChange={(event) => update("teamclaudeModel", event.target.value)} placeholder="서비스가 지원하는 모델 ID" maxLength={120} spellCheck={false} />
-          <label htmlFor="settings-teamclaude-models">허용할 모델 <small>쉼표로 구분</small></label><input id="settings-teamclaude-models" value={form.teamclaudeAllowedModels} onChange={(event) => update("teamclaudeAllowedModels", event.target.value)} placeholder="모델 ID, 모델 ID" maxLength={1500} spellCheck={false} />
-          <label htmlFor="settings-teamclaude-key">로컬 서비스 API 키 <small>필요할 때만</small></label><input id="settings-teamclaude-key" type="password" value={form.teamclaudeApiKey} onChange={(event) => update("teamclaudeApiKey", event.target.value)} maxLength={2000} placeholder="빈 입력은 저장된 키 유지" autoComplete="new-password" spellCheck={false} />
-          <div className="desktop-settings-cli"><label htmlFor="settings-claude-cli"><input id="settings-claude-cli" type="checkbox" checked={form.claudeCliEnabled} onChange={(event) => update("claudeCliEnabled", event.target.checked)} /><span>로그인한 Claude CLI 사용</span></label><p>내 기기에 설치하고 로그인한 CLI를 사용합니다. 활성화 후 AI 작업실에서 연결 상태를 확인하세요.</p></div>
-        </section></div>
-      </fieldset>
+      <section className="desktop-settings-section"><h2><Sparkles size={18} />ChatGPT 연결</h2><p>AI 작성과 이미지 생성은 실제 ChatGPT 대화에 요청합니다. 코딩 메뉴에서 Codexify와 대화를 연결한 뒤 ChatGPT에서 시작·재개하세요.</p><p className="social-form-hint">이전 로컬 AI 설정은 보존하지만 데스크톱 AI 요청에는 사용하지 않습니다. ChatGPT 사용 한도가 적용됩니다.</p></section>
       <fieldset disabled={locked} className="desktop-settings-section"><legend><KeyRound size={18} />수집 API</legend>
         <p>Google 트렌드는 키 없이 수집합니다. YouTube와 네이버 블로그 수집에 필요한 API 정보를 추가하세요.</p>
         <p className="social-form-hint">저장됨 표시로 등록 여부를 확인하고, 보기 버튼으로 저장된 값을 확인하세요. 저장된 값은 읽기 전용이며 변경 입력과 구분됩니다.</p>

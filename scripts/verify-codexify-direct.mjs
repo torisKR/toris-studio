@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn,execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { access,mkdtemp,mkdir,readFile,writeFile,rm } from 'node:fs/promises';
 import { homedir,tmpdir } from 'node:os';
 import { resolve,join } from 'node:path';
@@ -13,11 +13,11 @@ const codexify=process.env.CODEXIFY_BIN||join(homedir(),'.codexify/bin/codexify'
 const worker=process.env.TORIS_STUDIO_MCP_BIN||resolve('desktop/src-tauri/target/debug/toris-studio-desktop');
 await access(codexify);await access(worker);
 const scratch=await mkdtemp(join(tmpdir(),'toris-codexify-qa-'));
-const home=join(scratch,'home'),project=join(scratch,'project'),assets=join(scratch,'assets');
-await Promise.all([mkdir(home),mkdir(project),mkdir(assets)]);
+const home=join(scratch,'home'),project=join(scratch,'project'),assets=join(scratch,'assets'),drafts=join(scratch,'drafts');
+await Promise.all([mkdir(home),mkdir(project),mkdir(assets),mkdir(drafts)]);
 const token=randomBytes(32).toString('hex');
 const reserve=createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r));
-const config={schemaVersion:1,workDir:project,multiProject:false,apiKey:token,port,allowedHosts:['127.0.0.1','localhost'],uiWidgets:false,codexMcp:{enabled:false,useCli:false},skills:{enabled:false},memory:{enabled:false},artifactIngress:{enabled:false},artifactEgress:{enabled:false},mcpServers:{studio:{command:worker,args:['--studio-mcp'],env:{TORIS_STUDIO_ASSET_HOME:assets},mode:'direct',startupTimeoutSec:30,toolTimeoutSec:180}}};
+const config={schemaVersion:1,workDir:project,multiProject:false,apiKey:token,port,allowedHosts:['127.0.0.1','localhost'],uiWidgets:false,codexMcp:{enabled:false,useCli:false},skills:{enabled:false},memory:{enabled:false},artifactIngress:{enabled:false},artifactEgress:{enabled:false},mcpServers:{studio:{command:worker,args:['--studio-mcp'],env:{TORIS_STUDIO_ASSET_HOME:assets,TORIS_STUDIO_DRAFT_TEST_HOME:drafts},mode:'direct',startupTimeoutSec:30,toolTimeoutSec:180}}};
 const configPath=join(scratch,'codexify.config.json');await writeFile(configPath,JSON.stringify(config),{mode:0o600});
 const env={HOME:home,USERPROFILE:home,PATH:process.env.PATH,LANG:'en_US.UTF-8',TMPDIR:tmpdir(),RUST_LOG:'error'};
 const report={scope:'Installed Codexify via authenticated temporary HTTP + real Rust Studio MCP',checks:[],chatgptGenerationTested:false,chatgptFileReceiptTested:false,tunnelCredentialsUsed:false,userLibraryChanged:false};
@@ -43,9 +43,14 @@ try{
  const denied=await fetch(`http://127.0.0.1:${port}/mcp`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(denied.status,401);
  const initialized=await rpc('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'toris-direct-qa',version:'1'}});report.server=initialized.serverInfo;
  const list=await rpc('tools/list');const tools=list.tools.filter(t=>t.name.startsWith('studio__'));
- assert.equal(tools.length,9);const receive=tools.find(t=>t.name==='studio__studio_asset_receive');assert.deepEqual(receive._meta['openai/fileParams'],['file']);assert.deepEqual(receive.inputSchema.properties.file.required,['download_url','file_id']);assert.equal(receive.annotations.destructiveHint,false);assert.equal(receive.annotations.idempotentHint,true);
+ assert.equal(tools.length,10);const receive=tools.find(t=>t.name==='studio__studio_asset_receive');assert.deepEqual(receive._meta['openai/fileParams'],['file']);assert.deepEqual(receive.inputSchema.properties.file.required,['download_url','file_id']);assert.equal(receive.annotations.destructiveHint,false);assert.equal(receive.annotations.idempotentHint,true);
  report.checks.push('Native tool names, file schema, _meta and safety annotations survive real direct aggregation');
  const tool=(name,args={})=>rpc('tools/call',{name:`studio__${name}`,arguments:args}).then(unpack);
+ const draftRequestId=randomUUID();await writeFile(join(drafts,'inbox.json'),JSON.stringify([{id:draftRequestId,status:'waiting',topic:'Synthetic QA',createdAt:new Date().toISOString()}]),{mode:0o600});
+ const draftReply={requestId:draftRequestId,title:'Synthetic title',description:'Synthetic description',tags:['fixture'],hashtags:['test']};
+ const draftReceived=await tool('studio_publication_draft_receive',draftReply);assert.equal(draftReceived.status,'received');assert.deepEqual(await tool('studio_publication_draft_receive',draftReply),draftReceived);
+ assert.equal(JSON.parse(await readFile(join(drafts,'inbox.json'),'utf8'))[0].draft.title,'Synthetic title');assert.equal(draftReceived.approved,undefined);
+ report.checks.push('Request-bound structured SNS draft crosses real Codexify, persists and is idempotent without creating approvals or posts');
  await tool('studio_connection_check');assert.equal((await tool('studio_asset_presets')).presets.length,31);
  const spec={title:'Codexify QA',prompt:'Synthetic test; no model invocation.',purpose:'project',project:'QA',width:64,height:64,format:'png',fit:'contain',quantity:1};
  const batches=await Promise.all(Array.from({length:6},()=>tool('studio_asset_request',spec)));

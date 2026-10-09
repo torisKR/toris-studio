@@ -95,13 +95,15 @@ enum Provider {
     NaverBlog,
     Tiktok,
     Instagram,
+    Facebook,
 }
-const PROVIDERS: [Provider; 5] = [
+const PROVIDERS: [Provider; 6] = [
     Provider::Youtube,
     Provider::Threads,
     Provider::NaverBlog,
     Provider::Tiktok,
     Provider::Instagram,
+    Provider::Facebook,
 ];
 
 impl Provider {
@@ -118,6 +120,7 @@ impl Provider {
             Self::NaverBlog => "naver_blog",
             Self::Tiktok => "tiktok",
             Self::Instagram => "instagram",
+            Self::Facebook => "facebook",
         }
     }
     fn label(self) -> &'static str {
@@ -127,10 +130,11 @@ impl Provider {
             Self::NaverBlog => "네이버",
             Self::Tiktok => "TikTok",
             Self::Instagram => "Instagram",
+            Self::Facebook => "Facebook Page",
         }
     }
     fn meta(self) -> bool {
-        matches!(self, Self::Threads | Self::Instagram)
+        matches!(self, Self::Threads | Self::Instagram | Self::Facebook)
     }
     fn secret_required(self) -> bool {
         self != Self::Youtube
@@ -142,6 +146,7 @@ impl Provider {
             Self::NaverBlog => "https://nid.naver.com/oauth2.0/authorize",
             Self::Tiktok => "https://www.tiktok.com/v2/auth/authorize/",
             Self::Instagram => "https://www.instagram.com/oauth/authorize",
+            Self::Facebook => "https://www.facebook.com/v25.0/dialog/oauth",
         }
     }
     fn token_endpoint(self) -> &'static str {
@@ -151,6 +156,7 @@ impl Provider {
             Self::NaverBlog => "https://nid.naver.com/oauth2.0/token",
             Self::Tiktok => "https://open.tiktokapis.com/v2/oauth/token/",
             Self::Instagram => "https://api.instagram.com/oauth/access_token",
+            Self::Facebook => "https://graph.facebook.com/v25.0/oauth/access_token",
         }
     }
     fn basic_scope(self) -> &'static str {
@@ -160,6 +166,45 @@ impl Provider {
             Self::NaverBlog => "",
             Self::Tiktok => "user.info.basic",
             Self::Instagram => "instagram_business_basic",
+            Self::Facebook => "pages_show_list,pages_read_engagement",
+        }
+    }
+    fn publishing_scope(self) -> Option<&'static str> {
+        match self {
+            Self::Youtube => Some("https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload"),
+            Self::Threads => Some("threads_basic,threads_content_publish"),
+            Self::Instagram => Some("instagram_business_basic,instagram_business_content_publish"),
+            Self::Facebook => Some("pages_show_list,pages_read_engagement,pages_manage_posts"),
+            Self::Tiktok => Some("user.info.basic,video.publish,video.upload"),
+            Self::NaverBlog => None,
+        }
+    }
+    fn publishing_authorized(self, scopes: &[String]) -> bool {
+        match self {
+            Self::Youtube => has_upload_scope(scopes),
+            Self::Threads => scopes.iter().any(|s| s == "threads_content_publish"),
+            Self::Instagram => scopes
+                .iter()
+                .any(|s| s == "instagram_business_content_publish"),
+            Self::Facebook => [
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_posts",
+            ]
+            .iter()
+            .all(|required| scopes.iter().any(|s| s == required)),
+            Self::Tiktok => scopes
+                .iter()
+                .any(|s| s == "video.publish" || s == "video.upload"),
+            Self::NaverBlog => false,
+        }
+    }
+    fn permissions_endpoint(self) -> Option<&'static str> {
+        match self {
+            Self::Threads => Some("https://graph.threads.net/v1.0/me/permissions"),
+            Self::Instagram => Some("https://graph.instagram.com/v25.0/me/permissions"),
+            Self::Facebook => Some("https://graph.facebook.com/v25.0/me/permissions"),
+            _ => None,
         }
     }
     fn default_redirect(self) -> String {
@@ -174,6 +219,7 @@ impl Provider {
         Self::Threads => "Meta Threads 앱과 등록된 HTTPS 콜백이 필요합니다. threads_basic 읽기 권한으로 연결하고 콜백 주소를 붙여 넣어 완료하세요.",
         Self::NaverBlog => "네이버 로그인 앱에 콜백을 등록하세요. 계정 로그인만 연결하며 네이버 블로그 글쓰기 권한은 제공하지 않습니다.",
         Self::Tiktok => "TikTok Login Kit Desktop 앱과 등록된 로컬 콜백이 필요합니다. user.info.basic 권한을 사용합니다.",
+        Self::Facebook => "Facebook Login 앱과 등록된 HTTPS 콜백이 필요합니다. Page 조회 권한과 게시 권한은 각각 승인하며 개인 프로필에는 게시하지 않습니다.",
         Self::Instagram => "Instagram Business/Creator 계정과 Meta 앱의 등록된 HTTPS 콜백이 필요합니다. instagram_business_basic 권한으로 연결하세요.",
     }
     }
@@ -185,6 +231,8 @@ struct ClientConfig {
     client_id: String,
     client_secret: Option<String>,
     redirect_uri: String,
+    #[serde(default)]
+    tiktok_audit_declared: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -221,6 +269,7 @@ struct PendingLogin {
     client: ClientConfig,
     expires_at: u64,
     cancel: watch::Sender<bool>,
+    publishing: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -566,6 +615,9 @@ fn allowed_endpoint(endpoint: &str) -> bool {
             "https://graph.threads.net/refresh_access_token",
             "https://graph.instagram.com/access_token",
             "https://graph.instagram.com/refresh_access_token",
+            "https://graph.threads.net/v1.0/me/permissions",
+            "https://graph.instagram.com/v25.0/me/permissions",
+            "https://graph.facebook.com/v25.0/me/permissions",
         ]
         .contains(&endpoint)
 }
@@ -723,9 +775,9 @@ impl OAuthService {
                 else { provider.help().into() });
             let audit: Vec<AuditEvent> = self.read("audit", provider).ok().flatten().unwrap_or_default();
             json!({ "platform":provider.id(), "label":provider.label(), "clientConfigured":configured,
-                "connected":connected, "uploadAuthorized":connected && provider == Provider::Youtube && session.as_ref().is_some_and(|s| has_upload_scope(&s.scopes)), "expiresAt":session.as_ref().and_then(|s| timestamp(s.expires_at)),
+                "connected":connected, "uploadAuthorized":connected && provider == Provider::Youtube && session.as_ref().is_some_and(|s| has_upload_scope(&s.scopes)), "publishingAuthorized":connected && session.as_ref().is_some_and(|s| provider.publishing_authorized(&s.scopes)), "publishingScopes":session.as_ref().map(|s| s.scopes.clone()).unwrap_or_default(), "expiresAt":session.as_ref().and_then(|s| timestamp(s.expires_at)),
                 "refreshable":refreshable, "needsReconnect":needs_reconnect, "detail":detail,
-                "redirectUri":client.as_ref().map(|c| c.redirect_uri.as_str()), "pending":pending,
+                "tiktokAuditDeclared":provider == Provider::Tiktok && client.as_ref().is_some_and(|c| c.tiktok_audit_declared), "redirectUri":client.as_ref().map(|c| c.redirect_uri.as_str()), "pending":pending,
                 "audit":audit, "cookieStorage":"system_browser", "tokenStorage":"os_credentials" })
         }).collect();
         json!({"providers":providers})
@@ -737,10 +789,15 @@ impl OAuthService {
     async fn save_client(&self, provider: Provider, input: Value) -> Result<Value, String> {
         let _guard = self.gate.lock().await;
         let object = input.as_object().ok_or("OAuth 설정 형식을 확인하세요.")?;
-        if object
-            .keys()
-            .any(|key| !["clientId", "clientSecret", "redirectUri"].contains(&key.as_str()))
-        {
+        if object.keys().any(|key| {
+            ![
+                "clientId",
+                "clientSecret",
+                "redirectUri",
+                "tiktokAuditDeclared",
+            ]
+            .contains(&key.as_str())
+        }) {
             return Err("지원하지 않는 OAuth 설정입니다.".into());
         }
         let mut config = self
@@ -754,6 +811,15 @@ impl OAuthService {
                 ..Default::default()
             });
         for (key, value) in object {
+            if key == "tiktokAuditDeclared" {
+                if provider != Provider::Tiktok {
+                    return Err("TikTok 앱 심사 설정은 TikTok에만 적용됩니다.".into());
+                }
+                config.tiktok_audit_declared = value
+                    .as_bool()
+                    .ok_or("TikTok 앱 심사 설정 형식을 확인하세요.")?;
+                continue;
+            }
             let text = value
                 .as_str()
                 .ok_or("OAuth 설정은 텍스트로 입력하세요.")?
@@ -782,6 +848,9 @@ impl OAuthService {
         });
         if changed {
             self.store.delete(&format!("session:{}", provider.id()))?;
+            // Audit approval belongs to one developer app, not to the user account.
+            // Changing client credentials requires a fresh explicit declaration.
+            config.tiktok_audit_declared = false;
         }
         self.cancel_pending(provider);
         self.write("client", provider, &config)?;
@@ -841,6 +910,7 @@ impl OAuthService {
                     client: config.clone(),
                     expires_at: self.clock.now() + LOGIN_TTL,
                     cancel,
+                    publishing: upload,
                 },
             );
         if let Err(error) = self.audit(provider, "login_started", "pending") {
@@ -919,6 +989,16 @@ impl OAuthService {
                 return Err(failure.message());
             }
         };
+        // Instagram's code exchange may wrap exactly one token in data. Reject
+        // multiple/ambiguous grants instead of choosing another account's token.
+        if provider == Provider::Instagram && response.get("access_token").is_none() {
+            if let Some(data) = response.get("data").and_then(Value::as_array) {
+                if data.len() != 1 || !data[0].is_object() {
+                    return Err("Instagram 인증 응답이 모호합니다. 계정을 다시 연결하세요.".into());
+                }
+                response = data[0].clone();
+            }
+        }
         // Meta documents a one-hour short-lived token but can omit expires_in in
         // this first response. It is only an input to the immediate long exchange.
         if provider.meta() && response.get("expires_in").is_none() {
@@ -943,6 +1023,23 @@ impl OAuthService {
             };
             session = session_from_response(&response, Some(&session), self.clock.now(), true)
                 .map_err(|_| "SNS 장기 인증 응답을 확인할 수 없습니다. 다시 로그인하세요.")?;
+        }
+        // Meta token exchanges omit scopes. Never infer consent from what was requested:
+        // verify the provider's granted permissions before advertising publishing access.
+        if pending.publishing {
+            if let Some(endpoint) = provider.permissions_endpoint() {
+                let permissions = self
+                    .transport
+                    .send(TokenRequest {
+                        endpoint,
+                        get: true,
+                        parameters: vec![],
+                        bearer: Some(session.access_token.clone()),
+                    })
+                    .await
+                    .map_err(TokenFailure::message)?;
+                session.scopes = granted_permissions(&permissions)?;
+            }
         }
         self.write("session", provider, &session)?;
         self.audit(provider, "login_completed", "success")?;
@@ -1175,8 +1272,8 @@ fn authorization_url_for_mode(
     verifier: Option<&str>,
     upload: bool,
 ) -> Result<String, String> {
-    if upload && provider != Provider::Youtube {
-        return Err("이 게시 연결은 YouTube만 지원합니다.".into());
+    if upload && provider.publishing_scope().is_none() {
+        return Err("이 SNS는 공식 영상 게시 연결을 지원하지 않습니다.".into());
     }
     let mut url =
         Url::parse(provider.authorization_endpoint()).map_err(|_| "인증 주소 설정 오류")?;
@@ -1195,7 +1292,7 @@ fn authorization_url_for_mode(
         .append_pair("state", state);
     if !provider.basic_scope().is_empty() {
         let scope = if upload {
-            format!("{} {}", provider.basic_scope(), YOUTUBE_UPLOAD_SCOPE)
+            provider.publishing_scope().unwrap_or_default().to_owned()
         } else {
             provider.basic_scope().to_owned()
         };
@@ -1323,6 +1420,22 @@ fn long_lived_request(
     client: &ClientConfig,
     session: &TokenSession,
 ) -> TokenRequest {
+    if provider == Provider::Facebook {
+        return TokenRequest {
+            endpoint: provider.token_endpoint(),
+            get: true,
+            parameters: vec![
+                ("grant_type".into(), "fb_exchange_token".into()),
+                ("client_id".into(), client.client_id.clone()),
+                (
+                    "client_secret".into(),
+                    client.client_secret.clone().unwrap_or_default(),
+                ),
+                ("fb_exchange_token".into(), session.access_token.clone()),
+            ],
+            bearer: None,
+        };
+    }
     let (endpoint, grant) = if provider == Provider::Threads {
         (
             "https://graph.threads.net/access_token",
@@ -1353,6 +1466,9 @@ fn refresh_request(
     client: &ClientConfig,
     session: &TokenSession,
 ) -> TokenRequest {
+    if provider == Provider::Facebook {
+        return long_lived_request(provider, client, session);
+    }
     if provider.meta() {
         let (endpoint, grant) = if provider == Provider::Threads {
             (
@@ -1437,9 +1553,11 @@ fn session_from_response(
         failures: 0,
         retry_at: 0,
         scopes: match response.get("scope") {
-            Some(Value::String(raw)) if raw.len() <= 8192 => {
-                raw.split_whitespace().map(str::to_owned).collect()
-            }
+            Some(Value::String(raw)) if raw.len() <= 8192 => raw
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
             None | Some(Value::Null) => previous.map(|s| s.scopes.clone()).unwrap_or_default(),
             _ => return Err(()),
         },
@@ -1526,6 +1644,69 @@ pub async fn save_client(platform: String, input: Value) -> Result<Value, String
     service()
         .save_client(Provider::parse(&platform)?, input)
         .await
+}
+/// Explicit publishing consent; normal account login remains read-only.
+pub async fn begin_publish_login(platform: String) -> Result<Value, String> {
+    let provider = Provider::parse(&platform)?;
+    if provider.publishing_scope().is_none() {
+        return Err("이 SNS는 영상 게시 권한을 제공하지 않습니다.".into());
+    }
+    service().begin_login_mode(provider, true).await
+}
+/// Credentials are intentionally native-only. This type is never serialized or Debug.
+pub(crate) struct PublishingAccess {
+    pub token: String,
+    pub scopes: Vec<String>,
+    pub tiktok_audit_declared: bool,
+}
+pub(crate) async fn publishing_access(platform: &str) -> Result<PublishingAccess, String> {
+    let provider = Provider::parse(platform)?;
+    let service = service();
+    let _guard = service.gate.lock().await;
+    let session = service
+        .read::<TokenSession>("session", provider)?
+        .ok_or("게시 계정에 로그인하세요.")?;
+    if session.needs_reconnect {
+        return Err("SNS 계정을 다시 연결하세요.".into());
+    }
+    if session.expires_at <= service.clock.now() + 60 {
+        service.refresh_locked(provider, false).await?;
+    }
+    let session = service
+        .read::<TokenSession>("session", provider)?
+        .ok_or("SNS 연결을 확인하세요.")?;
+    if session.needs_reconnect
+        || session.expires_at <= service.clock.now()
+        || !provider.publishing_authorized(&session.scopes)
+    {
+        return Err(
+            "이 계정의 게시 권한을 별도로 승인하세요. 읽기 전용 연결은 게시 권한이 아닙니다."
+                .into(),
+        );
+    }
+    let audit_declared = provider == Provider::Tiktok
+        && service
+            .read::<ClientConfig>("client", provider)?
+            .is_some_and(|client| client.tiktok_audit_declared);
+    Ok(PublishingAccess {
+        token: session.access_token,
+        scopes: session.scopes,
+        tiktok_audit_declared: audit_declared,
+    })
+}
+fn granted_permissions(response: &Value) -> Result<Vec<String>, String> {
+    let data = response
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or("SNS 게시 권한 응답을 확인할 수 없습니다.")?;
+    let scopes: Vec<String> = data
+        .iter()
+        .filter(|item| item["status"] == "granted")
+        .filter_map(|item| item["permission"].as_str())
+        .filter(|scope| scope.len() <= 256)
+        .map(str::to_owned)
+        .collect();
+    Ok(scopes)
 }
 pub async fn begin_youtube_upload_login() -> Result<Value, String> {
     service().begin_login_mode(Provider::Youtube, true).await
@@ -1708,6 +1889,7 @@ mod tests {
     }
     fn client(provider: Provider) -> ClientConfig {
         ClientConfig {
+            tiktok_audit_declared: false,
             client_id: "example-client-id".into(),
             client_secret: Some("fixture-secret".into()),
             redirect_uri: if provider.meta() {
@@ -1727,6 +1909,7 @@ mod tests {
                 client: client(provider),
                 expires_at,
                 cancel,
+                publishing: false,
             },
         );
     }

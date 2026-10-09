@@ -30,7 +30,8 @@ const platformInfo = {
   threads: { name: "Threads", icon: AtSign, letter: "@" },
   naver_blog: { name: "네이버 블로그", icon: NotebookPen, letter: "N" },
   tiktok: { name: "TikTok", icon: Music2, letter: "T" },
-  instagram: { name: "Instagram", icon: Camera, letter: "I" }
+  instagram: { name: "Instagram", icon: Camera, letter: "I" },
+  facebook: { name: "Facebook Page", icon: Video, letter: "f" }
 };
 const statusNames: Record<ContentStatus, string> = { draft: "초안", ready: "검토 완료", scheduled: "발행 계획", published: "발행 기록" };
 const sourceNames = { youtube: "YouTube", naver_blog: "네이버", google_trends: "Google 트렌드" };

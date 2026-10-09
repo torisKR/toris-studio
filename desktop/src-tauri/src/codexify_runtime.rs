@@ -22,12 +22,13 @@ const MAX_COMMAND: usize = 256 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_PORT: u16 = 21228;
-const STUDIO_TOOLS: [&str; 9] = [
+const STUDIO_TOOLS: [&str; 10] = [
     "studio_connection_check",
     "studio_asset_presets",
     "studio_asset_list",
     "studio_asset_request",
     "studio_asset_receive",
+    "studio_publication_draft_receive",
     "studio_asset_resize",
     "studio_asset_create_3d",
     "studio_asset_review",
@@ -1062,7 +1063,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            9
+            10
         );
         assert!(!settings.path.exists());
     }

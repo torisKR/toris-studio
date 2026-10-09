@@ -16,7 +16,7 @@
     "assets:worker:build": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features",
     "assets:mcp": "tsx mcp/asset-stdio.ts",
     "ai:verify:ui": "node scripts/verify-ai-workspace.mjs",
-    "ai:test": "node --import tsx --test tests/ai-discovery.test.ts tests/codexify-bridge.test.ts tests/codexify-client.test.ts tests/codexify-runtime-client.test.ts tests/coding-progress-client.test.ts tests/open-webui-client.test.ts",
+    "ai:test": "node --import tsx --test tests/ai-discovery.test.ts tests/codexify-bridge.test.ts tests/codexify-client.test.ts tests/codexify-runtime-client.test.ts tests/coding-progress-client.test.ts tests/publication-client.test.ts",
     "codexify:verify": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop && node scripts/verify-codexify-direct.mjs",
     "integrations:verify:ui": "node scripts/verify-integration-ui.mjs",
     "integrations:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop && node scripts/verify-asset-mcp.mjs --native",

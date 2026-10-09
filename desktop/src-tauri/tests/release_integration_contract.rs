@@ -16,7 +16,7 @@ async fn packaged_mcp_lists_real_tools_and_queues_without_credentials() {
     .await
     .unwrap();
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
     let receive = tools
         .iter()
         .find(|t| t["name"] == "studio_asset_receive")

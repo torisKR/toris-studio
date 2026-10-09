@@ -390,6 +390,10 @@ mod native {
             validate_asset_url(&update.download_url)?;
             // Fail early for active research. Reacquire immediately before installation.
             drop(crate::keyword::lock_for_update()?);
+            drop(crate::publications::lock_for_update()?);
+            if crate::publications::running() {
+                return Err("SNS 게시 처리 중입니다. 결과가 확인된 뒤 업데이트하세요.".into());
+            }
             let mut cancellation = self.cancellation();
             let _cleanup = CancellationGuard(self);
             self.publish(app, |status| {
@@ -462,6 +466,16 @@ mod native {
                 Ok(permit) => permit,
                 Err(error) => return Ok(self.phase(app, UpdatePhase::Error, &error)),
             };
+            let _publishing_guard = match crate::publications::lock_for_update() {
+                Ok(permit) if !crate::publications::running() => permit,
+                _ => {
+                    return Ok(self.phase(
+                        app,
+                        UpdatePhase::Error,
+                        "SNS 게시 처리 중입니다. 결과가 확인된 뒤 업데이트하세요.",
+                    ))
+                }
+            };
             self.publish(app, |status| {
                 status.message = "업데이트 전에 로컬 설정과 콘텐츠를 보존하고 있습니다.".into();
             });
@@ -484,6 +498,7 @@ mod native {
                 UpdatePhase::Installed,
                 "업데이트를 설치했습니다. 앱을 다시 시작합니다.",
             );
+            crate::publications::shutdown_media();
             app.restart()
         }
     }

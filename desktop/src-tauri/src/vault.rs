@@ -55,7 +55,15 @@ fn slot(service: &str, account: &str) -> Result<String, String> {
     } else if service == OAUTH_SERVICE {
         if let Some((kind, provider)) = account.split_once(':') {
             if ["client", "session", "audit"].contains(&kind)
-                && ["youtube", "threads", "naver_blog", "tiktok", "instagram"].contains(&provider)
+                && [
+                    "youtube",
+                    "threads",
+                    "naver_blog",
+                    "tiktok",
+                    "instagram",
+                    "facebook",
+                ]
+                .contains(&provider)
             {
                 return Ok(format!("oauth:{account}"));
             }
@@ -109,7 +117,7 @@ impl Default for Envelope {
 impl Envelope {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 2
-            || self.entries.len() > 21
+            || self.entries.len() > 24
             || self
                 .entries
                 .iter()
@@ -921,6 +929,41 @@ mod tests {
             Some("rotated-token".into())
         );
         assert_eq!(committed.entries["oauth:session:instagram"], None);
+    }
+
+    #[test]
+    fn facebook_slots_extend_existing_envelope_without_expanding_service_allowlist() {
+        let mut envelope = Envelope::default();
+        for field in [
+            "databaseUrl",
+            "opencodexApiKey",
+            "teamclaudeApiKey",
+            "youtubeApiKey",
+            "naverClientId",
+            "naverClientSecret",
+        ] {
+            envelope.entries.insert(format!("settings:{field}"), None);
+        }
+        for provider in [
+            "youtube",
+            "threads",
+            "naver_blog",
+            "tiktok",
+            "instagram",
+            "facebook",
+        ] {
+            for kind in ["client", "session", "audit"] {
+                envelope.entries.insert(
+                    slot(OAUTH_SERVICE, &format!("{kind}:{provider}")).unwrap(),
+                    None,
+                );
+            }
+        }
+        assert_eq!(envelope.entries.len(), 24);
+        assert!(Envelope::decode(&envelope.encode().unwrap()).is_ok());
+        assert!(slot(OAUTH_SERVICE, "session:attacker").is_err());
+        assert!(slot("untrusted.service", "session:facebook").is_err());
+        assert!(slot(OAUTH_SERVICE, "upload:facebook").is_err());
     }
 
     #[cfg(target_os = "macos")]

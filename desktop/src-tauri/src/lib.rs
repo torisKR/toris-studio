@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod assets;
+pub mod chatgpt_drafts;
 pub mod codexify_connection;
 pub mod codexify_proxy;
 pub mod codexify_runtime;
@@ -8,17 +9,25 @@ pub mod credentials;
 #[cfg(feature = "desktop")]
 mod integration_native;
 pub mod keyword;
+pub mod legacy_cleanup;
 pub mod mcp_bridge;
 pub mod media;
 pub mod models;
 pub mod motion;
 pub mod oauth;
-pub mod open_webui;
-pub mod open_webui_bridge;
+pub mod publications;
+#[cfg(feature = "desktop")]
+static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 pub mod ops;
+pub mod publication_media;
+#[cfg(feature = "desktop")]
+mod publication_native;
 pub mod publishing;
+pub mod publishing_adapters;
 pub mod scheduler;
 pub mod social;
+#[cfg(feature = "desktop")]
+mod tray;
 pub mod trends;
 pub mod updater;
 pub mod vault;
@@ -151,17 +160,16 @@ mod desktop {
         social::refresh_trends(&config, keyword).await
     }
     #[tauri::command]
-    pub async fn ai_status(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
-        let config = state.config_snapshot().await;
-        ai::status(&config).await
+    pub async fn ai_status() -> Result<Value, String> {
+        Ok(
+            serde_json::json!({"providers":[],"defaultProvider":null,"mode":"chatgpt-chat","message":"실제 ChatGPT 대화에서 요청을 시작하세요."}),
+        )
     }
     #[tauri::command]
-    pub async fn ai_generate(
-        state: State<'_, Arc<AppState>>,
-        input: Value,
-    ) -> Result<Value, String> {
-        let config = state.config_snapshot().await;
-        ai::generate(&config, input).await
+    pub async fn ai_generate(window: tauri::WebviewWindow, input: Value) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        let _ = input;
+        Err("직접 모델 호출은 제거되었습니다. 코딩의 ChatGPT 연결에서 대화를 시작하고 요청을 전달하세요.".into())
     }
     #[tauri::command]
     pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
@@ -305,7 +313,10 @@ mod desktop {
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 초안을 만드세요.".into());
         }
-        video_research::create(&state.config_snapshot().await, input).await
+        if input.provider.as_deref().unwrap_or("local") == "local" {
+            return video_research::create(&state.config_snapshot().await, input).await;
+        }
+        Err("ChatGPT 대화에서 영상 초안을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
     }
     #[tauri::command]
     pub async fn video_create_idea_project(
@@ -318,7 +329,8 @@ mod desktop {
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 기획을 생성하세요.".into());
         }
-        video_idea::create(&state.config_snapshot().await, input).await
+        let _ = (state, input);
+        Err("ChatGPT 대화에서 영상 기획을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
     }
     #[tauri::command]
     pub async fn video_render_project(project: Value) -> Result<Value, String> {
@@ -326,7 +338,8 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn video_generate_voice(input: Value) -> Result<Value, String> {
-        media::generate_voice(input).await
+        let _ = input;
+        Err("데스크톱 AI 요청은 실제 ChatGPT 대화를 사용합니다. 기존에 저장한 음성 파일은 영상에 유지됩니다.".into())
     }
     #[tauri::command]
     pub async fn media_status() -> Result<Value, String> {
@@ -475,6 +488,9 @@ mod desktop {
     pub fn launch(config: config::AppConfig) {
         let state = Arc::new(AppState::new(config));
         tauri::Builder::default()
+            .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+                crate::tray::show(app)
+            }))
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_dialog::init())
             .plugin(tauri_plugin_clipboard_manager::init())
@@ -483,23 +499,92 @@ mod desktop {
             .manage(updater::shared())
             .manage(codexify_runtime::shared())
             .manage(Arc::new(codexify_proxy::ProxyController::default()))
-            .manage(Arc::new(open_webui::OpenWebUiController::default()))
-            .manage(Arc::new(open_webui_bridge::Controller::default()))
             .on_window_event(|window, event| {
                 use tauri::Manager;
                 if window.label() == "main" {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
                         if window
                             .app_handle()
                             .state::<Arc<updater::UpdateController>>()
                             .installing()
                         {
-                            api.prevent_close();
+                            return;
                         }
+                        let _ = window.hide();
                     }
                 }
             })
-            .setup(move |_| {
+            .setup(move |app| {
+                crate::tray::setup(app)?;
+                // Independent from uploads: a resume during a long request must
+                // still invalidate other reservations missed while asleep.
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        crate::publications::heartbeat();
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    }
+                });
+                let publishing_state = state.clone();
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    let _ = crate::legacy_cleanup::retire().await;
+                    let mut last_error = None;
+                    let mut database = None;
+                    let mut schema_ready = false;
+                    let mut schema_attempt = None;
+                    loop {
+                        let config = publishing_state.config_snapshot().await;
+                        if database != config.database_url {
+                            database = config.database_url.clone();
+                            schema_ready = false;
+                            schema_attempt = None;
+                        }
+                        if config.database_url.is_some() {
+                            let outcome = if !schema_ready
+                                && schema_attempt.is_none_or(|last: std::time::Instant| {
+                                    last.elapsed().as_secs() >= 60
+                                }) {
+                                schema_attempt = Some(std::time::Instant::now());
+                                match crate::ops::migrate_configured_publications(&config).await {
+                                    Ok(()) => {
+                                        schema_ready = true;
+                                        crate::publications::tick(&config).await
+                                    }
+                                    Err(message) => Err(message),
+                                }
+                            } else if schema_ready {
+                                crate::publications::tick(&config).await
+                            } else {
+                                Ok(())
+                            };
+                            match outcome {
+                                Err(message) => {
+                                    if last_error.as_ref() != Some(&message) {
+                                        let _ = app_handle.emit_to(
+                                            "main",
+                                            "publication-runtime-error",
+                                            &message,
+                                        );
+                                        last_error = Some(message);
+                                    }
+                                }
+                                Ok(()) if schema_ready => last_error = None,
+                                Ok(()) => {}
+                            }
+                            let _ = app_handle.emit_to(
+                                "main",
+                                "publication-scheduler-status",
+                                crate::publications::scheduler_status(),
+                            );
+                        }
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {},
+                            _ = crate::PUBLICATION_WAKE.notified() => {},
+                        }
+                    }
+                });
                 let state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
@@ -522,11 +607,23 @@ mod desktop {
                 crate::integration_native::codexify_chats,
                 crate::integration_native::codexify_chat_read,
                 crate::integration_native::codexify_chat_send,
-                crate::integration_native::open_webui_status,
-                crate::integration_native::open_webui_start,
-                crate::integration_native::open_webui_stop,
-                crate::integration_native::open_webui_bootstrap,
-                crate::integration_native::open_webui_open,
+                crate::publication_native::publication_list,
+                crate::publication_native::publication_get,
+                crate::publication_native::publication_save,
+                crate::publication_native::publication_preflight,
+                crate::publication_native::publication_submit,
+                crate::publication_native::publication_cancel,
+                crate::publication_native::publication_retry,
+                crate::publication_native::publication_reconcile,
+                crate::publication_native::publication_accounts,
+                crate::publication_native::publication_begin_login,
+                crate::publication_native::publication_scheduler_status,
+                crate::publication_native::publication_set_paused,
+                crate::publication_native::publication_media_sources,
+                crate::publication_native::publication_import_media,
+                crate::publication_native::publication_preview_media,
+                crate::publication_native::publication_ai_request,
+                crate::publication_native::publication_ai_drafts,
                 crate::integration_native::codexify_runtime_status,
                 crate::integration_native::codexify_runtime_configure,
                 crate::integration_native::codexify_runtime_start,
@@ -600,22 +697,41 @@ mod desktop {
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {
                     use tauri::Manager;
+                    crate::publications::shutdown_media();
                     app.state::<Arc<codexify_proxy::ProxyController>>()
                         .shutdown();
                     app.state::<Arc<codexify_runtime::RuntimeController>>()
                         .shutdown();
                 }
-                if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
                     use tauri::Manager;
+                    // The updater holds the publication barrier until this signed restart.
+                    if code == Some(tauri::RESTART_EXIT_CODE)
+                        && app.state::<Arc<updater::UpdateController>>().status().phase
+                            == updater::UpdatePhase::Installed
+                    {
+                        return;
+                    }
                     if app.state::<Arc<updater::UpdateController>>().installing() {
                         // Never interrupt replacement of the signed application bundle.
                         api.prevent_exit();
-                    } else if keyword::running() {
-                        if keyword::cancel().is_err() && keyword::running() {
-                            // Never interrupt committing an observation transaction.
-                            api.prevent_exit();
-                        }
+                    } else if keyword::running() && keyword::cancel().is_err() && keyword::running()
+                    {
+                        api.prevent_exit();
+                    } else if !crate::publications::begin_shutdown() {
+                        api.prevent_exit();
+                        crate::tray::show(app);
+                        use tauri::Emitter;
+                        let _ = app.emit_to(
+                            "main",
+                            "publication-runtime-error",
+                            "게시 처리 중입니다. 전송 결과가 확인된 뒤 종료하세요.",
+                        );
                     }
+                }
+                #[cfg(target_os = "macos")]
+                if let tauri::RunEvent::Reopen { .. } = event {
+                    crate::tray::show(app);
                 }
             });
     }
@@ -713,7 +829,10 @@ pub fn run() {
     }
     // These fixed maintenance operations use the private DB stack credentials,
     // so they never need to unlock saved API keys or OAuth records.
-    let loaded = if matches!(action.as_deref(), Some("--db-migrate" | "--db-backup")) {
+    let loaded = if matches!(
+        action.as_deref(),
+        Some("--db-migrate" | "--db-backup" | "--retire-webui")
+    ) {
         Ok(config::AppConfig::default())
     } else {
         config::AppConfig::load()
@@ -731,14 +850,15 @@ pub fn run() {
             match action.as_str() {
                 "--self-check" => {
                     let dashboard = social::dashboard(&config).await?;
-                    let ai = ai::status(&config).await?;
+                    let ai = serde_json::json!({"mode":"chatgpt-chat","providers":[],"message":"실제 ChatGPT 대화와 Codexify로 요청합니다."});
                     Ok(serde_json::json!({"database":dashboard.database,"channelCount":dashboard.channels.len(),"contentCount":dashboard.content.len(),"trendCount":dashboard.trends.len(),"ai":ai}))
                 },
                 "--collect-trends" => serde_json::to_value(social::refresh_trends(&config,None).await?).map_err(|_| "직렬화 실패".into()),
-                "--verify-ai" => ai::generate(&config,serde_json::json!({"provider":"opencodex","platform":"threads","topic":"Rust 기반 로컬 콘텐츠 스튜디오에 대한 짧은 한국어 소개 초안을 작성해 주세요."})).await,
+                "--verify-ai" => Err("실제 ChatGPT 대화를 시작한 뒤 앱의 코딩에서 연결을 확인하세요. 직접 모델 호출은 제거되었습니다.".into()),
                 "--db-start" => { let next = ops::start_database(&config).await?; next.save()?; Ok(serde_json::json!({"ok":true})) },
                 "--db-backup" => ops::backup_database().await,
                 "--db-migrate" => { ops::migrate_database().await?; Ok(serde_json::json!({"ok":true})) },
+                "--retire-webui" => Ok(legacy_cleanup::retire().await),
                 _ => Err("지원하지 않는 명령입니다.".into()),
             }
         });
