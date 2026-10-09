@@ -8,6 +8,8 @@ Toris Studio는 macOS·Windows용 Tauri 앱입니다. `desktop/src-tauri`의 Rus
 
 ## 개발 실행
 
+0.1.20부터 **코딩** 메뉴에서 Open WebUI 로컬 컨테이너를 시작하고 전용 앱 창으로 엽니다. ChatGPT 작업 전달 상태와 MCP 연결 진단도 이 메뉴에서 확인합니다. [Open WebUI 설치·연결 안내](OPEN_WEBUI.md)를 참고하세요.
+
 저장소 루트에서 Node.js 24, pnpm, Rust stable을 설치한 뒤 실행합니다. macOS는 Xcode Command Line Tools, Windows는 Visual Studio C++ Build Tools와 WebView2가 필요합니다.
 
 ```bash

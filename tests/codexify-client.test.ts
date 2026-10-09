@@ -98,6 +98,17 @@ test("a changed profile or missing project conversation prevents a stale request
   assert.notEqual(profileKey(profile), profileKey({ ...profile, mcpUrl: "http://localhost:21228/mcp" }));
 });
 
+test("a profile changed outside the current screen rejects dispatch before reading or sending", async () => {
+  const calls: string[] = [];
+  const call: BridgeInvoke = async command => {
+    calls.push(command);
+    if (command === "codexify_connection_get") return { ...profile, conversationId: "b".repeat(64) };
+    throw new Error(`Unexpected ${command}`);
+  };
+  await assert.rejects(sendToConnectedChat("이전 화면의 입력", "target-fence", call, profile), /화면에 표시된 연결이 변경/);
+  assert.deepEqual(calls, ["codexify_connection_get"]);
+});
+
 test("bootstrap asks the active registered conversation to wait and return genuine Studio files", () => {
   const prompt = bootstrapPrompt(profile);
   assert.match(prompt, /setup과 get_agent_brief/);

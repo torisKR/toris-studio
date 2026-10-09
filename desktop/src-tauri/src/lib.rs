@@ -13,6 +13,8 @@ pub mod media;
 pub mod models;
 pub mod motion;
 pub mod oauth;
+pub mod open_webui;
+pub mod open_webui_bridge;
 pub mod ops;
 pub mod publishing;
 pub mod scheduler;
@@ -481,6 +483,8 @@ mod desktop {
             .manage(updater::shared())
             .manage(codexify_runtime::shared())
             .manage(Arc::new(codexify_proxy::ProxyController::default()))
+            .manage(Arc::new(open_webui::OpenWebUiController::default()))
+            .manage(Arc::new(open_webui_bridge::Controller::default()))
             .on_window_event(|window, event| {
                 use tauri::Manager;
                 if window.label() == "main" {
@@ -518,6 +522,11 @@ mod desktop {
                 crate::integration_native::codexify_chats,
                 crate::integration_native::codexify_chat_read,
                 crate::integration_native::codexify_chat_send,
+                crate::integration_native::open_webui_status,
+                crate::integration_native::open_webui_start,
+                crate::integration_native::open_webui_stop,
+                crate::integration_native::open_webui_bootstrap,
+                crate::integration_native::open_webui_open,
                 crate::integration_native::codexify_runtime_status,
                 crate::integration_native::codexify_runtime_configure,
                 crate::integration_native::codexify_runtime_start,

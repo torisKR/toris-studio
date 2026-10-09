@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CodexifyPanel } from "./CodexifyPanel";
+import { OpenWebUIPanel } from "./OpenWebUIPanel";
 
-type CodingMetadata = { mcpConfig: object; mcp: { lastFileReceivedAt: string | null } };
+type CodingMetadata = { mcpConfig: object; mcp: { lastFileReceivedAt: string | null; lastToolCallAt: string | null } };
 
 export function CodingPanel({ active, refreshKey = 0 }: { active: boolean; refreshKey?: number }) {
   const [metadata, setMetadata] = useState<CodingMetadata | null>(null);
@@ -20,5 +21,5 @@ export function CodingPanel({ active, refreshKey = 0 }: { active: boolean; refre
     return () => { alive.current = false; ++epoch.current; };
   }, [active, refreshKey, load]);
   if (!active) return null;
-  return <div aria-label="코딩 작업실"><CodexifyPanel active={active} refreshKey={refreshKey} nativeMcpConfig={metadata?.mcpConfig} lastFileReceivedAt={metadata?.mcp.lastFileReceivedAt}/></div>;
+  return <div aria-label="코딩 작업실"><OpenWebUIPanel active={active} refreshKey={refreshKey}/><CodexifyPanel active={active} refreshKey={refreshKey} nativeMcpConfig={metadata?.mcpConfig} lastFileReceivedAt={metadata?.mcp.lastFileReceivedAt} lastToolCallAt={metadata?.mcp.lastToolCallAt} onIntegrationRefresh={load}/></div>;
 }

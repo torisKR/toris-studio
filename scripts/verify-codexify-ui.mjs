@@ -8,10 +8,11 @@ import { resolve } from 'node:path';
 const project = '/projects/studio';
 const conversationId = 'a'.repeat(64);
 let profile = {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
-let messages = [], waiting = false, acknowledged = false;
+let messages = [], waiting = false, acknowledged = false, delivered = false, readFailure = false;
 let runtime = {binaryAvailable:true,bundled:true,version:'1.7.0',configPath:'/fixture/config/codexify.json',sourceRoot:'/projects',port:21228,running:true,managed:false,pid:700,service:{installed:true,running:false,enabled:true},message:'기존 브리지에 연결했습니다.'};
 let proxies = {cloudflare:{provider:'cloudflare',available:true,running:false,managed:false,mcpUrl:null,message:'프록시 시작 준비됨'},ngrok:{provider:'ngrok',available:false,running:false,managed:false,mcpUrl:null,message:'ngrok CLI를 설치하세요.'}};
 let ngrokConfigured = false;
+let openwebui={status:'stopped',message:'Docker 실행 환경을 준비하세요.',checkedAt:new Date().toISOString(),version:'0.11.4',url:'http://127.0.0.1:43180',dockerAvailable:false,containerRunning:false,setupRequired:null,providerUrl:'http://host.docker.internal:10100/v1',mcpUrl:'http://127.0.0.1:43181/mcp',providerReachable:null,mcpReachable:null,canOpen:false};
 const calls = [], errors = [];
 const out=resolve('docs/review/codexify-app');await mkdir(out,{recursive:true});
 const server = await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false,watch:{ignored:['**/src-tauri/**']}}});
@@ -24,6 +25,10 @@ await page.exposeFunction('__qaInvoke', async (command,args={}) => {
   if(command==='ai_status')return {providers:[],defaultProvider:null};
   if(command==='search_keywords')return {items:[],total:0,libraryCount:0,warnings:[]};
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{studio:{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'test'};
+  if(command==='open_webui_status')return {...openwebui,checkedAt:new Date().toISOString()};
+  if(command==='open_webui_start'){assert.equal(openwebui.dockerAvailable,true);openwebui={...openwebui,status:'pulling',message:'고정한 Open WebUI 이미지를 다운로드 중입니다.'};return {...openwebui};}
+  if(command==='open_webui_stop'){assert.equal(openwebui.containerRunning,true);openwebui={...openwebui,status:'stopped',containerRunning:false,canOpen:false,message:'앱 로컬 채팅 서버를 종료했습니다.'};return {...openwebui};}
+  if(command==='open_webui_open'){assert.equal(openwebui.canOpen,true);return null;}
   if(command==='codexify_runtime_status')return {...runtime};
   if(command==='codexify_runtime_configure'){
     assert.equal(runtime.running,false,'Running external bridge settings must not be mutated');
@@ -45,7 +50,7 @@ await page.exposeFunction('__qaInvoke', async (command,args={}) => {
   if(command==='codexify_connection_save'){profile={...args.input};return {...profile};}
   if(command==='codexify_connection_check')return {reachable:true,serverName:'Codexify',protocolVersion:'2025-11-25',toolCount:64,studioTools:['studio__studio_asset_receive'],missingStudioTools:[],fileReceiverReady:true,ownerReady:true,checkedAt:new Date().toISOString(),message:'QA bridge ready'};
   if(command==='codexify_chats')return {chats:[{id:conversationId,title:'Studio fixture chat',workspace:'studio',lastEntryEnd:100,lastEntryAtMs:1000,lastAgentCallAtMs:1000,agentWaitingUntilMs:null,totalToolCalls:1}],serverTimeMs:1000};
-  if(command==='codexify_chat_read')return {messages,revision:'1',delivered_through:acknowledged?300:0,read_through:acknowledged?300:0,last_agent_call_at_ms:1000,agent_waiting_until_ms:waiting?60000:null,server_time_ms:1000,has_more:false,before:null,unchanged:false};
+  if(command==='codexify_chat_read'){if(readFailure)throw new Error('QA 대화 읽기 실패');return {messages,revision:'1',delivered_through:delivered||acknowledged?300:0,read_through:acknowledged?300:0,last_agent_call_at_ms:1000,agent_waiting_until_ms:waiting?60000:null,server_time_ms:1000,has_more:false,before:null,unchanged:false};}
   if(command==='codexify_chat_send'){
     assert.ok(args.input.requestId);assert.ok(args.input.message.trim());
     const sent={id:'message-1',end:300,created_at_ms:1001,tool_call_count:0};
@@ -61,8 +66,34 @@ try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`,{waitUntil:'networkidle'});
   await page.getByRole('button',{name:'코딩',exact:true}).click();
   const panel=page.getByRole('region',{name:'Codexify 앱 연결'});
+  const progress=panel.getByRole('region',{name:'코딩 작업 진행 상황'});
+  const pluginChecks=panel.getByRole('region',{name:'MCP 플러그인 연결 진단'});
+  const localChat=page.getByRole('region',{name:'Open WebUI 로컬 채팅'});
   const runtimePanel=panel.getByRole('region',{name:'앱 내 Codexify 관리'});
   await runtimePanel.getByText('기존 브리지 사용 중',{exact:true}).waitFor();
+  await localChat.getByText('로컬 채팅 서버가 꺼져 있습니다',{exact:true}).waitFor();
+  assert.equal(await localChat.getByRole('button',{name:'로컬 채팅 시작',exact:true}).isDisabled(),true,'Missing Docker cannot start the local server');
+  openwebui={...openwebui,dockerAvailable:true,message:'로컬 서버 시작 준비 완료'};
+  await localChat.getByRole('button',{name:'Open WebUI 상태 새로고침',exact:true}).click();
+  await localChat.getByText('로컬 서버 시작 준비 완료',{exact:true}).waitFor();
+  await localChat.getByRole('button',{name:'로컬 채팅 시작',exact:true}).click();
+  await localChat.getByText('Open WebUI 이미지를 다운로드하고 있습니다',{exact:true}).waitFor();
+  assert.equal(await localChat.getByRole('button',{name:'Open WebUI 열기',exact:true}).isDisabled(),true,'Downloading cannot imply a usable server');
+  openwebui={...openwebui,status:'starting',message:'서버 응답을 기다립니다.',containerRunning:true};
+  await localChat.getByRole('button',{name:'Open WebUI 상태 새로고침',exact:true}).click();
+  await localChat.getByText('로컬 채팅 서버를 시작하고 있습니다',{exact:true}).waitFor();
+  openwebui={...openwebui,status:'ready',message:'로컬 채팅 서버의 실제 응답을 확인했습니다.',setupRequired:true,canOpen:true,providerReachable:true,mcpReachable:false};
+  await localChat.getByRole('button',{name:'Open WebUI 상태 새로고침',exact:true}).click();
+  await localChat.getByText('첫 관리자 계정을 직접 만들어 주세요',{exact:true}).waitFor();
+  await localChat.getByText('AI 제공자와 MCP 연결 상태',{exact:true}).click();
+  await localChat.getByText('로컬 응답 확인됨',{exact:true}).waitFor();
+  await localChat.getByText('로컬 응답 확인 필요',{exact:true}).waitFor();
+  assert.doesNotMatch(await localChat.innerText(),/모델 응답 성공|플러그인 등록 성공/);
+  await localChat.getByRole('button',{name:'Open WebUI 열기',exact:true}).click();
+  assert.equal(calls.filter(c=>c.command==='open_webui_open').length,1,'Local chat opens through the isolated native window');
+  await localChat.screenshot({path:resolve(out,'open-webui.png')});
+  await localChat.getByRole('button',{name:'로컬 채팅 종료',exact:true}).click();
+  await localChat.getByText('로컬 채팅 서버가 꺼져 있습니다',{exact:true}).waitFor();
   assert.equal(await page.getByText('QA DB unavailable',{exact:true}).count(),0,'Coding must remain usable without a database');
   const dashboardCalls=calls.filter(c=>c.command==='get_dashboard').length;
   await page.getByRole('button',{name:'워크스페이스 새로고침',exact:true}).click();
@@ -155,9 +186,12 @@ try {
   await panel.getByLabel('Codexify 작업 프로젝트').fill(project);
   await panel.getByRole('button',{name:'연결 설정 저장',exact:true}).click();
   await panel.getByText('Codexify 연결 설정을 이 기기에 저장했습니다.',{exact:true}).waitFor();
+  await pluginChecks.getByText('플러그인 주소 저장됨 · 등록 상태 미확인',{exact:true}).waitFor();
+  assert.doesNotMatch((await pluginChecks.locator('.coding-diagnostic-check > strong').allTextContents()).join('\n'),/등록 성공|ChatGPT 로그인 확인됨/);
   assert.equal(profile.projectRoot,project,'Runtime Source must not replace the connected chat project');
   assert.equal(runtime.sourceRoot,'/fixture-home/projects');
   await panel.getByLabel('Codexify 연결 대화').selectOption(conversationId);
+  await progress.getByText('보낸 요청이 없습니다',{exact:true}).waitFor();
   await panel.getByRole('button',{name:'앱 요청 보내기',exact:true}).waitFor();
   await panel.getByLabel('Codexify ChatGPT 요청').fill('<img src=x onerror=alert(1)> 테스트 요청');
   await panel.getByRole('button',{name:'앱 요청 보내기',exact:true}).click();
@@ -165,12 +199,34 @@ try {
   assert.equal(calls.filter(c=>c.command==='codexify_chat_send').length,1);
   assert.equal(await panel.locator('.codexify-message img').count(),0,'Chat messages must render as text');
   assert.match(await panel.locator('.codexify-message').innerText(),/앱 요청 저장됨/);
+  await progress.getByText('ChatGPT 전달을 기다리고 있습니다',{exact:true}).waitFor();
+  await progress.getByText('요청 ID · message-1',{exact:true}).waitFor();
+  assert.equal(await progress.locator('img').count(),0,'Request progress previews must render untrusted content as text');
+  assert.doesNotMatch(await progress.innerText(),/작업 완료됨|실행 중입니다/);
+  delivered=true;
+  await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
+  await progress.getByText('ChatGPT가 요청을 읽기를 기다리고 있습니다',{exact:true}).waitFor();
+  acknowledged=true;
+  await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
+  await progress.getByText('ChatGPT 응답을 기다리고 있습니다',{exact:true}).waitFor();
+  await progress.getByText('ChatGPT 도구가 요청을 읽었습니다. 현재 실행 중인 작업이나 완료 여부는 아직 확인되지 않았습니다.',{exact:true}).waitFor();
   acknowledged=true;waiting=true;
   messages.push({id:'reply',role:'agent',markdown:'실제 이미지 생성물이 아닌 QA 응답',start:300,end:500,created_at_ms:1002,tool_call_count:1});
   await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
-  await panel.getByText('실제 이미지 생성물이 아닌 QA 응답',{exact:true}).waitFor();
-  await panel.getByText('앱 요청 대기 중',{exact:true}).waitFor();
+  await panel.locator('.codexify-message.agent').getByText('실제 이미지 생성물이 아닌 QA 응답',{exact:true}).waitFor();
+  await progress.getByText('최근 ChatGPT 응답이 도착했습니다',{exact:true}).waitFor();
+  await pluginChecks.getByText('ChatGPT 도구 접근 기록 확인됨',{exact:true}).waitFor();
+  await pluginChecks.screenshot({path:resolve(out,'mcp-diagnostics.png')});
+  await progress.getByText('chat_await 대기 확인됨',{exact:true}).waitFor();
   assert.match(await panel.locator('.codexify-message.user').innerText(),/ChatGPT 도구 확인됨/);
+  await progress.screenshot({path:resolve(out,'coding-progress.png')});
+  readFailure=true;
+  await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
+  await progress.getByText('최근 작업 상태를 확인할 수 없습니다',{exact:true}).waitFor();
+  assert.match(await progress.getByRole('list',{name:'최근 요청 전달 단계'}).innerText(),/이전 확인 기록/,'Failed reads preserve historical observations without current success');
+  readFailure=false;
+  await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
+  await progress.getByText('최근 ChatGPT 응답이 도착했습니다',{exact:true}).waitFor();
   await panel.getByRole('button',{name:'등록한 ChatGPT 열기',exact:true}).click();
   assert.equal(calls.filter(c=>c.command==='open_external').at(-1).args.url,profile.pluginUrl);
   await page.getByRole('button',{name:'AI 작업실',exact:true}).click();
@@ -193,6 +249,15 @@ try {
   await page.setViewportSize({width:820,height:720});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   await page.screenshot({path:resolve(out,'narrow.png'),fullPage:true});
+  const sendsBeforeProfileChange=calls.filter(c=>c.command==='codexify_chat_send').length;
+  await panel.getByLabel('Codexify ChatGPT 요청').fill('변경 전 화면의 요청');
+  profile={...profile,pluginUrl:'https://chatgpt.com/plugins/plugin_changed'};
+  await panel.getByRole('button',{name:'앱 요청 보내기',exact:true}).click();
+  await panel.getByRole('alert').getByText('화면에 표시된 연결이 변경되었습니다. 현재 연결을 확인한 뒤 다시 전송하세요.',{exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.command==='codexify_chat_send').length,sendsBeforeProfileChange,'A changed saved profile cannot receive requests from the old visible connection');
+  await panel.getByRole('button',{name:'연결 확인',exact:true}).click();
+  await progress.getByText('최근 작업 상태를 확인할 수 없습니다',{exact:true}).waitFor();
+  assert.equal(await progress.getByText('요청 ID · message-1',{exact:true}).count(),0,'Previous connection progress is cleared on profile change');
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['dedicated Coding navigation without duplicate mount','Coding remains usable without database','Coding refresh does not request database','external process controls protected','source saved without changing chat project','bridge starts before proxy','canonical public MCP copied','ngrok missing CLI and account guidance','Cloudflare and ngrok run independently','provider-specific stop preserves other server','unhealthy app-owned process remains stoppable','unknown proxy URL is not exposed or copied','system service failure separated from healthy app bridge','saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow'],adapter:'Chromium IPC fixtures; no live model calls or public tunnel'},null,2));
+  console.log(JSON.stringify({passed:true,checks:['dedicated Coding navigation without duplicate mount','Coding remains usable without database','Coding refresh does not request database','Open WebUI missing Docker protected','Open WebUI actual downloading starting ready stages','Open WebUI initial administrator guidance','Open WebUI endpoint probes do not imply generation','Open WebUI isolated native window and owned stop','external process controls protected','source saved without changing chat project','bridge starts before proxy','canonical public MCP copied','ngrok missing CLI and account guidance','Cloudflare and ngrok run independently','provider-specific stop preserves other server','unhealthy app-owned process remains stoppable','unknown proxy URL is not exposed or copied','system service failure separated from healthy app bridge','saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','saved delivered read and reply progress stages','acknowledgement does not imply execution','failed reads downgrade current progress','plugin URL storage does not imply registered','selected chat tool evidence shown separately','safe progress text rendering','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow','changed visible connection cannot send to another profile','previous connection progress cleared'],adapter:'Chromium IPC fixtures; no live model calls or public tunnel'},null,2));
 } finally {await browser.close();await server.close();}
