@@ -1,3 +1,5 @@
+import { readPcm16Wav } from "./wav";
+
 export type Qwen3TtsOptions = {
   text: string;
   speaker?: string;
@@ -67,6 +69,7 @@ export async function synthesizeWithQwen3Tts(options: Qwen3TtsOptions) {
   const response = await fetch(`${baseUrl()}/synthesize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(300_000),
     body: JSON.stringify({
       text: options.text,
       speaker:
@@ -92,11 +95,19 @@ export async function synthesizeWithQwen3Tts(options: Qwen3TtsOptions) {
     );
   }
 
+  const contentType = response.headers
+    .get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  if (
+    !contentType ||
+    !["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"].includes(contentType)
+  ) {
+    throw new Error("Qwen3-TTS returned a non-WAV response.");
+  }
   const audio = new Uint8Array(await response.arrayBuffer());
-  const durationSec = Number(
-    response.headers.get("x-duration-seconds") ?? "0"
-  );
-  const sampleRate = Number(response.headers.get("x-sample-rate") ?? "24000");
+  const { durationSec, sampleRate, hasNonZeroSamples } = readPcm16Wav(audio);
+  if (!hasNonZeroSamples) {
+    throw new Error("Qwen3-TTS returned silent audio with no speech samples.");
+  }
   const speaker =
     response.headers.get("x-tts-speaker") ??
     options.speaker ??

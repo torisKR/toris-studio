@@ -10,6 +10,11 @@ coverage/
 .toris-studio/
 local-voice/
 
+# Local QA evidence and conversation media (never shipped in installers)
+/attachments/
+/generated_images/
+/docs/review/
+
 # Generated media / render outputs
 public/generated/
 public/assets/
@@ -24,3 +29,19 @@ __pycache__/
 # Logs / OS files
 *.log
 .DS_Store
+
+# Local database, provider credentials and package cache
+.env.*
+!.env.example
+.pnpm-store/
+*.dump
+*.sql.gz
+
+# Rust desktop build and native local configuration
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/.env*
+*.dmg
+*.msi
+*.exe

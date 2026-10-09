@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import {createServer} from 'vite';
+import {chromium} from 'playwright';
+import {mkdir} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const artifacts=resolve('docs/review/integration-release');await mkdir(artifacts,{recursive:true});
+const server=await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false}});await server.listen();
+const browser=await chromium.launch({headless:true});
+const page=await browser.newPage({viewport:{width:1380,height:950},reducedMotion:'reduce'});
+const calls=[];const errors=[];let lastUpload=null;let granted=false;
+const channel={id:'UCabcdefghijklmnopqrstuv',title:'QA fixture channel'};
+await page.exposeFunction('__qaInvoke',async(command,args={})=>{
+ calls.push({command,args});
+ if(command==='get_dashboard')return {channels:[],content:[],trends:[],integrations:[],database:{connected:false,message:'fixture'}};
+ if(command==='ai_status')return {providers:[],defaultProvider:null};
+ if(command==='integration_status')return {oauth:{providers:[{platform:'youtube',clientConfigured:true,connected:true,uploadAuthorized:granted,pending:false}]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload,version:'test'};
+ if(command==='integration_upload_login'){granted=true;return {pending:true};}
+ if(command==='integration_channels')return {channels:[channel]};
+ if(command==='integration_choose_video'||command==='integration_sample_video')return {fileId:'00000000-0000-4000-8000-000000000001',fileName:'qa-fixture.mp4',sha256:'test-sha',bytes:10000};
+ if(command==='integration_prepare_upload')return {...args.input,ticketId:'fixture-ticket',channelTitle:channel.title,fileName:'qa-fixture.mp4',bytes:10000,sha256:'test-sha'};
+ if(command==='integration_upload'){assert.equal(args.ticketId,'fixture-ticket');assert.equal(args.confirmed,true);lastUpload={attemptId:'fixture-ticket',status:'uploaded',title:'QA form test',channelTitle:channel.title,requestedPrivacy:'public',actualPrivacy:'private',url:'https://www.youtube.com/watch?v=abcdefghijk'};return lastUpload;}
+ if(command==='copy_text'||command==='open_external')return null;
+ throw new Error(`Unexpected ${command}`);
+});
+await page.addInitScript(()=>{window.__TAURI_INTERNALS__={invoke:(command,args)=>window.__qaInvoke(command,args)};});
+page.on('pageerror',e=>errors.push(e.message));
+try{
+ await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/`,{waitUntil:'networkidle'});
+ await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
+ const panel=page.getByRole('region',{name:'연결 및 게시 QA'});
+ await panel.getByText('읽기 연결됨 · 업로드 승인 필요',{exact:true}).waitFor();
+ assert.equal(await panel.getByRole('button',{name:'채널 조회',exact:true}).isDisabled(),true);
+ await panel.getByRole('button',{name:'설치 앱 MCP 설정 복사',exact:true}).click();
+ await panel.getByText('설치된 앱의 MCP 실행 설정을 복사했습니다.',{exact:false}).waitFor();
+ assert.match(calls.find(c=>c.command==='copy_text').args.text,/--studio-mcp/);
+ await panel.getByRole('button',{name:'업로드 권한 승인',exact:true}).click();
+ await panel.getByText('업로드 권한 확인됨',{exact:true}).waitFor();
+ await panel.getByRole('button',{name:'채널 조회',exact:true}).click();
+ await panel.getByLabel('QA 대상 채널',{exact:true}).selectOption(channel.id);
+ await panel.getByRole('button',{name:'MP4 선택',exact:true}).click();
+ await panel.getByText('qa-fixture.mp4',{exact:true}).waitFor();
+ assert.equal(await panel.getByLabel('QA 공개 범위',{exact:true}).inputValue(),'private');
+ await panel.getByLabel('QA 공개 범위',{exact:true}).selectOption('public');
+ assert.equal(await panel.getByRole('button',{name:'게시 준비 · 아직 전송하지 않음',exact:true}).isDisabled(),true);
+ await panel.getByLabel('이 테스트 영상이 다른 사람에게 노출될 수 있음을 확인했습니다.',{exact:true}).check();
+ await panel.getByRole('button',{name:'게시 준비 · 아직 전송하지 않음',exact:true}).click();
+ await panel.getByRole('region',{name:'최종 전송 확인',exact:true}).waitFor();
+ assert.equal(calls.filter(c=>c.command==='integration_upload').length,0);
+ const checkboxBox=await panel.getByLabel('위 계정과 파일을 확인했고 실제 YouTube 전송에 동의합니다.',{exact:true}).boundingBox();
+ assert.ok(checkboxBox && checkboxBox.width<=20,'Checkbox must not inherit full-width text-field layout');
+ assert.equal(await panel.getByRole('button',{name:'공개로 실제 전송',exact:true}).isDisabled(),true);
+ await page.locator('h1').click();await page.screenshot({path:resolve(artifacts,'qa-desktop.png'),fullPage:true});
+ await page.setViewportSize({width:820,height:720});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1),false);
+ await page.screenshot({path:resolve(artifacts,'qa-narrow.png'),fullPage:true});
+ await panel.getByLabel('위 계정과 파일을 확인했고 실제 YouTube 전송에 동의합니다.',{exact:true}).check();
+ await panel.getByRole('button',{name:'공개로 실제 전송',exact:true}).click();
+ await panel.getByText('YouTube 저장 확인 · 실제 비공개',{exact:true}).waitFor();
+ assert.equal(calls.filter(c=>c.command==='integration_upload').length,1);
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({passed:true,checks:['separate upload consent','packaged executable MCP settings','private default','two-step exact channel/file/privacy confirmation','one upload invocation','provider-enforced private result displayed truthfully','820px no overflow'],realPublicPosts:0,adapter:'Chromium IPC fixtures; OAuth consent and upload provider mocked'},null,2));
+}finally{await browser.close();await server.close();}

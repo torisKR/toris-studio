@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import type { VideoFormat, VideoProject } from "@/lib/video/types";
+import { inspectEditingProject } from "@/lib/video/editing";
 
 const compositionIds: Record<VideoFormat, string> = {
   "youtube-landscape": "News-Landscape",
@@ -29,6 +31,8 @@ export async function renderProject(project: VideoProject) {
   if (!Number.isFinite(scale) || scale < 0.1 || scale > 1) {
     throw new Error("REMOTION_SCALE must be between 0.1 and 1");
   }
+  const editingErrors = inspectEditingProject(project, scale).filter(issue => issue.level === "error");
+  if (editingErrors.length) throw new Error(editingErrors.map(issue => `${issue.sceneId}: ${issue.message}`).join("\n"));
   // A fresh throwaway bundle sees media uploaded since the previous render.
   // Linux symlinking avoids copying every previous MP4 into the next bundle.
   const outDir = await mkdtemp(path.join(tmpdir(), "toris-render-"));
@@ -38,7 +42,7 @@ export async function renderProject(project: VideoProject) {
       outDir,
       symlinkPublicDir: true
     });
-    const inputProps = { project };
+    const inputProps = {project, explainerOutputScale:project.editingPreset ? scale : 1};
     const composition = await selectComposition({
       serveUrl,
       id: compositionIds[project.format],
@@ -49,7 +53,7 @@ export async function renderProject(project: VideoProject) {
     const renderDir = path.join(process.cwd(), "public", "renders");
     await mkdir(renderDir, { recursive: true });
 
-    const fileName = `${safeSlug(project.title)}-${Date.now()}.mp4`;
+    const fileName = `${safeSlug(project.title)}-${Date.now()}${project.editingPreset ? `-${randomUUID()}` : ""}.mp4`;
     const outputLocation = path.join(renderDir, fileName);
 
     let reportedProgress = -1;
@@ -63,7 +67,8 @@ export async function renderProject(project: VideoProject) {
       audioCodec: "aac",
       browserExecutable,
       concurrency,
-      scale,
+      // Opt-in explainer metadata already sets the target canvas; avoid post-scaling pixels.
+      scale:project.editingPreset ? 1 : scale,
       onProgress: ({ progress }) => {
         const bucket = Math.floor(progress * 10);
         if (bucket > reportedProgress) {

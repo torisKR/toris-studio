@@ -6,6 +6,7 @@ import { DEVDAY_2026_TOTAL_SECONDS } from "../lib/video/devday-2026";
 import { createReferenceBriefingProject } from "../lib/video/templates";
 import { getDurationInFrames, VIDEO_PRESETS } from "../lib/video/presets";
 import type { VideoFormat, VideoProject } from "../lib/video/types";
+import { getEditingOutputSize } from "../lib/video/editing";
 
 const compositionByFormat: Array<{
   id: string;
@@ -50,9 +51,10 @@ export const RemotionRoot = () => {
             durationInFrames={getDurationInFrames(defaultProject.scenes, preset.fps)}
             defaultProps={{ project: defaultProject }}
             calculateMetadata={({ props }) => {
-              const project = (props as { project: VideoProject }).project;
+              const {project,explainerOutputScale = 1} = props as {project:VideoProject;explainerOutputScale?:number};
               return {
                 durationInFrames: getDurationInFrames(project.scenes, preset.fps),
+                ...(project.editingPreset ? getEditingOutputSize(format,explainerOutputScale) : {}),
                 props: { project }
               };
             }}

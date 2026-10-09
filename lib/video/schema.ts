@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { editingPresetSchema, sceneEditingFields } from "./editing-schema";
 
 export const projectSchema = z.object({
   id: z.string().uuid().optional(),
@@ -6,9 +7,11 @@ export const projectSchema = z.object({
   subtitle: z.string().optional(),
   format: z.enum(["youtube-landscape", "vertical", "shorts"]),
   template: z.enum(["reference-briefing", "adaptive-promo"]),
+  editingPreset: editingPresetSchema.optional(),
   language: z.enum(["ko", "ja", "zh", "en"]),
   scenes: z.array(
     z.object({
+      ...sceneEditingFields,
       id: z.string().min(1),
       eyebrow: z.string().optional(),
       headline: z.string(),

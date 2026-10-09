@@ -1,0 +1,4 @@
+interface:
+  display_name: "Toris Video Motion"
+  short_description: "Plan topic-led videos with Rust motion presets"
+  default_prompt: "Use $toris-video-motion to create an editable video plan from my topic and category in Toris Studio."

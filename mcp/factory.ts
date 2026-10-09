@@ -1,12 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerAssetTools } from "./assets";
 import * as z from "zod/v4";
 import { createProjectFromTemplate } from "../lib/video/templates";
+import { editingPresetSchema, sceneEditingFields } from "../lib/video/editing-schema";
 
 const API_BASE = (
   process.env.TORIS_STUDIO_API_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/$/, "");
 
 const sceneSchema = z.object({
+  ...sceneEditingFields,
   id: z.string().min(1),
   eyebrow: z.string().optional(),
   headline: z.string().min(1),
@@ -107,18 +110,20 @@ export function buildStudioMcpServer() {
         "Create and save an editable Toris Studio project from a built-in format-aware template. Use adaptive-promo for apps, services and brands; use reference-briefing for research, news and comparisons. Shorts and long-form receive different scene structures automatically.",
       inputSchema: z.object({
         template: z.enum(["reference-briefing", "adaptive-promo"]),
+        editingPreset: editingPresetSchema.optional(),
         format: z.enum(["youtube-landscape", "vertical", "shorts"]),
         title: z.string().min(1).optional(),
         subtitle: z.string().optional()
       })
     },
-    async ({ template, format, title, subtitle }) => {
+    async ({ template, editingPreset, format, title, subtitle }) => {
       const base = createProjectFromTemplate(template, format);
       const body = {
         title: title ?? base.title,
         subtitle: subtitle ?? base.subtitle,
         format: base.format,
         template: base.template,
+        editingPreset,
         language: base.language,
         scenes: base.scenes
       };
@@ -158,24 +163,26 @@ export function buildStudioMcpServer() {
     {
       title: "Create or save a video project",
       description:
-        "Save a complete, production-ready video plan. Use this after planning/research so the user can immediately preview it in Toris Studio. Each scene should have a concise on-screen headline and a natural spoken narration. Preserve source URLs when claims rely on external facts.",
+        "Save a complete video plan for preview and review. Each scene should have a concise headline and natural narration. Preserve source URLs. The optional editingPreset project-explainer adds fixed captions, separate aspect layouts and timed UI focus. Use a new projectId or omit it when restyling to preserve the original. mediaSize must be the actual source pixel size; focusRegion uses normalized source coordinates. Never claim unviewed reference styles or draft captions are verified.",
       inputSchema: z.object({
         projectId: z.string().uuid().optional(),
         title: z.string().min(1),
         subtitle: z.string().optional(),
         format: z.enum(["youtube-landscape", "vertical", "shorts"]),
         template: z.enum(["reference-briefing", "adaptive-promo"]).default("reference-briefing"),
+        editingPreset: editingPresetSchema.optional(),
         language: z.enum(["ko", "ja", "zh", "en"]).default("ko"),
         scenes: z.array(sceneSchema).min(1).max(120)
       })
     },
-    async ({ projectId, title, subtitle, format, template, language, scenes }) => {
+    async ({ projectId, title, subtitle, format, template, editingPreset, language, scenes }) => {
       const body = {
         id: projectId,
         title,
         subtitle,
         format,
         template,
+        editingPreset,
         language,
         scenes
       };
@@ -294,5 +301,6 @@ export function buildStudioMcpServer() {
     }
   );
 
+  registerAssetTools(server);
   return server;
 }

@@ -2,7 +2,26 @@
 
 로컬에서 먼저 직접 쓰고 검증한 뒤 구독형 SaaS로 확장하기 위한 프로그램 기반 영상 제작 스튜디오입니다.
 
-현재 MVP는 **Next.js + Remotion + Qwen3-TTS MLX + whisper.cpp/MLX Whisper + YouTube Data API v3 + MCP + Supabase-ready schema** 조합입니다.
+현재 기본 실행 대상은 **macOS / Windows용 Tauri 2 데스크톱 앱**입니다. 데이터베이스, SNS 수집, OAuth, AI 요청, 스케줄러와 영상 처리를 Rust에서 수행하며 React는 앱 안의 화면을 담당합니다. 기존 Next.js / Remotion 편집기도 유지합니다.
+
+## 데스크톱 시작
+
+설치 프로그램은 [macOS · Windows 다운로드](https://toriskr.github.io/toris-studio/) 또는 [공식 GitHub 릴리스](https://github.com/torisKR/toris-studio/releases/latest)에서 받을 수 있습니다. macOS는 Apple Silicon과 Intel 파일을 구분하고, Windows는 x64 설치 프로그램을 선택하세요. 설치 후 **연결 설정 → 앱 업데이트**에서 새 버전을 확인하고 설치할 수 있습니다. 같은 배포 파일은 개발자용 [GitHub Packages](https://github.com/torisKR?tab=packages)에도 보관합니다.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm desktop:dev
+# 설치 프로그램 생성
+pnpm desktop:build
+```
+
+앱의 **로컬 설정**에서 OrbStack/Docker PostgreSQL을 준비하고, **SNS 로그인**에서 각 플랫폼의 OAuth 앱 정보를 등록합니다. OAuth 토큰과 저장한 API 키는 macOS Keychain / Windows 자격 증명 관리자에 보관합니다. YouTube 공개 채널·영상 조회와 트렌드 수집은 YouTube Data API 키를 사용합니다. 로컬 AI 작업실은 기존 OpenCodex / teamclaude 또는 로그인한 Claude CLI에 연결합니다.
+
+채널·콘텐츠·발행 계획은 로컬 DB에서 관리합니다. 발행 계획 저장은 SNS 자동 게시 실행을 의미하지 않으며, 각 플랫폼의 게시 권한과 기능은 별도 구현 대상입니다. 기본 브라우저의 로그인 쿠키를 이용하고 OAuth 연결을 갱신합니다. 상세한 실행·검증 범위는 [데스크톱 가이드](docs/DESKTOP.md), 앱 등록과 갱신 제한은 [OAuth 가이드](docs/OAUTH.md)를 참고하세요.
+
+**키워드 탐색**에서 키워드로 수집 콘텐츠를 찾고, 콘텐츠별 실제 검색어와 추출 단어를 확인할 수 있습니다. 선택한 공개 원문은 로컬 Crawl4AI 컨테이너로 수집합니다. 공식 API 범위와 검색 근거·10개 도구의 적용 상태는 [키워드 탐색 설계](docs/KEYWORD_EXPLORER.md)에 정리했습니다. 기존 Opal 탐색은 이 화면으로 교체하며 개인 설정과 과거 DB 기록은 보존합니다.
+
+아래 내용은 기존 웹 영상 편집기의 사용법입니다.
 
 ## 구현된 흐름
 
@@ -91,10 +110,18 @@ http://localhost:3000
 6. ChatGPT에서 대본/장면 JSON을 만든 뒤 `JSON 가져오기`로 Studio에 반영합니다.
 7. 각 Scene에서 headline, body, narration, role, layout, sourceUrl을 수정합니다.
 8. `이미지 / 영상 업로드`로 실제 제품 화면, 스크린샷, B-roll을 연결합니다.
-9. 필요하면 `Qwen3-TTS · Sohee 음성 생성`으로 장면별 한국어 WAV narration을 만듭니다.
+9. `Qwen3-TTS · Sohee 음성 생성`으로 선택한 장면을, `영상 전체 음성 생성`으로 내레이션이 있는 모든 장면을 순서대로 합성합니다. 전체 생성은 기존 음성이 있는 장면도 새로 생성합니다.
 10. Preview 아래의 `QUALITY CHECK`에서 Hook, 미디어, 출처, 내레이션 밀도, 길이를 확인합니다.
 11. `렌더` 버튼으로 H.264 MP4를 만듭니다.
 12. YouTube OAuth가 연결되어 있으면 `YouTube` 버튼으로 비공개 업로드합니다.
+
+음성을 생성하면 실제 WAV 길이에 끝부분 0.5초 이상 여유를 더해 장면 길이를 맞추고
+미리보기에 바로 연결합니다. 생성 완료 후 `저장`하면 같은 음성을 다시 불러오거나 렌더할 수 있습니다.
+기존 자막 시간은 새 음성에 맞지 않을 수 있어 초기화되며, 자동으로 나누는 자막은 발화 정렬 결과가 아니므로 미리보기에서 확인하세요.
+재생성은 새 WAV 파일을 사용하므로 이전에 저장한 프로젝트의 음성 파일은 유지됩니다.
+생성 도중 수정된 대본·언어·음성 연결에는 이전 요청 결과를 덮어쓰지 않습니다.
+실패하더라도 앞서 완료한 장면의 음성은 편집기에 남습니다.
+음성 서버를 나중에 켜도 편집기가 15초마다, 또는 창에 다시 돌아올 때 연결 상태를 확인합니다.
 
 ### 포맷별 권장 사용
 
@@ -176,10 +203,11 @@ Apple Silicon Mac에서 로컬 TTS 런타임과 모델을 한 번 설치합니�
 pnpm tts:setup
 ```
 
-그 다음 별도 터미널에서 상주 서버를 실행합니다.
+그 다음 백그라운드 음성 서버를 켜고 상태를 확인합니다.
 
 ```bash
-pnpm tts:start
+pnpm tts:on
+pnpm tts:status
 ```
 
 기본 endpoint는 `http://127.0.0.1:50010`이며 Studio의 `/api/health`가 서버 상태를 확인합니다. 기본 한국어 화자는 `Sohee`입니다.
@@ -211,11 +239,29 @@ pnpm remotion:studio
 pnpm tts:setup
 ```
 
-서버:
+서버 켜기·상태 확인·끄기:
 
 ```bash
-pnpm tts:start
+pnpm tts:on
+pnpm tts:status
+pnpm tts:off
 ```
+
+`on`은 준비 상태를 최대 60초 확인합니다. `pending`이면 모델을 불러오는 중이거나
+아직 응답하지 않는 상태이므로 `status`와 출력된 로그 경로를 확인합니다.
+실행 중인 관리 프로세스가 있으면 중복 실행하지 않습니다. 다시 켜려면
+`off` 완료 후 `on`을 실행합니다.
+
+`off`는 이 관리자가 기록한 PID·사용자·시작 시각·실행 명령이 모두 일치하는 서버에만
+정상 종료 신호를 보냅니다. 종료가 지연되면 `stopping` 상태를 남기며 강제 종료하지 않습니다.
+기존 `pnpm tts:start`의 전경 실행도 유지됩니다. 그 방식으로 실행한 서버나 다른 포트 점유자는
+`unmanaged-running`으로 표시하고 종료하지 않으므로 기존 실행 터미널에서 먼저 종료합니다.
+관리 기록과 로그는 기본적으로 `~/.local/share/toris-studio/qwen3-tts-mlx/service/`에 저장됩니다.
+`TORIS_RUNTIME_HOME` 또는 `QWEN_TTS_PORT`를 바꿨다면 켜기·상태·끄기에 같은 값을 사용합니다.
+
+Toris 전용 모델 위치는 `~/.local/share/toris-studio/qwen3-tts-mlx/model/`입니다.
+`off`는 모델 파일을 보존합니다. `on`으로 켠 서버는 백그라운드에서 실행되며,
+컴퓨터를 재부팅한 뒤에는 프로젝트 폴더에서 `pnpm tts:on`을 다시 실행합니다.
 
 동작 순서:
 
@@ -229,6 +275,22 @@ pnpm tts:start
 ```
 
 기본 모델은 `mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`입니다. 모델은 약 3GB이고 Apple Silicon MLX로 실행됩니다. 기본 `Sohee`는 한국어가 native인 따뜻한 여성 음색이며, `.env.local`의 instruction으로 광고·브리핑·차분한 설명 등 말투를 조절합니다.
+
+LM Studio에서 이 모델을 다운로드한 뒤 `Model type qwen3_tts not supported`가 나오면,
+LM Studio의 모델 로딩 대신 이 프로젝트의 `pnpm tts:on`으로 실행합니다.
+설치된 MLX 음성 런타임이 다운로드된 파일을 직접 읽으므로 모델을 다시 받을 필요가 없습니다.
+시작 스크립트는 명시한 `QWEN_TTS_MODEL_DIR`, 기존 Toris 런타임의 `model` 디렉터리,
+`~/.lmstudio/models/mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` 순서로 확인합니다.
+명시한 경로가 잘못되면 다른 모델로 바꾸지 않고 오류를 표시합니다.
+
+다운로드에는 최상위 가중치뿐 아니라 같은 모델 저장소의 `speech_tokenizer/config.json`과
+`speech_tokenizer/*.safetensors`도 필요합니다. 이 하위 폴더가 빠진 경우 해당 모델의
+누락 파일만 보완해야 합니다. 시작 스크립트는 파일을 자동 다운로드하거나 덮어쓰지 않습니다.
+다른 위치의 완전한 모델은 다음처럼 지정할 수 있습니다.
+
+```bash
+QWEN_TTS_MODEL_DIR="/absolute/path/to/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit" pnpm tts:on
+```
 
 `.env.local`:
 

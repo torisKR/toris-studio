@@ -14,6 +14,7 @@ import { Audio } from "@remotion/media";
 import type { CSSProperties, ReactNode } from "react";
 import type { VideoProject, VideoScene } from "../../lib/video/types";
 import { SocialFocusScene } from "./SocialFocusScene";
+import { ProjectExplainerScene } from "./ProjectExplainerScene";
 
 type Props = { project: VideoProject };
 
@@ -657,7 +658,7 @@ export function NewsBriefingVideo({ project }: Props) {
         cursor += duration;
         return (
           <Sequence key={scene.id} from={from} durationInFrames={duration}>
-            {height > width && scene.layout?.startsWith("social-") ? <SocialFocusScene scene={scene} /> : <Scene
+            {project.editingPreset ? <ProjectExplainerScene project={project} scene={scene} index={index} /> : height > width && scene.layout?.startsWith("social-") ? <SocialFocusScene scene={scene} /> : <Scene
               scene={scene}
               index={index}
               sceneCount={project.scenes.length}

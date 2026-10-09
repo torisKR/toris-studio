@@ -17,11 +17,15 @@ import {
   Upload,
   WandSparkles
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { VideoPreview } from "./VideoPreview";
+import { EditingControls } from "./EditingControls";
+import { forkWithEditingPreset } from "@/lib/video/editing";
+import { projectSchema } from "@/lib/video/schema";
 import { VIDEO_PRESETS } from "@/lib/video/presets";
 import { VIDEO_TEMPLATES, applyTemplate } from "@/lib/video/templates";
 import { updateProjectScene } from "@/lib/video/update-scene";
+import { applyGeneratedSceneVoice, generateSceneVoices } from "@/lib/video/voice-generation";
 import { evaluateVideoQuality } from "@/lib/video/quality";
 import type {
   VideoFormat,
@@ -48,6 +52,11 @@ function plannerPrompt(project: VideoProject) {
 목표: ${project.title}
 형식: ${VIDEO_PRESETS[project.format].label}
 템플릿: ${VIDEO_TEMPLATES[project.template].name}
+${project.editingPreset ? `편집 프리셋: ${project.editingPreset}
+- editingPreset을 유지하고 장면의 mediaSize(실제 원본 픽셀), explanationSteps(2~4개), focusRegion(원본 기준 x/y/width/height 0~1, startSec/endSec/label)을 사용하기
+- 실제 UI는 mediaFit: contain, 자막은 장면 기준 captionCues로 작성하기. 수동 음성 동기화 전에는 초안으로 표시하기
+- 설명 단계는 실제 프로젝트의 입력→처리→결과로 작성하고 실제 화면 근거를 우선하기
+- 레퍼런스 채널의 프레임·음성을 확인하지 않았다면 구체적 스타일 수치를 원본 특징으로 주장하지 않기` : ""}
 언어: ${project.language}
 
 요구사항:
@@ -94,6 +103,9 @@ export function StudioApp({ initialProject }: Props) {
   const [saving, setSaving] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsProgress, setTtsProgress] = useState({ completed: 0, total: 0 });
+  const projectRef = useRef(project);
+  const ttsBusy = useRef(false);
   const [sttLoading, setSttLoading] = useState(false);
   const [assetUploading, setAssetUploading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -108,16 +120,35 @@ export function StudioApp({ initialProject }: Props) {
   const quality = useMemo(() => evaluateVideoQuality(project), [project]);
 
   useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshHealth() {
+      try {
+        const response = await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+        if (!response.ok) throw new Error("상태 확인 실패");
+        const nextHealth = await response.json();
+        if (active) setHealth(nextHealth);
+      } catch {
+        if (active) setHealth(current => current ? { ...current, ttsConfigured: false } : null);
+      }
+    }
+    void refreshHealth();
+    const interval = window.setInterval(refreshHealth, 15000);
+    window.addEventListener("focus", refreshHealth);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshHealth);
+    };
+  }, []);
+
+  useEffect(() => {
     async function bootstrap() {
       try {
-        const [healthResponse, projectsResponse] = await Promise.all([
-          fetch("/api/health"),
-          fetch("/api/projects")
-        ]);
-
-        if (healthResponse.ok) {
-          setHealth((await healthResponse.json()) as Health);
-        }
+        const projectsResponse = await fetch("/api/projects");
 
         if (projectsResponse.ok) {
           const data = (await projectsResponse.json()) as {
@@ -187,35 +218,67 @@ export function StudioApp({ initialProject }: Props) {
     }
   }
 
-  async function makeVoice() {
-    if (!selectedScene) return;
+  async function makeVoice(allScenes = false) {
+    if (ttsBusy.current || rendering || (!allScenes && !selectedScene)) return;
+    const source = project;
+    const scenes = allScenes ? source.scenes : [selectedScene!];
+    const total = scenes.filter(scene => scene.narration.trim()).length;
+    if (!total) {
+      setMessage("음성을 만들 장면의 내레이션을 입력하세요.");
+      return;
+    }
+    ttsBusy.current = true;
     setTtsLoading(true);
+    setTtsProgress({ completed: 0, total });
     setMessage("");
+    setRenderUrl("");
+    setYoutubeUrl("");
+    let generated = 0;
+    let skipped = 0;
     try {
-      const response = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          sceneId: selectedScene.id,
-          text: selectedScene.narration
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "TTS 생성 실패");
-      const durationSec = Math.max(
-        1,
-        Number(((data.durationSec ?? selectedScene.durationSec) + 0.45).toFixed(1))
+      const language = { ko: "Korean", ja: "Japanese", zh: "Chinese", en: "English" }[source.language];
+      await generateSceneVoices(
+        scenes,
+        async scene => {
+          const response = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectId: source.id,
+              sceneId: scene.id,
+              text: scene.narration,
+              language
+            })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error ?? "TTS 생성 실패");
+          return data;
+        },
+        (scene, voice) => {
+          const current = projectRef.current;
+          if (applyGeneratedSceneVoice(current, source, scene.id, voice) === current) skipped += 1;
+          setProject(current => applyGeneratedSceneVoice(current, source, scene.id, voice));
+        },
+        (completed, total) => {
+          generated = completed;
+          setTtsProgress({ completed, total });
+        },
+        () => projectRef.current.id === source.id && projectRef.current.language === source.language
       );
-      patchScene({
-        audioPath: data.audioPath,
-        durationSec,
-        captionCues: undefined
-      });
-      setMessage(`현재 장면 음성을 생성하고 길이를 ${durationSec}초로 맞췄습니다.`);
+      const interrupted = generated < total;
+      setMessage(
+        `음성 ${generated - skipped}개를 연결하고 실제 길이에 맞췄습니다. ` +
+        (skipped ? `편집 중 바뀐 장면 ${skipped}개는 제외했습니다. ` : "") +
+        (interrupted ? "프로젝트 또는 언어가 변경되어 나머지 합성을 중단했습니다. " : "") +
+        "미리보기에서 확인한 뒤 프로젝트를 저장하세요."
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "TTS 생성 실패");
+      setMessage(
+        `${error instanceof Error ? error.message : "TTS 생성 실패"} ` +
+        (generated ? `앞서 생성한 음성 ${generated - skipped}개는 유지됩니다. 저장 후 확인하세요.` : "")
+      );
     } finally {
+      ttsBusy.current = false;
       setTtsLoading(false);
     }
   }
@@ -394,9 +457,12 @@ export function StudioApp({ initialProject }: Props) {
         template: ["reference-briefing", "adaptive-promo"].includes(candidate.template)
           ? candidate.template
           : project.template,
+        editingPreset: candidate.editingPreset,
         createdAt: candidate.createdAt ?? now,
         updatedAt: now
       };
+
+      if (imported.editingPreset !== undefined) projectSchema.parse(imported);
 
       setProject(imported);
       setSelectedSceneId(imported.scenes[0]?.id ?? "");
@@ -429,6 +495,7 @@ export function StudioApp({ initialProject }: Props) {
   return (
     <main className="studio">
       <header className="topbar">
+        <a href="/manage" className="button" style={{ alignSelf: "center", whiteSpace: "nowrap" }}>채널 · 트렌드 관리</a>
         <label className="field">
           <span>저장된 프로젝트</span>
           <select aria-label="저장된 프로젝트" value={savedProjects.some(item => item.id === project.id) ? project.id : ""} onChange={event => {
@@ -624,7 +691,7 @@ export function StudioApp({ initialProject }: Props) {
               <button
                 className="button primary"
                 onClick={render}
-                disabled={rendering}
+                disabled={rendering || ttsLoading}
               >
                 {rendering ? (
                   <LoaderCircle size={17} className="spin" />
@@ -672,6 +739,13 @@ export function StudioApp({ initialProject }: Props) {
         </section>
 
         <aside className="inspector">
+          <EditingControls project={project} scene={selectedScene} patchScene={patchScene} onPreset={preset => {
+            setProject(current => preset && !current.editingPreset
+              ? forkWithEditingPreset(current, preset)
+              : { ...current, editingPreset: preset, updatedAt: new Date().toISOString() });
+            setRenderUrl("");
+            setMessage(preset ? "설명 편집 프리셋을 적용했습니다. 저장 후 새 영상을 렌더하세요." : "기존 디자인으로 전환했습니다.");
+          }} />
           <div className="panel-heading">
             <div>
               <span className="section-kicker">PROJECT</span>
@@ -916,8 +990,8 @@ export function StudioApp({ initialProject }: Props) {
 
               <button
                 className="voice-button"
-                onClick={makeVoice}
-                disabled={ttsLoading || !health?.ttsConfigured}
+                onClick={() => void makeVoice()}
+                disabled={ttsLoading || rendering || !health?.ttsConfigured || !selectedScene.narration.trim()}
                 title={
                   health?.ttsConfigured
                     ? "로컬 Qwen3-TTS Sohee로 현재 장면 음성 생성"
@@ -932,12 +1006,29 @@ export function StudioApp({ initialProject }: Props) {
                 <span>
                   <strong>Qwen3-TTS · Sohee 음성 생성</strong>
                   <small>
-                    {selectedScene.audioPath
+                    {ttsLoading
+                      ? `음성 생성 중 · ${ttsProgress.completed}/${ttsProgress.total}`
+                      : selectedScene.audioPath
                       ? "현재 장면에 음성이 연결됨"
                       : health?.ttsConfigured
                         ? `로컬 · 한국어 Sohee · ${health.ttsProvider ?? "Qwen3-TTS"}`
                         : health?.ttsReason ?? "TTS 설정 필요"}
                   </small>
+                </span>
+              </button>
+
+              <button
+                className="voice-button"
+                onClick={() => void makeVoice(true)}
+                disabled={ttsLoading || rendering || !health?.ttsConfigured || !project.scenes.some(scene => scene.narration.trim())}
+                title="내레이션이 있는 모든 장면의 음성을 순서대로 새로 생성합니다"
+              >
+                {ttsLoading ? <LoaderCircle size={18} className="spin" /> : <Mic2 size={18} />}
+                <span>
+                  <strong>영상 전체 음성 생성</strong>
+                  <small>{ttsLoading
+                    ? `${ttsProgress.completed}/${ttsProgress.total}개 완료 · 순서대로 생성 중`
+                    : "모든 장면을 새로 생성 · 실제 음성 길이 반영"}</small>
                 </span>
               </button>
 

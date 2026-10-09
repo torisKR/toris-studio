@@ -23,6 +23,15 @@ DEFAULT_INSTRUCT = os.environ.get(
 
 app = FastAPI(title="Toris Studio Qwen3-TTS MLX Runtime")
 model = load_model(MODEL_DIR)
+if not callable(getattr(model, "generate_custom_voice", None)):
+    raise RuntimeError("The selected model does not support Qwen3-TTS CustomVoice.")
+if getattr(model, "tokenizer", None) is None:
+    raise RuntimeError(f"Qwen3-TTS text tokenizer failed to load: {MODEL_DIR}")
+if getattr(model, "speech_tokenizer", None) is None:
+    raise RuntimeError(
+        f"Qwen3-TTS speech tokenizer failed to load: {MODEL_DIR}/speech_tokenizer. "
+        "Complete the speech_tokenizer files from the same model repository."
+    )
 sample_rate = int(getattr(model, "sample_rate", 24000))
 generation_lock = threading.Lock()
 
@@ -45,6 +54,8 @@ def health():
         "ok": True,
         "provider": "qwen3-tts-mlx",
         "model": os.path.basename(MODEL_DIR.rstrip("/")),
+        "model_path": os.path.realpath(MODEL_DIR),
+        "pid": os.getpid(),
         "speaker": DEFAULT_SPEAKER,
         "language": DEFAULT_LANGUAGE,
         "sample_rate": sample_rate,
