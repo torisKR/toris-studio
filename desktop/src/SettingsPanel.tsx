@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ActivityStatus } from "./ActivityStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Check, CircleAlert, Database, Download, ExternalLink, Eye, EyeOff, KeyRound, LoaderCircle, Play, RefreshCw, ShieldCheck, Sparkles, Timer } from "lucide-react";
@@ -289,7 +290,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
     <button type="button" className="social-button compact" disabled={operationBusy} onClick={() => void retryKeychainAccess()}>{keychainRetryBusy ? <LoaderCircle size={15} className="social-spin" /> : <RefreshCw size={15} />}{keychainRetryBusy ? "권한 확인 중" : "저장소 권한 다시 확인"}</button>
   </div>;
 
-  if (loading) return <div className="social-loading" role="status"><LoaderCircle size={22} className="social-spin" />로컬 설정을 확인하고 있습니다.</div>;
+  if (loading) return <ActivityStatus title="로컬 설정을 확인하는 중" detail="저장된 설정을 읽고 있습니다. OS 저장소의 접근 승인이 필요한 경우 시스템 확인창을 완료하세요."/>;
   if (!form || !settings) return <div>{storageNotice}<div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{error || "설정을 불러오지 못했습니다."}</span><button type="button" className="social-button compact" disabled={operationBusy} onClick={() => void load()}>다시 시도</button></div></div>;
 
   return <div className="desktop-settings">
