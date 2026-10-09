@@ -90,6 +90,7 @@ jobs:
         run: |
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
           pnpm desktop:check
+          pnpm ai:test
           pnpm integrations:verify:mcp
           node --test scripts/release-assets.test.mjs
       - name: Build and sign updater bundles

@@ -3,6 +3,45 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
+pub fn codexify_connection_get(
+    window: tauri::WebviewWindow,
+) -> Result<crate::codexify_connection::Profile, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::load()
+}
+#[tauri::command]
+pub fn codexify_connection_save(
+    window: tauri::WebviewWindow,
+    input: crate::codexify_connection::Profile,
+) -> Result<crate::codexify_connection::Profile, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::save(input)
+}
+#[tauri::command]
+pub async fn codexify_connection_check(window: tauri::WebviewWindow) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::check().await
+}
+#[tauri::command]
+pub async fn codexify_chats(window: tauri::WebviewWindow) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::chats().await
+}
+#[tauri::command]
+pub async fn codexify_chat_read(window: tauri::WebviewWindow) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::chat_read().await
+}
+#[tauri::command]
+pub async fn codexify_chat_send(
+    window: tauri::WebviewWindow,
+    input: crate::codexify_connection::SendInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    crate::codexify_connection::chat_send(input).await
+}
+
+#[tauri::command]
 pub async fn integration_status(window: tauri::WebviewWindow) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let exe = std::env::current_exe().map_err(|_| "현재 설치 경로를 확인하지 못했습니다.")?;

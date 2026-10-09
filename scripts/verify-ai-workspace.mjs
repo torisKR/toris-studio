@@ -8,6 +8,7 @@ const out=resolve('docs/review/ai-workspace');await mkdir(out,{recursive:true});
 const trend={id:'source-1',source:'youtube',keyword:'AI 생산성',title:'반복 업무를 줄이는 로컬 AI',url:'https://www.youtube.com/watch?v=abcdefghijk',metric:null,region:'KR',publishedAt:null,fetchedAt:'2026-10-09T00:00:00Z',details:{discovery:'youtube_keyword',description:'제공된 원본 설명: 작은 업무부터 자동화하세요.'}};
 const items=[{trend,matches:[],observedKeywords:[{keyword:'로컬 자동화',source:'youtube',observedAt:trend.fetchedAt}],extractedKeywords:[{keyword:'반복 업무',score:2,occurrences:1}]}];
 let clipboard='',generated=null,resolveGeneration,keywordReads=0;
+let connectionProfile={mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'https://chatgpt.com/plugins/plugin_qa',conversationUrl:'',projectRoot:'/tmp/qa-studio',conversationId:''};
 let dashboardConnected=true,keywordItems=items,delayNextDashboard=false,delayNextKeywordRead=false,resolveDashboardRead,resolveKeywordRead;
 const report={adapter:'Chromium with explicit IPC fixtures; no model, OAuth or publishing calls',checks:[],errors:[]};
 const server=await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false}});await server.listen();
@@ -32,6 +33,11 @@ try {
   if(command==='get_keyword_runs')return [];
   if(command==='get_content_keywords')return items[0];
   if(command==='copy_text'){clipboard=args.text;return;}
+  if(command==='codexify_connection_get')return {...connectionProfile};
+  if(command==='codexify_connection_save'){connectionProfile={...args.input};return {...connectionProfile};}
+  if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
+  if(command==='codexify_connection_check')return {reachable:true,fileReceiverReady:true,ownerReady:true,toolCount:64,message:'QA bridge fixture'};
+  if(command==='open_external')return null;
   if(command==='ai_generate'){generated=args.input;return new Promise(resolve=>{resolveGeneration=()=>resolve({text:'실제 생성물이 아닌 QA 결과',provider:'opencodex',model:'test'});});}
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'0.1.14'};
   throw new Error(`QA: unsupported IPC ${command}`);
@@ -57,7 +63,7 @@ try {
  assert.equal(await page.getByLabel('참고 자료와 맥락',{exact:false}).inputValue(),'직접 적은 맥락을 보존합니다.');
  await page.getByRole('button',{name:'선택한 키워드를 주제와 자료로 사용',exact:true}).click();
  assert.equal(await page.locator('.ai-reference-item').count(),1);
- await page.getByRole('button',{name:'ChatGPT 요청 복사',exact:true}).click();
+ await page.getByRole('button',{name:'요청 복사·ChatGPT 열기',exact:true}).click();
  assert.match(clipboard,/직접 적은 맥락/);assert.match(clipboard,/abcdefghijk/);assert.match(clipboard,/Codexify/);
  report.checks.push('Keyword-to-topic + evidence selection, deduplication, manual context preservation, Codexify ChatGPT handoff');
  assert.equal(await page.locator('.ai-trend-summary li').count(),6);
@@ -124,14 +130,18 @@ try {
  report.checks.push('DB disconnect during a delayed keyword read clears discovery busy state; stale response is ignored and reconnect reloads fresh keywords');
  await page.getByLabel('참고 자료와 맥락',{exact:false}).fill('가'.repeat(5900));
  await page.locator('.ai-context-budget.error').waitFor();
- assert.equal(await page.getByRole('button',{name:'ChatGPT 요청 복사',exact:true}).isDisabled(),true);
+ assert.equal(await page.getByRole('button',{name:'요청 복사·ChatGPT 열기',exact:true}).isDisabled(),true);
  assert.equal(await page.getByRole('button',{name:'AI로 작성',exact:true}).isDisabled(),true);
  await page.getByLabel('참고 자료와 맥락',{exact:false}).fill('직접 적은 맥락을 보존합니다.');
  report.checks.push('Oversized combined context blocks both providers without erasing manual input; animation pause works independently of execution');
  await page.setViewportSize({width:820,height:800});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:resolve(out,'ai-workspace-narrow.png'),fullPage:true});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
  await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
+ await page.getByRole('region',{name:'Codexify 앱 연결'}).getByText('연결 설정',{exact:true}).click();
  await page.getByLabel('Codexify 작업 프로젝트',{exact:true}).fill('/tmp/toris-studio-qa-project');
+ await page.getByRole('button',{name:'연결 설정 저장',exact:true}).click();
+ await page.getByText('Codexify 연결 설정을 이 기기에 저장했습니다.',{exact:true}).waitFor();
+ await page.getByText('설치 앱 MCP 설정 · 고급',{exact:true}).click();
  await page.getByRole('button',{name:'Codexify direct 설정 복사',exact:true}).click();
  const config=JSON.parse(clipboard);assert.equal(config.mcpServers.studio.mode,'direct');assert.equal(config.mcpServers.studio.command,'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop');assert.deepEqual(config.mcpServers.studio.args,['--studio-mcp']);assert.equal(config.workDir,'/tmp/toris-studio-qa-project');
  assert.equal(config.codexMcp.enabled,false);

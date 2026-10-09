@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod assets;
+pub mod codexify_connection;
 pub mod config;
 pub mod credentials;
 #[cfg(feature = "desktop")]
@@ -507,6 +508,12 @@ mod desktop {
                 Ok(())
             })
             .invoke_handler(tauri::generate_handler![
+                crate::integration_native::codexify_connection_get,
+                crate::integration_native::codexify_connection_save,
+                crate::integration_native::codexify_connection_check,
+                crate::integration_native::codexify_chats,
+                crate::integration_native::codexify_chat_read,
+                crate::integration_native::codexify_chat_send,
                 crate::integration_native::integration_status,
                 crate::integration_native::integration_upload_login,
                 crate::integration_native::integration_channels,

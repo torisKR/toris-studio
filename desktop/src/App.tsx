@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsPanel } from "./SettingsPanel";
 import { IntegrationPanel } from "./IntegrationPanel";
+import { openConnectedChat, sendToConnectedChat } from "./codexify-client";
 import { AssetStudio } from "./assets/AssetStudio";
 import { AiDiscovery } from "./AiDiscovery";
 import { BookOpen } from "lucide-react";
@@ -17,7 +18,7 @@ import {
   ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
   CircleAlert, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
   LayoutDashboard, LoaderCircle, Music2, NotebookPen, Play, Plus, RefreshCw,
-  Search, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
+  Search, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -240,6 +241,7 @@ export function App() {
   const [aiOutput, setAiOutput] = useState("");
   const [aiOutputLabel, setAiOutputLabel] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const aiChatRetry = useRef<{message:string;requestId:string}|null>(null);
   const [aiStartedAt, setAiStartedAt] = useState<number>();
   const [aiError, setAiError] = useState("");
   const [copying, setCopying] = useState(false);
@@ -326,9 +328,23 @@ export function App() {
     catch (error) { setAiError(errorMessage(error)); setTab("ai"); }
   }
   async function copyAiBrief() {
-    setAiError("");
-    try { await invoke("copy_text", { text: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences) }); setAiSelectionNotice("주제와 선택한 자료를 복사했습니다. Codexify가 연결된 ChatGPT 대화에 붙여넣으세요."); }
+    if (aiBusy) return;
+    setAiError(""); setAiBusy(true);
+    try { await invoke("copy_text", { text: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences) }); await openConnectedChat(); setAiSelectionNotice("요청을 복사하고 저장한 ChatGPT 연결을 열었습니다. 대화에 붙여넣어 시작하세요."); }
     catch (error) { setAiError(errorMessage(error)); }
+    finally { setAiBusy(false); }
+  }
+  async function sendAiBrief() {
+    if (aiBusy) return;
+    setAiError(""); setAiBusy(true);
+    try {
+      const message = chatBrief(aiPlatform, aiTopic, aiContext, aiReferences);
+      if (aiChatRetry.current?.message !== message) aiChatRetry.current = {message, requestId:crypto.randomUUID()};
+      const { waiting } = await sendToConnectedChat(message, aiChatRetry.current.requestId);
+      aiChatRetry.current = null;
+      setAiSelectionNotice(waiting ? "요청을 Codexify 대화에 저장했습니다. ChatGPT의 수신·응답은 연결 화면에서 확인하세요." : "요청을 Codexify 대화에 저장했습니다. ChatGPT가 현재 대기 중이 아니므로 연결된 대화에서 실행을 시작하세요.");
+    } catch (error) { setAiError(errorMessage(error)); }
+    finally { setAiBusy(false); }
   }
 
   function renderContentCard(item: SocialContent) {
@@ -522,12 +538,12 @@ export function App() {
             {aiSelectionNotice && <p className="social-notice success" role="status">{aiSelectionNotice}</p>}
             {aiStatusError && <div className="social-notice error" role="alert"><CircleAlert size={17} /><span>{aiStatusError}</span></div>}
             <details className="ai-provider-details"><summary>직접 작성에 사용할 로컬 AI 제공자 · 선택</summary><div className="social-ai-providers">{aiStatus.providers.map((provider) => <button className={`social-ai-provider ${aiProvider === provider.id ? "selected" : ""}`} key={provider.id} disabled={!provider.available || aiBusy} aria-pressed={aiProvider === provider.id} onClick={() => setAiProvider(provider.id)}><div><Sparkles size={18} /><strong>{provider.label}</strong><span className={provider.available ? "available" : "unavailable"}>{provider.available ? "연결됨" : "연결 필요"}</span></div><p>{provider.detail}</p><small>{provider.generationVerified ? "실제 생성 확인됨" : provider.available ? "생성 확인 전" : "연결 설정에서 AI를 연결하세요"}</small></button>)}{aiChecking && aiStatus.providers.length === 0 && <ActivitySkeleton label="AI 연결을 확인하는 중입니다." rows={2}/>}</div></details>
-            {!aiChecking && availableAi.length === 0 && <div className="social-notice info"><CircleAlert size={18} /><span>로컬 AI 제공자가 없어도 주제와 자료를 선택해 ChatGPT 요청을 복사할 수 있습니다. Codexify 연결은 연결·게시 QA에서 설정하세요.</span></div>}
+            {!aiChecking && availableAi.length === 0 && <div className="social-notice info"><CircleAlert size={18} /><span>주제와 자료를 연결된 ChatGPT 대화에 보낼 수 있습니다. 연결·게시 QA에서 Codexify와 대화를 설정하세요.</span></div>}
             <div className="social-ai-workbench"><form className="social-ai-brief" onSubmit={(event) => { event.preventDefault(); void generateAi(); }}><div className="social-section-heading"><h2>어떤 콘텐츠를 만들까요?</h2></div><label htmlFor="social-ai-platform">대상 플랫폼</label><select id="social-ai-platform" value={aiPlatform} onChange={(event) => setAiPlatform(event.target.value as SocialPlatform)} disabled={aiBusy}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select><label htmlFor="social-ai-topic">주제와 작성 방향</label><textarea id="social-ai-topic" value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="예: AI로 반복 작업을 줄이는 팁 3개를 소개하는 30초 릴스. 초보자도 따라 할 수 있도록 작성해줘." rows={5} maxLength={600} required disabled={aiBusy} /><label htmlFor="social-ai-context">참고 자료와 맥락 <small>선택</small></label><textarea id="social-ai-context" value={aiContext} onChange={(event) => setAiContext(event.target.value)} placeholder="실제 출처 URL, 핵심 사실, 타깃 독자, 원하는 말투 등을 입력하세요." rows={6} maxLength={6000} disabled={aiBusy} />
               <div className="ai-reference-list" aria-label="선택한 참고자료">{aiReferences.map(item => <div className="ai-reference-item" key={item.id}><BookOpen size={16}/><span><strong>{item.trend.title}</strong><small>{item.keyword} · {sourceLabels[item.trend.source]}</small></span><button type="button" className="social-dismiss" aria-label={`참고자료 해제: ${item.trend.title}`} disabled={aiBusy} onClick={() => { setAiReferences(current => current.filter(r => r.id !== item.id)); setAiSelectionNotice("참고자료를 해제했습니다. 직접 작성한 맥락은 유지됩니다."); }}><X size={15}/></button></div>)}</div>
               <p className={`ai-context-budget${aiCompiledContext.error ? " error" : ""}`} role={aiCompiledContext.error ? "alert" : undefined}>{aiCompiledContext.error || `AI에 전달할 맥락 ${aiCompiledContext.text.length.toLocaleString()} / 6,000자 · 자료 ${aiReferences.length}개`}</p>
               {!aiCompiledContext.error && <details className="ai-context-preview"><summary>전달할 참고자료 확인</summary><pre>{aiCompiledContext.text || "선택하거나 입력한 참고자료가 없습니다."}</pre></details>}
-              <div className="ai-chat-handoff"><p>ChatGPT가 작성하고 Codexify가 Studio 도구를 연결합니다. 복사만으로 생성이 시작되지는 않습니다.</p><button type="button" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void copyAiBrief()}><Copy size={16}/>ChatGPT 요청 복사</button></div>
+              <div className="ai-chat-handoff"><p>저장한 Codexify 대화에 요청을 보내세요. ChatGPT의 수신과 응답은 연결 화면에서 확인할 수 있습니다.</p><button type="button" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void sendAiBrief()}><Send size={16}/>연결된 대화에 보내기</button><button type="button" className="social-button" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void copyAiBrief()}><Copy size={16}/>요청 복사·ChatGPT 열기</button></div>
               <p className="social-form-hint">입력한 자료는 선택한 AI 제공자에게 전달됩니다. 생성 결과의 사실과 출처를 확인한 뒤 사용하세요.</p>{aiError && <p className="social-form-error" role="alert">{aiError}</p>}<div className="social-form-actions"><button className="social-button primary" type="submit" disabled={aiBusy || availableAi.length === 0 || Boolean(aiCompiledContext.error)}>{aiBusy ? <LoaderCircle size={17} className="social-spin" /> : <Sparkles size={17} />}{aiBusy ? "작성 중" : "AI로 작성"}</button></div></form><section className="social-ai-result" aria-label="AI 생성 결과"><div className="social-result-header"><h2>작성 결과</h2>{aiOutputLabel && <small>{aiOutputLabel}</small>}</div>{aiBusy && <ActivityStatus title="AI 응답을 기다리는 중" since={aiStartedAt} detail="선택한 제공자에 요청을 보냈습니다. 완료 시각이나 진행률은 제공되지 않습니다. 기존 작성 결과와 입력은 보존하고 실제 응답이 도착하면 갱신합니다."/>}{aiOutput ? <><label className="social-sr-only" htmlFor="social-ai-output">AI 결과 수정</label><textarea className="ai-complete-output" id="social-ai-output" disabled={aiBusy} value={aiOutput} onChange={(event) => setAiOutput(event.target.value)} spellCheck={false} /><div className="social-result-actions"><span>검토하고 편집한 뒤 초안으로 저장하세요.</span><div className="desktop-result-buttons"><button type="button" className="social-button" disabled={copying || aiBusy} onClick={() => {
       setCopying(true); void invoke("copy_text", { text: aiOutput }).then(() => setNotice({ tone: "success", text: "작성 결과를 클립보드에 복사했습니다." })).catch((error: unknown) => setNotice({ tone: "error", text: errorMessage(error) })).finally(() => setCopying(false));
     }}>{copying ? <LoaderCircle size={16} className="social-spin" /> : <Copy size={16} />}복사</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}><FileText size={16} />콘텐츠로 가져오기</button></div></div></> : <EmptyState icon={Sparkles} title={aiBusy ? "초안을 작성하고 있어요" : "아이디어를 초안으로 바꿔보세요"} text={aiBusy ? "결과가 도착하면 이곳에서 검토하고 수정할 수 있습니다." : "왼쪽에 주제와 참고 자료를 입력하면 채널에 맞는 결과가 이곳에 표시됩니다."} />}</section></div>

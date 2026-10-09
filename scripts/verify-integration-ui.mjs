@@ -13,6 +13,9 @@ await page.exposeFunction('__qaInvoke',async(command,args={})=>{
  calls.push({command,args});
  if(command==='get_dashboard')return {channels:[],content:[],trends:[],integrations:[],database:{connected:false,message:'fixture'}};
  if(command==='ai_status')return {providers:[],defaultProvider:null};
+ if(command==='codexify_connection_get')return {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
+ if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
+ if(command==='codexify_connection_check')return {reachable:false,fileReceiverReady:false,ownerReady:false,toolCount:0,message:'QA disconnected fixture'};
  if(command==='integration_status')return {oauth:{providers:[{platform:'youtube',clientConfigured:true,connected:true,uploadAuthorized:granted,pending:false}]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload,version:'test'};
  if(command==='integration_upload_login'){granted=true;return {pending:true};}
  if(command==='integration_channels')return {channels:[channel]};
@@ -30,6 +33,7 @@ try{
  const panel=page.getByRole('region',{name:'연결 및 게시 QA'});
  await panel.getByText('읽기 연결됨 · 업로드 승인 필요',{exact:true}).waitFor();
  assert.equal(await panel.getByRole('button',{name:'채널 조회',exact:true}).isDisabled(),true);
+ await panel.getByText('설치 앱 MCP 설정 · 고급',{exact:true}).click();
  await panel.getByRole('button',{name:'설치 앱 MCP 설정 복사',exact:true}).click();
  await panel.getByText('설치된 앱의 MCP 실행 설정을 복사했습니다.',{exact:false}).waitFor();
  assert.match(calls.find(c=>c.command==='copy_text').args.text,/--studio-mcp/);
