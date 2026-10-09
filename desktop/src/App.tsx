@@ -2,17 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { SettingsPanel } from "./SettingsPanel";
 import { IntegrationPanel } from "./IntegrationPanel";
 import { AssetStudio } from "./assets/AssetStudio";
-import { VideoPanel } from "./VideoPanel";
+import { AiDiscovery } from "./AiDiscovery";
+import { BookOpen } from "lucide-react";
+import { ActivityStatus, ActivitySkeleton } from "./ActivityStatus";
+import { applyMaterial, materialFromTrend, composeContext, chatBrief } from "./ai-discovery";
+import type { AiMaterial, AiSelectionMode } from "./ai-discovery";
 import { YouTubePanel } from "./YouTubePanel";
 import { OAuthPanel } from "./OAuthPanel";
 import { KeywordPanel } from "./KeywordPanel";
 import { External } from "./External";
 import { OverviewPanel } from "./OverviewPanel";
 import { ContentBoard } from "./ContentBoard";
-import type { VideoResearchSeed } from "./video-research";
 import {
   ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
-  CircleAlert, Clapperboard, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
+  CircleAlert, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
   LayoutDashboard, LoaderCircle, Music2, NotebookPen, Play, Plus, RefreshCw,
   Search, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
 } from "lucide-react";
@@ -24,7 +27,7 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "video" | "assets" | "integrations" | "settings";
+type Tab = "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "integrations" | "settings";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
@@ -55,7 +58,6 @@ const tabs = [
   { id: "trends", label: "트렌드 탐색", icon: TrendingUp, group: "워크스페이스" },
   { id: "keywords", label: "키워드 탐색", icon: Search, group: "워크스페이스" },
   { id: "ai", label: "AI 작업실", icon: Sparkles, group: "제작" },
-  { id: "video", label: "영상 스튜디오", icon: Clapperboard, group: "제작" },
   { id: "assets", label: "이미지 생성기", icon: Plus, group: "제작" },
   { id: "channels", label: "내 채널", icon: Users, group: "채널과 연결" },
   { id: "youtube", label: "YouTube 관리", icon: Youtube, group: "채널과 연결" },
@@ -134,9 +136,9 @@ function youtubeVideoId(value: string) {
   } catch { return null; }
 }
 
-function TrendCard({ trend, index, canSave, onSave, onCreateVideo }: {
+function TrendCard({ trend, index, canSave, onSave, onUseInAi }: {
   trend: SocialTrend; index: number; canSave: boolean; onSave: (trend: SocialTrend) => void;
-  onCreateVideo: (trend: SocialTrend) => void;
+  onUseInAi: (trend: SocialTrend) => void;
 }) {
   const videoId = trend.source === "youtube" ? youtubeVideoId(trend.url) : null;
   const [playerUrl, setPlayerUrl] = useState<string | null>(null);
@@ -202,14 +204,15 @@ function TrendCard({ trend, index, canSave, onSave, onCreateVideo }: {
       <div className="social-trend-keyword"><span>#{trend.keyword}</span>{trend.metric && <strong>{trend.metric}</strong>}{trend.details?.channelTitle && <span>{trend.details.channelTitle}</span>}{trend.details?.viewCount !== undefined && <span>조회 {new Intl.NumberFormat("ko-KR").format(trend.details.viewCount)}회</span>}{trend.details?.subscriberCount !== undefined && <span>구독자 {new Intl.NumberFormat("ko-KR").format(trend.details.subscriberCount)}명</span>}{trend.details?.viewCount !== undefined && trend.details?.subscriberCount !== undefined && trend.details.subscriberCount > 0 && <span>조회 ÷ 구독자 {(trend.details.viewCount / trend.details.subscriberCount).toFixed(1)}배</span>}{trend.details?.durationSeconds !== undefined && <span>{Math.floor(trend.details.durationSeconds / 60)}분 {trend.details.durationSeconds % 60}초</span>}{trend.details?.viewGrowth !== undefined && <span>이전 수집 대비 {trend.details.viewGrowth >= 0 ? "+" : ""}{new Intl.NumberFormat("ko-KR").format(trend.details.viewGrowth)}회</span>}</div>
       {playerError && <p className="desktop-trend-player-error" role="alert">{playerError} 원본 보기로 영상을 확인할 수 있습니다.</p>}
     </div>
-    <div className="desktop-trend-card-actions"><External url={originalUrl} className="desktop-trend-original"><ExternalLink size={14} />{trend.source === "youtube" ? "YouTube에서 보기" : "원본 보기"}</External><div className="desktop-trend-create-actions"><button type="button" className="social-button compact" disabled={!canSave} onClick={() => onSave(trend)}><Plus size={15} />아이디어로 저장</button><button type="button" className="social-button compact primary" disabled={!canSave} onClick={() => onCreateVideo(trend)}><Clapperboard size={15} />영상 만들기</button></div></div>
+    <div className="desktop-trend-card-actions"><External url={originalUrl} className="desktop-trend-original"><ExternalLink size={14} />{trend.source === "youtube" ? "YouTube에서 보기" : "원본 보기"}</External><div className="desktop-trend-create-actions"><button type="button" className="social-button compact" disabled={!canSave} onClick={() => onSave(trend)}><Plus size={15} />아이디어로 저장</button><button type="button" className="social-button compact primary" onClick={() => onUseInAi(trend)}><Sparkles size={15} />AI 작업실에서 사용</button></div></div>
   </article>;
 }
 
 export function App() {
   const [tab, setTab] = useState<Tab>("overview");
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
-  const [videoResearchSeed, setVideoResearchSeed] = useState<VideoResearchSeed | null>(null);
+  const [aiReferences, setAiReferences] = useState<AiMaterial[]>([]);
+  const [aiSelectionNotice, setAiSelectionNotice] = useState("");
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -237,6 +240,7 @@ export function App() {
   const [aiOutput, setAiOutput] = useState("");
   const [aiOutputLabel, setAiOutputLabel] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiStartedAt, setAiStartedAt] = useState<number>();
   const [aiError, setAiError] = useState("");
   const [copying, setCopying] = useState(false);
   const contentDialog = useRef<HTMLDialogElement>(null);
@@ -304,17 +308,27 @@ export function App() {
   const availableAi = aiStatus.providers.filter((provider) => provider.available);
   const count = (status: ContentStatus) => dashboard.content.filter((item) => item.status === status).length;
 
-  function openResearchVideo(seed: VideoResearchSeed) {
-    setVideoResearchSeed(seed);
-    setTab("video");
+  const aiCompiledContext = useMemo(() => {
+    try { return { text: composeContext(aiContext, aiReferences), error: "" }; }
+    catch (error) { return { text: "", error: errorMessage(error) }; }
+  }, [aiContext, aiReferences]);
+  function useAiMaterial(material: AiMaterial, mode: AiSelectionMode = "both") {
+    if (aiBusy) { setNotice({ tone: "info", text: "현재 AI 응답이 끝난 뒤 자료를 선택하세요. 진행 중인 요청은 유지합니다." }); return; }
+    try {
+      const next = applyMaterial({ topic: aiTopic, context: aiContext, references: aiReferences }, material, mode);
+      setAiTopic(next.topic); setAiReferences(next.references); setAiError("");
+      setAiSelectionNotice(mode === "topic" ? "선택한 키워드를 주제로 적용했습니다." : mode === "reference" ? "참고자료를 연결했습니다. 직접 입력한 맥락은 유지됩니다." : "주제와 참고자료를 함께 적용했습니다.");
+      setTab("ai");
+    } catch (error) { setAiError(errorMessage(error)); setTab("ai"); }
   }
-
-  function videoFromTrend(trend: SocialTrend) {
-    openResearchVideo({
-      requestId: crypto.randomUUID(), trendIds: [trend.id],
-      keyword: (trendKeyword.trim() || trend.keyword).replace(/\s+/g, " ").trim().slice(0, 100),
-      topic: trend.title.replace(/\s+/g, " ").trim().slice(0, 300)
-    });
+  function useTrendInAi(trend: SocialTrend) {
+    try { useAiMaterial(materialFromTrend(trend)); }
+    catch (error) { setAiError(errorMessage(error)); setTab("ai"); }
+  }
+  async function copyAiBrief() {
+    setAiError("");
+    try { await invoke("copy_text", { text: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences) }); setAiSelectionNotice("주제와 선택한 자료를 복사했습니다. Codexify가 연결된 ChatGPT 대화에 붙여넣으세요."); }
+    catch (error) { setAiError(errorMessage(error)); }
   }
 
   function renderContentCard(item: SocialContent) {
@@ -382,13 +396,16 @@ export function App() {
     finally { setRefreshingTrends(false); }
   }
 
-  async function generateAi(topic = aiTopic, context = aiContext, destination: "workspace" | "content" = "workspace") {
+  async function generateAi(topic = aiTopic, context: string | undefined = undefined, destination: "workspace" | "content" = "workspace") {
+    if (aiBusy) return;
+    const resolvedContext = context ?? aiCompiledContext.text;
+    if (context === undefined && aiCompiledContext.error) { setAiError(aiCompiledContext.error); return; }
     if (!topic.trim()) { setAiError("주제 또는 작성 방향을 입력하세요."); return; }
     if (!aiProvider) { setAiError("사용 가능한 AI 연결을 먼저 설정하세요."); return; }
-    setAiBusy(true); setAiError("");
+    setAiStartedAt(Date.now()); setAiBusy(true); setAiError("");
     try {
       const result = await invoke<{ text: string; provider: string; model?: string }>("ai_generate", {
-        input: { provider: aiProvider, platform: destination === "content" ? contentForm.platform : aiPlatform, topic: topic.trim(), context }
+        input: { provider: aiProvider, platform: destination === "content" ? contentForm.platform : aiPlatform, topic: topic.trim(), context: resolvedContext }
       });
       if (destination === "content") setContentForm((current) => ({ ...current, body: result.text }));
       else {
@@ -404,7 +421,7 @@ export function App() {
     const topic = "실제 수집된 최근 콘텐츠·키워드 10개의 공통 패턴과 내 채널에 적용할 콘텐츠 아이디어를 분석해줘.";
     const context = visibleTrends.map((trend, index) => `${index + 1}. 출처: ${sourceLabels[trend.source]}\n키워드: ${trend.keyword}\n제목: ${trend.title}\n원본 수치: ${trend.metric ?? "제공되지 않음"}\n조회수: ${trend.details?.viewCount ?? "제공되지 않음"}\n채널: ${trend.details?.channelTitle ?? "제공되지 않음"}\n구독자: ${trend.details?.subscriberCount ?? "제공되지 않음"}\n길이: ${trend.details?.durationSeconds ?? "제공되지 않음"}초\n링크: ${trend.url}\n수집: ${trend.fetchedAt}`).join("\n\n") +
       "\n\n위 제목과 출처 정보만 근거로 사용해줘. 원문을 읽었다고 주장하지 말고 사실과 추정을 구분해줘. 수치가 없는 검색 결과를 인기 순위로 해석하지 말아줘. 도입 훅, 주제, 표현 형식의 공통점을 분석하고 각 플랫폼 아이디어와 검증할 가설을 제안해줘.";
-    setAiTopic(topic); setAiContext(context.slice(0, 6000)); setAiOutput(""); setTab("ai");
+    setAiTopic(topic); setAiContext(context.slice(0, 6000)); setAiReferences([]); setAiOutput(""); setTab("ai");
     void generateAi(topic, context.slice(0, 6000));
   }
 
@@ -413,7 +430,7 @@ export function App() {
     openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", video: "영상 스튜디오", assets: "이미지 생성기", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
+  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
   const viewDescription = {
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
@@ -422,8 +439,7 @@ export function App() {
     channels: "다섯 플랫폼의 채널 정보와 콘텐츠를 한 곳에서 관리하세요.",
     youtube: "YouTube Data API로 채널의 공개 성과와 최근 영상을 확인하세요.",
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
-    ai: "연결된 로컬 AI로 채널에 맞는 초안과 패턴 리포트를 작성하세요.",
-    video: "주제·카테고리 또는 수집 자료로 영상 초안을 만들고, 모션과 음성을 편집해 MP4로 출력하세요.",
+    ai: "수집한 키워드로 주제를 고르고, 근거를 연결해 ChatGPT 또는 로컬 AI에서 초안을 만드세요.",
     assets: "이미지와 3D 에셋을 규격에 맞추고, 영상·프로젝트별로 모아 재사용하세요.",
     integrations: "ChatGPT 도구 연결부터 실제 업로드까지, 확인한 단계만 완료로 표시합니다.",
     settings: "내 기기의 데이터베이스와 AI, 수집 소스를 연결하세요."
@@ -450,33 +466,32 @@ export function App() {
           {tab !== "assets" && tab !== "integrations" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
           {tab !== "assets" && tab !== "integrations" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
-          {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onCreateVideo={videoFromTrend} />}
+          {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onUseInAi={useTrendInAi} />}
 
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} /></div>
-          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} researchSeed={videoResearchSeed} onResearchSeedHandled={(id) => setVideoResearchSeed((current) => current?.requestId === id ? null : current)} onOpenKeywords={() => setTab("keywords")} onOpenSettings={() => setTab("settings")} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
           <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
-          <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onCreateVideo={openResearchVideo} /></div>
+          <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>
 
           {tab === "content" && <>
             <section className="social-stats" aria-label="콘텐츠 현황"><div><span>불러온 콘텐츠</span><strong>{dashboard.content.length}<small>개</small></strong></div><div><span>검토할 초안</span><strong>{count("draft")}<small>개</small></strong></div><div><span>발행 계획</span><strong>{count("scheduled")}<small>개</small></strong></div><div><span>등록한 채널</span><strong>{dashboard.channels.length}<small>개</small></strong></div></section>
             <div className="social-content-toolbar"><div className="social-platform-filters" role="group" aria-label="플랫폼 필터"><button className={platformFilter === "all" ? "active" : ""} aria-pressed={platformFilter === "all"} onClick={() => setPlatformFilter("all")}>전체 채널</button>{SOCIAL_PLATFORMS.map((platform) => { const Icon = platforms[platform].icon; return <button key={platform} className={platformFilter === platform ? "active" : ""} aria-pressed={platformFilter === platform} onClick={() => setPlatformFilter(platform)}><Icon size={15} />{platforms[platform].label}</button>; })}</div><label className="social-search"><Search size={16} /><input aria-label="콘텐츠 검색" placeholder="콘텐츠 검색" value={contentSearch} onChange={(event) => setContentSearch(event.target.value)} /></label></div>
             <p className="social-plan-note"><CalendarClock size={15} />발행 계획은 한국 시간으로 관리하는 일정입니다. 플랫폼에 자동으로 게시하지 않습니다.</p>
-            {loading && dashboard.content.length === 0 ? <div className="social-loading" role="status"><LoaderCircle className="social-spin" size={22} />콘텐츠를 불러오는 중입니다.</div> : <ContentBoard items={visibleContent} renderContentCard={renderContentCard} onAddContent={(status) => openContent(undefined, { status })} canAddContent={dashboard.database.connected} showCreateDraft={!contentSearch} />}
+            {loading && dashboard.content.length === 0 ? <ActivitySkeleton label="콘텐츠를 불러오는 중입니다." showStatus/> : <ContentBoard items={visibleContent} renderContentCard={renderContentCard} onAddContent={(status) => openContent(undefined, { status })} canAddContent={dashboard.database.connected} showCreateDraft={!contentSearch} />}
             <div className="social-bottom-prompt"><TrendingUp size={20} /><div><strong>오늘은 어떤 콘텐츠를 만들까요?</strong><span>최신 키워드를 살펴보고, 실제 출처에서 아이디어를 가져오세요.</span></div><button className="social-button" onClick={() => setTab("trends")}>트렌드 탐색<ArrowRight size={16} /></button></div>
           </>}
 
           {tab === "trends" && <>
             <form className="social-trend-search" onSubmit={refreshTrends}><div><label htmlFor="social-trend-keyword">관심 키워드</label><div className="social-search"><Search size={18} /><input id="social-trend-keyword" placeholder="예: AI, 생산성, 로컬 여행" value={trendKeyword} maxLength={100} onChange={(event) => setTrendKeyword(event.target.value)} /></div></div><button className="social-button primary" disabled={refreshingTrends} type="submit">{refreshingTrends ? <LoaderCircle size={17} className="social-spin" /> : <Search size={17} />}{refreshingTrends ? "수집 중" : "키워드로 수집"}</button><p>키워드가 없으면 현재 트렌드를 수집합니다. YouTube·네이버 검색은 연결 설정의 API 정보가 필요합니다.</p></form>
             {trendWarnings.length > 0 && <div className="social-collection-warnings" role="status"><CircleAlert size={17} /><div><strong>일부 소스의 수집 상태를 확인하세요</strong>{trendWarnings.map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
-            <div className="social-section-heading"><div><h2>최근 수집 콘텐츠 · 키워드</h2><p>원본과 설명을 확인하고, 관심 있는 콘텐츠를 영상 초안이나 아이디어로 가져오세요.</p></div><button className="social-button" disabled={visibleTrends.length === 0 || availableAi.length === 0 || aiBusy} onClick={patternReport}><Sparkles size={16} />패턴 리포트</button></div>
+            <div className="social-section-heading"><div><h2>최근 수집 콘텐츠 · 키워드</h2><p>원본과 설명을 확인하고, 관심 있는 콘텐츠를 AI 작업실의 주제·참고자료로 가져오세요.</p></div><button className="social-button" disabled={visibleTrends.length === 0 || availableAi.length === 0 || aiBusy} onClick={patternReport}><Sparkles size={16} />패턴 리포트</button></div>
             <div className="social-source-filters" role="group" aria-label="트렌드 출처 필터">{(["all", "google_trends", "youtube", "naver_blog"] as const).map((source) => <button key={source} aria-pressed={trendSource === source} className={trendSource === source ? "active" : ""} onClick={() => setTrendSource(source)}>{source === "all" ? "전체 출처" : sourceLabels[source]}</button>)}</div>            <div className="desktop-trend-filters" role="group" aria-label="YouTube 콘텐츠 조건"><span>YouTube 조건</span>{([
               ["all", "전체"], ["short", "3분 이하 영상"], ["small_channel", "작은 채널 · 높은 조회"]
             ] as const).map(([filter, label]) => <button key={filter} type="button" aria-pressed={trendFilter === filter} className={trendFilter === filter ? "active" : ""} onClick={() => setTrendFilter(filter)}>{label}</button>)}</div>
             {trendFilter !== "all" && <p className="desktop-trend-filter-note">{trendFilter === "short" ? "원본에 길이가 제공된 3분 이하 영상입니다. 세로 형식이나 Shorts 분류가 확인된 것은 아닙니다." : "구독자가 1만 명 이하이고 조회수가 구독자 수의 5배 이상인 영상입니다. 실제 제공된 수치가 있는 결과만 표시합니다."}</p>}
 
-            {loading && dashboard.trends.length === 0 ? <div className="social-loading"><LoaderCircle size={22} className="social-spin" />트렌드를 불러오는 중입니다.</div> : visibleTrends.length === 0 ? <EmptyState icon={TrendingUp} title={dashboard.trends.length ? "조건에 맞는 결과가 없어요" : "아직 수집한 트렌드가 없어요"} text={dashboard.trends.length ? "조건을 바꾸거나 관심 키워드로 새 콘텐츠를 수집하세요." : "트렌드 수집을 누르면 실제 출처의 키워드와 콘텐츠가 이곳에 표시됩니다."}><button className="social-button" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={16} />첫 트렌드 수집</button></EmptyState> : <div className="social-trend-list">{visibleTrends.map((trend, index) => <TrendCard key={trend.id} trend={trend} index={index} canSave={dashboard.database.connected} onSave={useTrend} onCreateVideo={videoFromTrend} />)}</div>}
+            {loading && dashboard.trends.length === 0 ? <ActivitySkeleton label="트렌드를 불러오는 중입니다." showStatus/> : visibleTrends.length === 0 ? <EmptyState icon={TrendingUp} title={dashboard.trends.length ? "조건에 맞는 결과가 없어요" : "아직 수집한 트렌드가 없어요"} text={dashboard.trends.length ? "조건을 바꾸거나 관심 키워드로 새 콘텐츠를 수집하세요." : "트렌드 수집을 누르면 실제 출처의 키워드와 콘텐츠가 이곳에 표시됩니다."}><button className="social-button" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={16} />첫 트렌드 수집</button></EmptyState> : <div className="social-trend-list">{visibleTrends.map((trend, index) => <TrendCard key={trend.id} trend={trend} index={index} canSave={dashboard.database.connected} onSave={useTrend} onUseInAi={useTrendInAi} />)}</div>}
             <div className="social-trend-footnote"><ShieldCheck size={17} /><p>검색 결과의 순서는 인기 순위를 의미하지 않습니다. Threads·TikTok·Instagram의 실시간 인기 콘텐츠는 현재 수집하지 않으며, 각 플랫폼에서 직접 확인할 수 있습니다.</p></div>
             <div className="social-external-platforms">{(["threads", "tiktok", "instagram"] as const).map((platform) => <External key={platform} url={{ threads: "https://www.threads.com/", tiktok: "https://www.tiktok.com/", instagram: "https://www.instagram.com/" }[platform]}><PlatformMark platform={platform} small /><span>{platforms[platform].label} 열기</span><ArrowUpRight size={15} /></External>)}</div>
           </>}
@@ -503,10 +518,17 @@ export function App() {
           </>}
 
           {tab === "ai" && <>
+            <AiDiscovery trends={dashboard.trends} loading={loading} databaseConnected={dashboard.database.connected} busy={aiBusy} references={aiReferences} onSelect={useAiMaterial} onRefresh={loadDashboard} onExplore={() => setTab("keywords")} />
+            {aiSelectionNotice && <p className="social-notice success" role="status">{aiSelectionNotice}</p>}
             {aiStatusError && <div className="social-notice error" role="alert"><CircleAlert size={17} /><span>{aiStatusError}</span></div>}
-            <div className="social-ai-providers">{aiStatus.providers.map((provider) => <button className={`social-ai-provider ${aiProvider === provider.id ? "selected" : ""}`} key={provider.id} disabled={!provider.available || aiBusy} aria-pressed={aiProvider === provider.id} onClick={() => setAiProvider(provider.id)}><div><Sparkles size={18} /><strong>{provider.label}</strong><span className={provider.available ? "available" : "unavailable"}>{provider.available ? "연결됨" : "연결 필요"}</span></div><p>{provider.detail}</p><small>{provider.generationVerified ? "실제 생성 확인됨" : provider.available ? "생성 확인 전" : "연결 설정에서 AI를 연결하세요"}</small></button>)}{aiChecking && aiStatus.providers.length === 0 && <div className="social-loading"><LoaderCircle size={22} className="social-spin" />AI 연결을 확인하는 중입니다.</div>}</div>
-            {!aiChecking && availableAi.length === 0 && <div className="social-notice info"><CircleAlert size={18} /><span>사용 가능한 AI 연결이 없습니다. 로컬 제공자의 로그인과 서버 연결을 설정한 뒤 연결 확인을 누르세요.</span></div>}
-            <div className="social-ai-workbench"><form className="social-ai-brief" onSubmit={(event) => { event.preventDefault(); void generateAi(); }}><div className="social-section-heading"><h2>어떤 콘텐츠를 만들까요?</h2></div><label htmlFor="social-ai-platform">대상 플랫폼</label><select id="social-ai-platform" value={aiPlatform} onChange={(event) => setAiPlatform(event.target.value as SocialPlatform)} disabled={aiBusy}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select><label htmlFor="social-ai-topic">주제와 작성 방향</label><textarea id="social-ai-topic" value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="예: AI로 반복 작업을 줄이는 팁 3개를 소개하는 30초 릴스. 초보자도 따라 할 수 있도록 작성해줘." rows={5} maxLength={600} required disabled={aiBusy} /><label htmlFor="social-ai-context">참고 자료와 맥락 <small>선택</small></label><textarea id="social-ai-context" value={aiContext} onChange={(event) => setAiContext(event.target.value)} placeholder="실제 출처 URL, 핵심 사실, 타깃 독자, 원하는 말투 등을 입력하세요." rows={6} maxLength={6000} disabled={aiBusy} /><p className="social-form-hint">입력한 자료는 선택한 AI 제공자에게 전달됩니다. 생성 결과의 사실과 출처를 확인한 뒤 사용하세요.</p>{aiError && <p className="social-form-error" role="alert">{aiError}</p>}<div className="social-form-actions"><button className="social-button primary" type="submit" disabled={aiBusy || availableAi.length === 0}>{aiBusy ? <LoaderCircle size={17} className="social-spin" /> : <Sparkles size={17} />}{aiBusy ? "작성 중" : "AI로 작성"}</button></div></form><section className="social-ai-result" aria-label="AI 생성 결과"><div className="social-result-header"><h2>작성 결과</h2>{aiOutputLabel && <small>{aiOutputLabel}</small>}</div>{aiOutput ? <><label className="social-sr-only" htmlFor="social-ai-output">AI 결과 수정</label><textarea id="social-ai-output" value={aiOutput} onChange={(event) => setAiOutput(event.target.value)} spellCheck={false} /><div className="social-result-actions"><span>검토하고 편집한 뒤 초안으로 저장하세요.</span><div className="desktop-result-buttons"><button type="button" className="social-button" disabled={copying || aiBusy} onClick={() => {
+            <details className="ai-provider-details"><summary>직접 작성에 사용할 로컬 AI 제공자 · 선택</summary><div className="social-ai-providers">{aiStatus.providers.map((provider) => <button className={`social-ai-provider ${aiProvider === provider.id ? "selected" : ""}`} key={provider.id} disabled={!provider.available || aiBusy} aria-pressed={aiProvider === provider.id} onClick={() => setAiProvider(provider.id)}><div><Sparkles size={18} /><strong>{provider.label}</strong><span className={provider.available ? "available" : "unavailable"}>{provider.available ? "연결됨" : "연결 필요"}</span></div><p>{provider.detail}</p><small>{provider.generationVerified ? "실제 생성 확인됨" : provider.available ? "생성 확인 전" : "연결 설정에서 AI를 연결하세요"}</small></button>)}{aiChecking && aiStatus.providers.length === 0 && <ActivitySkeleton label="AI 연결을 확인하는 중입니다." rows={2}/>}</div></details>
+            {!aiChecking && availableAi.length === 0 && <div className="social-notice info"><CircleAlert size={18} /><span>로컬 AI 제공자가 없어도 주제와 자료를 선택해 ChatGPT 요청을 복사할 수 있습니다. Codexify 연결은 연결·게시 QA에서 설정하세요.</span></div>}
+            <div className="social-ai-workbench"><form className="social-ai-brief" onSubmit={(event) => { event.preventDefault(); void generateAi(); }}><div className="social-section-heading"><h2>어떤 콘텐츠를 만들까요?</h2></div><label htmlFor="social-ai-platform">대상 플랫폼</label><select id="social-ai-platform" value={aiPlatform} onChange={(event) => setAiPlatform(event.target.value as SocialPlatform)} disabled={aiBusy}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select><label htmlFor="social-ai-topic">주제와 작성 방향</label><textarea id="social-ai-topic" value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="예: AI로 반복 작업을 줄이는 팁 3개를 소개하는 30초 릴스. 초보자도 따라 할 수 있도록 작성해줘." rows={5} maxLength={600} required disabled={aiBusy} /><label htmlFor="social-ai-context">참고 자료와 맥락 <small>선택</small></label><textarea id="social-ai-context" value={aiContext} onChange={(event) => setAiContext(event.target.value)} placeholder="실제 출처 URL, 핵심 사실, 타깃 독자, 원하는 말투 등을 입력하세요." rows={6} maxLength={6000} disabled={aiBusy} />
+              <div className="ai-reference-list" aria-label="선택한 참고자료">{aiReferences.map(item => <div className="ai-reference-item" key={item.id}><BookOpen size={16}/><span><strong>{item.trend.title}</strong><small>{item.keyword} · {sourceLabels[item.trend.source]}</small></span><button type="button" className="social-dismiss" aria-label={`참고자료 해제: ${item.trend.title}`} disabled={aiBusy} onClick={() => { setAiReferences(current => current.filter(r => r.id !== item.id)); setAiSelectionNotice("참고자료를 해제했습니다. 직접 작성한 맥락은 유지됩니다."); }}><X size={15}/></button></div>)}</div>
+              <p className={`ai-context-budget${aiCompiledContext.error ? " error" : ""}`} role={aiCompiledContext.error ? "alert" : undefined}>{aiCompiledContext.error || `AI에 전달할 맥락 ${aiCompiledContext.text.length.toLocaleString()} / 6,000자 · 자료 ${aiReferences.length}개`}</p>
+              {!aiCompiledContext.error && <details className="ai-context-preview"><summary>전달할 참고자료 확인</summary><pre>{aiCompiledContext.text || "선택하거나 입력한 참고자료가 없습니다."}</pre></details>}
+              <div className="ai-chat-handoff"><p>ChatGPT가 작성하고 Codexify가 Studio 도구를 연결합니다. 복사만으로 생성이 시작되지는 않습니다.</p><button type="button" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void copyAiBrief()}><Copy size={16}/>ChatGPT 요청 복사</button></div>
+              <p className="social-form-hint">입력한 자료는 선택한 AI 제공자에게 전달됩니다. 생성 결과의 사실과 출처를 확인한 뒤 사용하세요.</p>{aiError && <p className="social-form-error" role="alert">{aiError}</p>}<div className="social-form-actions"><button className="social-button primary" type="submit" disabled={aiBusy || availableAi.length === 0 || Boolean(aiCompiledContext.error)}>{aiBusy ? <LoaderCircle size={17} className="social-spin" /> : <Sparkles size={17} />}{aiBusy ? "작성 중" : "AI로 작성"}</button></div></form><section className="social-ai-result" aria-label="AI 생성 결과"><div className="social-result-header"><h2>작성 결과</h2>{aiOutputLabel && <small>{aiOutputLabel}</small>}</div>{aiBusy && <ActivityStatus title="AI 응답을 기다리는 중" since={aiStartedAt} detail="선택한 제공자에 요청을 보냈습니다. 완료 시각이나 진행률은 제공되지 않습니다. 기존 작성 결과와 입력은 보존하고 실제 응답이 도착하면 갱신합니다."/>}{aiOutput ? <><label className="social-sr-only" htmlFor="social-ai-output">AI 결과 수정</label><textarea className="ai-complete-output" id="social-ai-output" disabled={aiBusy} value={aiOutput} onChange={(event) => setAiOutput(event.target.value)} spellCheck={false} /><div className="social-result-actions"><span>검토하고 편집한 뒤 초안으로 저장하세요.</span><div className="desktop-result-buttons"><button type="button" className="social-button" disabled={copying || aiBusy} onClick={() => {
       setCopying(true); void invoke("copy_text", { text: aiOutput }).then(() => setNotice({ tone: "success", text: "작성 결과를 클립보드에 복사했습니다." })).catch((error: unknown) => setNotice({ tone: "error", text: errorMessage(error) })).finally(() => setCopying(false));
     }}>{copying ? <LoaderCircle size={16} className="social-spin" /> : <Copy size={16} />}복사</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}><FileText size={16} />콘텐츠로 가져오기</button></div></div></> : <EmptyState icon={Sparkles} title={aiBusy ? "초안을 작성하고 있어요" : "아이디어를 초안으로 바꿔보세요"} text={aiBusy ? "결과가 도착하면 이곳에서 검토하고 수정할 수 있습니다." : "왼쪽에 주제와 참고 자료를 입력하면 채널에 맞는 결과가 이곳에 표시됩니다."} />}</section></div>
           </>}

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import type { SocialPlatform } from "./types";
 import "./OAuthPanel.css";
+import { ActivityStatus } from "./ActivityStatus";
 
 type OAuthProviderStatus = {
   platform: SocialPlatform;
@@ -181,7 +182,7 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
     </form>}
 
     {status.pending && <div className="desktop-oauth-pending">
-      <p><LoaderCircle size={14} className="social-spin" aria-hidden="true" /><span>브라우저에서 {info.label} 로그인을 완료하세요.{info.https ? " 로그인 후 이동한 전체 주소를 붙여넣으세요." : " 기본 로컬 콜백 주소를 사용하면 연결이 자동으로 반영됩니다."}</span></p>
+      <ActivityStatus title={`${info.label} 브라우저 로그인 대기`} state="waiting" clock={false} detail={info.https ? "브라우저에서 로그인 후 이동한 전체 주소를 아래에 붙여넣으세요." : "기본 로컬 콜백 주소를 사용하면 인증 응답 수신 후 연결이 반영됩니다. 로그인 요청은 5분 뒤 만료됩니다."}/>
       <form onSubmit={(event) => void complete(event)} autoComplete="off"><label htmlFor={`oauth-callback-${status.platform}`}>로그인 후 이동한 전체 주소 <small>{info.https ? "필수" : "자동 연결이 안 될 때"}</small></label><div><input id={`oauth-callback-${status.platform}`} type="password" autoComplete="new-password" spellCheck={false} value={callbackUrl} onChange={(event) => setCallbackUrl(event.target.value)} placeholder="등록한 리디렉션 주소로 이동한 URL 전체" required disabled={disabled} maxLength={8192} /><button type="submit" className="social-button compact" disabled={disabled || !callbackUrl.trim()}>{currentBusy === "complete" ? <LoaderCircle size={14} className="social-spin" /> : <Check size={14} />}연결 완료</button></div></form>
     </div>}
 
@@ -303,7 +304,7 @@ export function OAuthPanel({ active }: { active: boolean }) {
     <div className="desktop-oauth-summary"><span>계정 연결 <strong>{connected}</strong><small>/ 5</small></span><button type="button" className="social-button compact" disabled={controlsBusy} onClick={() => void reload(true)}><RefreshCw size={14} className={loading ? "social-spin" : ""} />{loading ? "확인 중" : "연결 상태 확인"}</button></div>
     {error && <div className="social-notice error" role="alert"><CircleAlert size={17} /><span>{error}{status ? " 이전 연결 상태가 표시됩니다." : ""}</span><button type="button" className="social-button compact" disabled={controlsBusy} onClick={() => void reload(true)}>다시 확인</button></div>}
     {notice && !notice.platform && <div className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "error" ? <CircleAlert size={17} /> : <Check size={17} />}<span>{notice.text}</span></div>}
-    {!status && loading ? <div className="social-loading" role="status"><LoaderCircle size={22} className="social-spin" />저장된 SNS 연결을 확인하고 있습니다.</div> : status ? <div className="desktop-oauth-providers">{providerOrder.map((platform) => {
+    {!status && loading ? <ActivityStatus title="저장된 SNS 연결을 확인하는 중" detail="OS 저장소의 연결 상태를 읽습니다. 계정 정보와 인증 토큰은 이 상태 표시에 노출되지 않습니다."/> : status ? <div className="desktop-oauth-providers">{providerOrder.map((platform) => {
       const provider = status.providers.find((item) => item.platform === platform);
       return provider ? <ProviderCard key={platform} status={provider} active={active} busy={busy} storageLocked={keychainBlocked || keychainRetryBusy || checkingStatus} notice={notice} onAction={action} /> : null;
     })}</div> : null}

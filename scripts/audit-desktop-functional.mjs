@@ -70,7 +70,7 @@ try {
   await check('all 11 navigation destinations render with unavailable-service errors contained',async()=>{
     const {page,context,errors,calls}=await screen();
     try {
-      const names=['오버뷰','콘텐츠 플래너','트렌드 탐색','키워드 탐색','AI 작업실','영상 스튜디오','이미지 생성기','내 채널','YouTube 관리','SNS 로그인','연결 설정'];
+      const names=['오버뷰','콘텐츠 플래너','트렌드 탐색','키워드 탐색','AI 작업실','이미지 생성기','내 채널','YouTube 관리','SNS 로그인','연결·게시 QA','연결 설정'];
       for(const name of names){await page.locator('.social-nav').getByRole('button',{name,exact:true}).click();await page.getByRole('heading',{name,exact:true,level:1}).waitFor();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));}
       assert.deepEqual(errors,[]);
       return {destinations:names,observedCommands:[...new Set(calls.map(c=>c.command))]};
