@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsPanel } from "./SettingsPanel";
 import { IntegrationPanel } from "./IntegrationPanel";
+import { CodingPanel } from "./CodingPanel";
 import { openConnectedChat, sendToConnectedChat } from "./codexify-client";
 import { AssetStudio } from "./assets/AssetStudio";
 import { AiDiscovery } from "./AiDiscovery";
@@ -16,7 +17,7 @@ import { OverviewPanel } from "./OverviewPanel";
 import { ContentBoard } from "./ContentBoard";
 import {
   ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
-  CircleAlert, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
+  CircleAlert, Code2, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
   LayoutDashboard, LoaderCircle, Music2, NotebookPen, Play, Plus, RefreshCw,
   Search, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
 } from "lucide-react";
@@ -28,7 +29,7 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "integrations" | "settings";
+type Tab = "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "integrations" | "settings" | "coding";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
@@ -60,6 +61,7 @@ const tabs = [
   { id: "keywords", label: "키워드 탐색", icon: Search, group: "워크스페이스" },
   { id: "ai", label: "AI 작업실", icon: Sparkles, group: "제작" },
   { id: "assets", label: "이미지 생성기", icon: Plus, group: "제작" },
+  { id: "coding", label: "코딩", icon: Code2, group: "제작" },
   { id: "channels", label: "내 채널", icon: Users, group: "채널과 연결" },
   { id: "youtube", label: "YouTube 관리", icon: Youtube, group: "채널과 연결" },
   { id: "oauth", label: "SNS 로그인", icon: ShieldCheck, group: "채널과 연결" },
@@ -446,7 +448,7 @@ export function App() {
     openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
+  const viewTitle = { overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", coding: "코딩", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
   const viewDescription = {
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
@@ -457,6 +459,7 @@ export function App() {
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
     ai: "수집한 키워드로 주제를 고르고, 근거를 연결해 ChatGPT 또는 로컬 AI에서 초안을 만드세요.",
     assets: "이미지와 3D 에셋을 규격에 맞추고, 영상·프로젝트별로 모아 재사용하세요.",
+    coding: "Codexify를 실행하고 공개 MCP 주소를 연결해, 선택한 프로젝트의 작업을 ChatGPT에 요청하세요.",
     integrations: "ChatGPT 도구 연결부터 실제 업로드까지, 확인한 단계만 완료로 표시합니다.",
     settings: "내 기기의 데이터베이스와 AI, 수집 소스를 연결하세요."
   }[tab];
@@ -474,19 +477,20 @@ export function App() {
       </aside>
 
       <div className="social-shell">
-        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("overview")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><span className="social-local-label">DESKTOP</span><div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div></div></header>
+        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("overview")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><span className="social-local-label">DESKTOP</span>{tab !== "coding" && <div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div>}</div></header>
         <main id="social-main" className="social-main" tabIndex={-1}>
-          <div className="social-page-heading"><div><h1>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={tab !== "assets" && loading} onClick={() => { if (tab === "assets" || tab === "integrations") setAssetRefreshKey(key => key + 1); else { void loadDashboard(); void checkAi(); } }}><RefreshCw size={17} className={tab !== "assets" && loading ? "social-spin" : ""} /></button>{tab === "channels" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openChannel()}><Plus size={17} />채널 등록</button> : tab === "content" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17} />새 콘텐츠</button> : tab === "trends" ? <button className="social-button primary" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={17} className={refreshingTrends ? "social-spin" : ""} />{refreshingTrends ? "수집 중" : "트렌드 수집"}</button> : tab === "ai" ? <button className="social-button" disabled={aiChecking} onClick={() => void checkAi()}><RefreshCw size={17} className={aiChecking ? "social-spin" : ""} />연결 확인</button> : null}</div></div>
+          <div className="social-page-heading"><div><h1>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={tab !== "assets" && tab !== "coding" && loading} onClick={() => { if (tab === "assets" || tab === "integrations" || tab === "coding") setAssetRefreshKey(key => key + 1); else { void loadDashboard(); void checkAi(); } }}><RefreshCw size={17} className={tab !== "assets" && tab !== "coding" && loading ? "social-spin" : ""} /></button>{tab === "channels" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openChannel()}><Plus size={17} />채널 등록</button> : tab === "content" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17} />새 콘텐츠</button> : tab === "trends" ? <button className="social-button primary" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={17} className={refreshingTrends ? "social-spin" : ""} />{refreshingTrends ? "수집 중" : "트렌드 수집"}</button> : tab === "ai" ? <button className="social-button" disabled={aiChecking} onClick={() => void checkAi()}><RefreshCw size={17} className={aiChecking ? "social-spin" : ""} />연결 확인</button> : null}</div></div>
 
           {notice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={18} /> : <CircleAlert size={18} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></button></div>}
-          {tab !== "assets" && tab !== "integrations" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
-          {tab !== "assets" && tab !== "integrations" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
+          {tab !== "assets" && tab !== "integrations" && tab !== "coding" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
+          {tab !== "assets" && tab !== "integrations" && tab !== "coding" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
           {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onUseInAi={useTrendInAi} />}
 
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
-          <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} /></div>
+          <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} onCoding={() => setTab("coding")} /></div>
+          <div hidden={tab !== "coding"}><CodingPanel active={tab === "coding"} refreshKey={assetRefreshKey} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>
 

@@ -10,17 +10,19 @@ AI-first DAG 실행기 전체 구현과는 별개입니다. ChatGPT가 생성과
 
 0.1.18부터 공식 설치 파일은 Codexify 1.7.0과 Cloudflare CLI를 함께 포함합니다. 빌드에서 공식 배포 파일의 SHA256을 검증하고 라이선스를 동봉합니다. 앱의 Rust 백엔드만 정해진 실행 파일과 인자를 실행하며, React에는 셸 실행 권한이나 owner chat 토큰을 전달하지 않습니다.
 
-**연결·게시 QA → Codexify 관리**에서 포함된 버전, Source, 로컬 포트, 실행 상태, Doctor를 확인합니다. Source는 기본적으로 `~/projects`이며 특정 대화의 작업 프로젝트와 별개입니다. 기존 외부 브리지가 응답하면 이를 재사용합니다. 앱에서 시작한 프로세스만 종료하고, 별도로 설치된 시스템 서비스의 설정·시작·중지와 기존 Cloudflare 터널은 건드리지 않습니다. 앱에서 시작한 Codexify와 프록시는 앱 종료·업데이트 재시작 때 함께 종료합니다.
+0.1.19부터 왼쪽 메뉴의 **코딩**에서 포함된 버전, Source, 로컬 포트, 실행 상태, Doctor와 연결된 ChatGPT 대화를 확인합니다. Source는 기본적으로 `~/projects`이며 특정 대화의 작업 프로젝트와 별개입니다. 기존 외부 브리지가 응답하면 이를 재사용합니다. 앱에서 시작한 프로세스만 종료하고, 별도로 설치된 시스템 서비스의 설정·시작·중지와 기존 터널은 건드리지 않습니다. 앱에서 시작한 Codexify와 프록시는 앱 종료·업데이트 재시작 때 함께 종료합니다.
 
-**Codexify · 프록시 시작**은 로컬 브리지를 확인한 뒤 앱 소유의 Cloudflare Quick Tunnel을 실행합니다. 공개 주소의 HTTPS `/health` 응답까지 확인한 후 `https://…trycloudflare.com/mcp`를 로컬 앱 설정의 `codexify-proxy.json`에 저장합니다. 앱이 사용하는 owner chat 및 MCP 연결 주소는 계속 localhost이며 공개 주소로 대체하지 않습니다. 기존 외부 설정의 `port`는 실행 중인 실제 포트와 일치해야 합니다. 설정에 3000이 남아 있는데 실행 옵션은 21228이면 Doctor가 다른 주소를 검사하므로 설정만 정정합니다.
+프록시에서 **Cloudflare** 또는 **ngrok**를 선택하고 시작하면 로컬 브리지를 확인한 뒤 앱 소유의 터널을 실행합니다. 두 프록시는 동시에 사용할 수 있으며 선택을 바꾸거나 한쪽을 중지해도 다른 쪽은 유지합니다. 공개 주소의 HTTPS `/health` 응답까지 확인한 후 `/mcp` 주소를 로컬 앱 설정의 `codexify-proxy.json`(Cloudflare), `codexify-proxy-ngrok.json`(ngrok)에 각각 저장합니다. 앱이 사용하는 owner chat 및 MCP 연결 주소는 계속 localhost이며 공개 주소로 대체하지 않습니다. 기존 외부 설정의 `port`는 실행 중인 실제 포트와 일치해야 합니다. 설정에 3000이 남아 있는데 실행 옵션은 21228이면 Doctor가 다른 주소를 검사하므로 설정만 정정합니다.
 
-**공개 MCP 주소 복사**로 ChatGPT의 플러그인 등록 화면에 주소를 입력합니다. 앱의 주소 저장은 ChatGPT 플러그인 등록 완료를 뜻하지 않습니다. 공개 문서의 등록 절차는 ChatGPT 화면에서 수행하며, 앱은 비공개 API나 브라우저 세션 쿠키로 이를 우회하지 않습니다. Quick Tunnel은 재시작할 때 주소가 바뀌므로 등록 주소 갱신이 필요합니다. 기존 플러그인 URL·대화 연결은 자동으로 덮어쓰지 않습니다. 고정 주소가 필요하면 계정에 연결한 named tunnel을 별도로 구성해야 합니다.
+Cloudflare 실행 파일은 설치 앱에 포함됩니다. ngrok는 별도로 설치된 공식 CLI와 기존 계정 설정을 사용합니다. macOS는 Homebrew 설치 경로, Windows는 공식 설치 경로 또는 Scoop 설치 경로에서 찾습니다. CLI가 없거나 계정 인증 또는 세션 한도 문제로 시작할 수 없으면 코딩 화면에서 원인과 공식 설치·설정 링크를 제공합니다. 인증 토큰은 앱 입력창이나 채팅에 넣지 않습니다. 기존 ngrok 설정은 수정하지 않으며 실행 시 검사 화면과 로그 파일을 비활성화하는 임시 설정만 적용합니다.
+
+**공개 MCP 주소 복사**로 선택한 프록시의 주소를 ChatGPT 플러그인 등록 화면에 입력합니다. 앱의 주소 저장은 ChatGPT 플러그인 등록 완료를 뜻하지 않습니다. 공개 문서의 등록 절차는 ChatGPT 화면에서 수행하며, 앱은 비공개 API나 브라우저 세션 쿠키로 이를 우회하지 않습니다. Quick Tunnel은 재시작할 때 주소가 바뀌므로 등록 주소 갱신이 필요합니다. 기존 플러그인 URL·대화 연결은 자동으로 덮어쓰지 않습니다. ngrok 주소는 계정의 도메인 설정에 따라 결정됩니다.
 
 일부 로컬 DNS가 새 Quick Tunnel 주소를 찾지 못하면, 공개 주소 검증에 한해 Cloudflare의 공식 HTTPS DNS 조회 결과를 사용합니다. 생성된 호스트의 공개 IP만 허용하고 HTTPS 인증서 검증을 유지하며 시스템 DNS 설정은 변경하지 않습니다.
 
 Doctor의 시스템 서비스 결과와 선택된 앱 브리지의 연결 상태를 각각 표시합니다. 다른 포트·다른 설정으로 실행된 시스템 서비스가 정상이라고 해서 이 앱 브리지의 연결을 확인한 것으로 표시하지 않습니다.
 
-공식 참고: [Codexify 1.7.0](https://github.com/devnoname120/codexify/releases/tag/v1.7.0), [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/), [ChatGPT MCP 플러그인 연결](https://developers.openai.com/plugins/build/app-quickstart).
+공식 참고: [Codexify 1.7.0](https://github.com/devnoname120/codexify/releases/tag/v1.7.0), [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/), [ngrok CLI](https://ngrok.com/docs/agent/cli/), [ngrok 설정](https://ngrok.com/docs/agent/config/), [ChatGPT MCP 플러그인 연결](https://developers.openai.com/plugins/build/app-quickstart).
 
 ## 주제 발견과 자료 선택
 
@@ -44,7 +46,7 @@ AI 작업실 상단의 ‘오늘의 주제 후보’는 현재 조회한 트렌�
 
 ## 설치 앱에서 연결하기
 
-1. **연결·게시 QA → ChatGPT · Codexify**에서 로컬 MCP 주소, 등록한 ChatGPT 플러그인 링크, 실제 프로젝트 절대 경로를 저장합니다. 대화 링크는 선택 사항입니다.
+1. **코딩 → ChatGPT · Codexify**에서 로컬 MCP 주소, 등록한 ChatGPT 플러그인 링크, 실제 프로젝트 절대 경로를 저장합니다. 대화 링크는 선택 사항입니다.
 2. 기존 Codexify 설정에 **Codexify direct 설정 복사**의 조각을 병합하고 다시 실행합니다. 기존 인증·터널·다른 MCP 서버 설정은 유지합니다. 조각은 설치된 Studio 실행 파일과 `agentChat.enabled=true`를 포함합니다.
 3. 등록한 ChatGPT 플러그인의 도구 목록을 새로고침하고 새 대화를 시작합니다. 앱에서 **대화 시작 안내 복사**로 안내를 가져와 ChatGPT에 붙여넣습니다.
 4. 앱의 대화 목록을 새로고침하고 이 프로젝트의 대화를 직접 선택해 저장합니다. 앱 안의 채팅, AI 작업실, 이미지 작업 큐에서 요청을 보낼 수 있습니다.

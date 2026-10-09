@@ -10,15 +10,17 @@ const conversationId = 'a'.repeat(64);
 let profile = {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
 let messages = [], waiting = false, acknowledged = false;
 let runtime = {binaryAvailable:true,bundled:true,version:'1.7.0',configPath:'/fixture/config/codexify.json',sourceRoot:'/projects',port:21228,running:true,managed:false,pid:700,service:{installed:true,running:false,enabled:true},message:'기존 브리지에 연결했습니다.'};
-let proxy = {available:true,running:false,managed:false,mcpUrl:null,message:'프록시 시작 준비됨'};
+let proxies = {cloudflare:{provider:'cloudflare',available:true,running:false,managed:false,mcpUrl:null,message:'프록시 시작 준비됨'},ngrok:{provider:'ngrok',available:false,running:false,managed:false,mcpUrl:null,message:'ngrok CLI를 설치하세요.'}};
+let ngrokConfigured = false;
 const calls = [], errors = [];
-const server = await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false}});
+const out=resolve('docs/review/codexify-app');await mkdir(out,{recursive:true});
+const server = await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false,watch:{ignored:['**/src-tauri/**']}}});
 await server.listen();
 const browser = await chromium.launch({headless:true});
 const page = await browser.newPage({viewport:{width:1380,height:950},reducedMotion:'reduce'});
 await page.exposeFunction('__qaInvoke', async (command,args={}) => {
   calls.push({command,args});
-  if(command==='get_dashboard')return {channels:[],content:[],trends:[],integrations:[],database:{connected:false,message:'QA fixture'}};
+  if(command==='get_dashboard')throw new Error('QA DB unavailable');
   if(command==='ai_status')return {providers:[],defaultProvider:null};
   if(command==='search_keywords')return {items:[],total:0,libraryCount:0,warnings:[]};
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{studio:{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'test'};
@@ -29,11 +31,16 @@ await page.exposeFunction('__qaInvoke', async (command,args={}) => {
     runtime={...runtime,sourceRoot:args.input.sourceRoot==='~/projects'?'/fixture-home/projects':args.input.sourceRoot,message:'Source를 저장했습니다.'};return {...runtime};
   }
   if(command==='codexify_runtime_start'){if(!runtime.running)runtime={...runtime,running:true,managed:true,pid:701,message:'앱 Codexify 시작됨'};return {...runtime};}
-  if(command==='codexify_runtime_stop'){assert.equal(runtime.managed,true);runtime={...runtime,running:false,managed:false,pid:null,message:'앱 Codexify 종료됨'};proxy={...proxy,running:false,managed:false,mcpUrl:null};return {...runtime};}
+  if(command==='codexify_runtime_stop'){assert.equal(runtime.managed,true);runtime={...runtime,running:false,managed:false,pid:null,message:'앱 Codexify 종료됨'};for(const provider of Object.keys(proxies))if(proxies[provider].managed)proxies[provider]={...proxies[provider],running:false,managed:false,mcpUrl:null};return {...runtime};}
   if(command==='codexify_runtime_doctor')return {checks:[{id:'runtime',status:'pass',label:'Codexify 실행 파일',message:'앱 포함 버전 v1.7.0'},{id:'service',status:'failure',label:'시스템 서비스',message:'시스템 서비스는 실행 중이 아닙니다.'},{id:'health',status:'pass',label:'앱 브리지',message:'로컬 MCP 상태 확인됨'}],failures:1,bridgeHealthy:true,message:'앱 브리지는 정상이며 시스템 서비스 상태를 확인하세요.'};
-  if(command==='codexify_proxy_status')return {...proxy};
-  if(command==='codexify_proxy_start'){assert.equal(runtime.running,true,'Bridge must start before proxy');proxy={...proxy,running:true,managed:true,mcpUrl:'https://fixture-tunnel.trycloudflare.com/mcp',message:'공개 MCP 프록시 시작됨'};return {...proxy};}
-  if(command==='codexify_proxy_stop'){assert.equal(proxy.managed,true);proxy={...proxy,running:false,managed:false,mcpUrl:null,message:'앱 프록시 종료됨'};return {...proxy};}
+  if(command==='codexify_proxy_status')return {...proxies[args.input?.provider??'cloudflare']};
+  if(command==='codexify_proxy_start'){
+    assert.equal(runtime.running,true,'Bridge must start before proxy');const provider=args.input?.provider??'cloudflare';
+    if(provider==='ngrok'&&!proxies.ngrok.available)throw new Error('ngrok CLI를 설치하세요.');
+    if(provider==='ngrok'&&!ngrokConfigured)throw new Error('ngrok 계정 설정이 필요합니다. 공식 안내에서 로컬 authtoken 설정을 완료하세요.');
+    proxies[provider]={...proxies[provider],running:true,managed:true,mcpUrl:provider==='cloudflare'?'https://fixture-tunnel.trycloudflare.com/mcp':'https://fixture.ngrok-free.app/mcp',message:`${provider} 공개 MCP 프록시 시작됨`};return {...proxies[provider]};
+  }
+  if(command==='codexify_proxy_stop'){const provider=args.input?.provider??'cloudflare';assert.equal(proxies[provider].managed,true);proxies[provider]={...proxies[provider],running:false,managed:false,mcpUrl:null,message:'앱 프록시 종료됨'};return {...proxies[provider]};}
   if(command==='codexify_connection_get')return {...profile};
   if(command==='codexify_connection_save'){profile={...args.input};return {...profile};}
   if(command==='codexify_connection_check')return {reachable:true,serverName:'Codexify',protocolVersion:'2025-11-25',toolCount:64,studioTools:['studio__studio_asset_receive'],missingStudioTools:[],fileReceiverReady:true,ownerReady:true,checkedAt:new Date().toISOString(),message:'QA bridge ready'};
@@ -52,10 +59,15 @@ await page.addInitScript(()=>{window.__TAURI_INTERNALS__={invoke:(command,args)=
 page.on('pageerror', error=>errors.push(error.message));
 try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`,{waitUntil:'networkidle'});
-  await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
+  await page.getByRole('button',{name:'코딩',exact:true}).click();
   const panel=page.getByRole('region',{name:'Codexify 앱 연결'});
   const runtimePanel=panel.getByRole('region',{name:'앱 내 Codexify 관리'});
   await runtimePanel.getByText('기존 브리지 사용 중',{exact:true}).waitFor();
+  assert.equal(await page.getByText('QA DB unavailable',{exact:true}).count(),0,'Coding must remain usable without a database');
+  const dashboardCalls=calls.filter(c=>c.command==='get_dashboard').length;
+  await page.getByRole('button',{name:'워크스페이스 새로고침',exact:true}).click();
+  await runtimePanel.getByText('기존 브리지 사용 중',{exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.command==='get_dashboard').length,dashboardCalls,'Coding refresh must not retry database loading');
   assert.equal(await runtimePanel.getByLabel('Codexify Source 폴더').isDisabled(),true);
   assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),true);
   assert.equal(await runtimePanel.getByLabel('Codexify 로컬 포트').getAttribute('readonly'),'');
@@ -66,7 +78,7 @@ try {
   assert.match(await diagnostic.innerText(),/시스템 서비스는 실행 중이 아닙니다/);
   assert.equal(calls.filter(c=>c.command==='codexify_runtime_stop').length,0);
   await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).click();
-  await runtimePanel.getByText('앱 프록시 실행 중',{exact:true}).waitFor();
+  await runtimePanel.locator('[aria-label="Cloudflare 서버 상태"]').getByText('앱 프록시 실행 중',{exact:true}).waitFor();
   assert.equal(runtime.managed,false,'An existing external bridge stays externally owned');
   assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),true);
   await runtimePanel.getByRole('button',{name:'앱 프록시 종료',exact:true}).click();
@@ -81,16 +93,48 @@ try {
   assert.equal(await runtimePanel.getByLabel('Codexify Source 폴더').inputValue(),'/fixture-home/projects');
   await runtimePanel.getByRole('button',{name:'Codexify · 프록시 시작',exact:true}).click();
   await runtimePanel.getByText('앱에서 실행 중',{exact:true}).waitFor();
-  await runtimePanel.getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
+  await runtimePanel.locator('.codexify-public-address').getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
   const startIndices=calls.map((c,index)=>c.command==='codexify_runtime_start'?index:-1).filter(index=>index>=0);
   assert.equal(startIndices.length,2);
   for(const startIndex of startIndices)assert.ok(calls[startIndex+1]?.command==='codexify_proxy_start','Start must create or reuse the bridge before the public proxy');
   assert.equal(await runtimePanel.getByRole('button',{name:'앱에서 실행한 Codexify 종료',exact:true}).isDisabled(),false);
   await runtimePanel.getByRole('button',{name:'공개 MCP 주소 복사',exact:true}).click();
-  await runtimePanel.getByText('공개 MCP 주소를 복사했습니다. ChatGPT 플러그인의 서버 URL에 입력하세요.',{exact:true}).waitFor();
+  await runtimePanel.getByText('Cloudflare MCP 주소를 복사했습니다. ChatGPT 플러그인의 서버 URL에 입력하세요.',{exact:true}).waitFor();
   assert.equal(calls.filter(c=>c.command==='copy_text').at(-1).args.text,'https://fixture-tunnel.trycloudflare.com/mcp');
+  const cloudflareUrl=proxies.cloudflare.mcpUrl;
+  const stopsBeforeSwitch=calls.filter(c=>c.command==='codexify_proxy_stop').length;
+  await runtimePanel.getByLabel('공개 MCP 제공자').selectOption('ngrok');
+  assert.equal(proxies.cloudflare.running,true,'Selecting another provider cannot stop the existing tunnel');
+  assert.equal(calls.filter(c=>c.command==='codexify_proxy_stop').length,stopsBeforeSwitch);
+  await runtimePanel.getByRole('button',{name:'ngrok 설치 안내',exact:true}).click();
+  assert.equal(calls.filter(c=>c.command==='open_external').at(-1).args.url,'https://ngrok.com/download');
+  assert.equal(await runtimePanel.getByRole('button',{name:'공개 MCP 주소 열기',exact:true}).isDisabled(),true);
+  proxies.ngrok={...proxies.ngrok,available:true,message:'ngrok CLI 준비됨'};
+  await runtimePanel.getByRole('button',{name:'Codexify 실행 상태 새로고침',exact:true}).click();
+  await runtimePanel.locator('[aria-label="ngrok 서버 상태"]').getByText('시작 준비됨',{exact:true}).waitFor();
+  await runtimePanel.getByRole('button',{name:'공개 MCP 주소 열기',exact:true}).click();
+  await runtimePanel.getByRole('alert').getByText('ngrok 계정 설정이 필요합니다. 공식 안내에서 로컬 authtoken 설정을 완료하세요.',{exact:true}).waitFor();
+  assert.equal(proxies.cloudflare.running,true,'ngrok authentication failure cannot stop Cloudflare');
+  await runtimePanel.getByRole('button',{name:'ngrok 계정 설정 안내',exact:true}).click();
+  assert.equal(calls.filter(c=>c.command==='open_external').at(-1).args.url,'https://ngrok.com/docs/getting-started/');
+  ngrokConfigured=true;
+  await runtimePanel.getByRole('button',{name:'공개 MCP 주소 열기',exact:true}).click();
+  await runtimePanel.locator('.codexify-public-address').getByText('https://fixture.ngrok-free.app/mcp',{exact:true}).waitFor();
+  assert.equal(proxies.cloudflare.mcpUrl,cloudflareUrl);
+  assert.equal(proxies.cloudflare.running,true);
+  assert.equal(proxies.ngrok.running,true);
+  await runtimePanel.getByRole('button',{name:'공개 MCP 주소 복사',exact:true}).click();
+  await runtimePanel.getByText('ngrok MCP 주소를 복사했습니다. ChatGPT 플러그인의 서버 URL에 입력하세요.',{exact:true}).waitFor();
+  assert.equal(calls.filter(c=>c.command==='copy_text').at(-1).args.text,'https://fixture.ngrok-free.app/mcp');
+  await runtimePanel.screenshot({path:resolve(out,'providers.png')});
+  await runtimePanel.getByRole('button',{name:'앱 프록시 종료',exact:true}).click();
+  await runtimePanel.getByText('앱 프록시 종료됨',{exact:true}).waitFor();
+  assert.equal(proxies.ngrok.running,false);
+  assert.equal(proxies.cloudflare.running,true,'Stopping ngrok must leave Cloudflare running');
+  assert.equal(calls.filter(c=>c.command==='codexify_proxy_stop').at(-1).args.input.provider,'ngrok');
+  await runtimePanel.getByLabel('공개 MCP 제공자').selectOption('cloudflare');
   runtime={...runtime,running:false,managed:true,message:'앱 프로세스가 응답하지 않습니다.'};
-  proxy={...proxy,mcpUrl:null,message:'Source 변경으로 공개 MCP 주소를 확인할 수 없습니다.'};
+  proxies.cloudflare={...proxies.cloudflare,mcpUrl:null,message:'Source 변경으로 공개 MCP 주소를 확인할 수 없습니다.'};
   await runtimePanel.getByRole('button',{name:'Codexify 실행 상태 새로고침',exact:true}).click();
   await runtimePanel.getByText('앱 실행 중 · 응답 확인 필요',{exact:true}).waitFor();
   await runtimePanel.getByText('Source 변경으로 공개 MCP 주소를 확인할 수 없습니다.',{exact:true}).waitFor();
@@ -128,7 +172,7 @@ try {
   await panel.getByText('앱 요청 대기 중',{exact:true}).waitFor();
   assert.match(await panel.locator('.codexify-message.user').innerText(),/ChatGPT 도구 확인됨/);
   await panel.getByRole('button',{name:'등록한 ChatGPT 열기',exact:true}).click();
-  assert.equal(calls.find(c=>c.command==='open_external').args.url,profile.pluginUrl);
+  assert.equal(calls.filter(c=>c.command==='open_external').at(-1).args.url,profile.pluginUrl);
   await page.getByRole('button',{name:'AI 작업실',exact:true}).click();
   await page.getByLabel('주제와 작성 방향',{exact:true}).fill('AI 작업실 전달 QA');
   await page.getByRole('button',{name:'연결된 대화에 보내기',exact:true}).click();
@@ -136,18 +180,19 @@ try {
   assert.equal(calls.filter(c=>c.command==='codexify_chat_send').length,2);
   assert.match(calls.filter(c=>c.command==='codexify_chat_send')[1].args.input.message,/AI 작업실 전달 QA/);
   await page.getByRole('button',{name:'연결·게시 QA',exact:true}).click();
+  assert.equal(await page.getByRole('region',{name:'Codexify 앱 연결'}).count(),0,'Publishing QA must not mount a second Codexify panel');
+  await page.getByRole('button',{name:'코딩 열기',exact:true}).click();
   await panel.getByText('연결 설정',{exact:true}).click();
   assert.equal(await panel.getByLabel('Codexify 작업 프로젝트').inputValue(),project);
   await runtimePanel.getByText('앱에서 실행 중',{exact:true}).waitFor();
-  await runtimePanel.getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
+  await runtimePanel.locator('.codexify-public-address').getByText('https://fixture-tunnel.trycloudflare.com/mcp',{exact:true}).waitFor();
   await runtimePanel.getByRole('button',{name:'진단 실행',exact:true}).click();
   await diagnostic.getByText('앱 브리지 연결 정상',{exact:true}).waitFor();
-  const out=resolve('docs/review/codexify-app');await mkdir(out,{recursive:true});
   await runtimePanel.screenshot({path:resolve(out,'runtime.png')});
   await page.screenshot({path:resolve(out,'desktop.png'),fullPage:true});
   await page.setViewportSize({width:820,height:720});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   await page.screenshot({path:resolve(out,'narrow.png'),fullPage:true});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,checks:['external process controls protected','source saved without changing chat project','bridge starts before proxy','canonical public MCP copied','unhealthy app-owned process remains stoppable','unknown proxy URL is not exposed or copied','system service failure separated from healthy app bridge','saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow'],adapter:'Chromium IPC fixtures; no live model calls or public tunnel'},null,2));
+  console.log(JSON.stringify({passed:true,checks:['dedicated Coding navigation without duplicate mount','Coding remains usable without database','Coding refresh does not request database','external process controls protected','source saved without changing chat project','bridge starts before proxy','canonical public MCP copied','ngrok missing CLI and account guidance','Cloudflare and ngrok run independently','provider-specific stop preserves other server','unhealthy app-owned process remains stoppable','unknown proxy URL is not exposed or copied','system service failure separated from healthy app bridge','saved connection restored','explicit project conversation','real IPC send','idle queue is not generation','agent acknowledgement and reply','safe text rendering','AI workspace handoff','820px no overflow'],adapter:'Chromium IPC fixtures; no live model calls or public tunnel'},null,2));
 } finally {await browser.close();await server.close();}

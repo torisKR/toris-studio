@@ -12,7 +12,7 @@ const receiptLabels = { saved: "앱 요청 저장됨", delivered: "ChatGPT 도�
 function failure(error: unknown): string { return typeof error === "string" ? error : error instanceof Error ? error.message : "연결 요청을 처리하지 못했습니다."; }
 function date(value: number | string | null | undefined): string { return value ? new Date(value).toLocaleString("ko-KR") : "기록 없음"; }
 
-export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt }: { active: boolean; nativeMcpConfig?: object; lastFileReceivedAt?: string | null }) {
+export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt, refreshKey = 0 }: { active: boolean; nativeMcpConfig?: object; lastFileReceivedAt?: string | null; refreshKey?: number }) {
   const [profile, setProfile] = useState<CodexifyProfile | null>(null);
   const [draft, setDraft] = useState(emptyProfile);
   const [connection, setConnection] = useState<CodexifyConnection | null>(null);
@@ -78,7 +78,7 @@ export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt }: {
     const onVisibility = () => { if (document.visibilityState === "visible" && !acting.current) void refresh(true); };
     document.addEventListener("visibilitychange", onVisibility);
     return () => { mounted.current = false; ++epoch.current; clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
-  }, [active, refresh]);
+  }, [active, refresh, refreshKey]);
 
   useEffect(() => {
     if (!log.current) return;
@@ -116,7 +116,7 @@ export function CodexifyPanel({ active, nativeMcpConfig, lastFileReceivedAt }: {
   if (!active) return null;
   return <section className="codexify-panel" aria-label="Codexify 앱 연결" aria-busy={Boolean(busy)}>
     <header className="codexify-heading"><div><span className="codexify-eyebrow">CHATGPT MCP</span><h2>앱에서 요청하고, 결과를 확인하세요</h2><p>등록한 Codexify 대화에 요청을 보내고 ChatGPT의 도구 응답을 이 화면에서 받습니다.</p></div><button className="social-button" disabled={!profile || Boolean(busy)} onClick={() => void run("연결 확인", () => refresh(true))}><RefreshCw size={16}/>연결 확인</button></header>
-    <CodexifyRuntimePanel active={active} onRuntimeChange={runtimeChanged}/>
+    <CodexifyRuntimePanel active={active} refreshKey={refreshKey} onRuntimeChange={runtimeChanged}/>
     {(error || pollError) && <p className="social-notice error" role="alert">{error || pollError}</p>}
     {notice && <p className="social-notice success" role="status">{notice}</p>}
     {busy && <p className="codexify-working" role="status">{busy} 중…</p>}

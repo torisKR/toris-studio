@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, FileVideo, KeyRound, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import "./IntegrationPanel.css";
-import { CodexifyPanel } from "./CodexifyPanel";
 import { ActivityStatus } from "./ActivityStatus";
 type Provider={platform:string;clientConfigured:boolean;connected:boolean;uploadAuthorized?:boolean;pending:boolean};
 type UploadRecord={attemptId:string;status:string;title:string;channelTitle:string;requestedPrivacy:string;actualPrivacy?:string;url?:string;error?:string};
@@ -11,7 +10,7 @@ type FileSelection={fileId:string;fileName:string;bytes:number;sha256:string;can
 type Ticket={ticketId:string;channelTitle:string;channelId:string;title:string;description:string;privacy:string;fileName:string;bytes:number;sha256:string};
 const privacyLabels:Record<string,string>={private:"비공개",unlisted:"일부 공개",public:"공개"};
 function failure(e:unknown){return typeof e==="string"?e:e instanceof Error?e.message:"요청을 처리하지 못했습니다.";}
-export function IntegrationPanel({active,onOAuth,refreshKey=0}:{active:boolean;onOAuth:()=>void;refreshKey?:number}) {
+export function IntegrationPanel({active,onOAuth,onCoding,refreshKey=0}:{active:boolean;onOAuth:()=>void;onCoding:()=>void;refreshKey?:number}) {
   const [status,setStatus]=useState<Status|null>(null),[error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState("");
   const [channels,setChannels]=useState<Array<{id:string;title:string}>>([]),[channelId,setChannelId]=useState(""),[file,setFile]=useState<FileSelection|null>(null);
   const [title,setTitle]=useState("[Toris Studio QA] 업로드 연결 테스트"),[description,setDescription]=useState("Toris Studio의 업로드 연결을 확인하기 위한 테스트 영상입니다. 실제 서비스 콘텐츠가 아닙니다.");
@@ -36,7 +35,7 @@ export function IntegrationPanel({active,onOAuth,refreshKey=0}:{active:boolean;o
   return <section className="integration-panel" aria-label="연결 및 게시 QA" aria-busy={Boolean(busy)}>
     <div className="integration-toolbar"><p>계정 인증, 도구 연결, 파일 수신, 게시 결과를 각각 확인합니다.</p><button className="social-button" disabled={Boolean(busy)} onClick={()=>void run("연결 확인",refresh)}><RefreshCw size={16}/>상태 새로고침</button></div>
     {error&&<div className="social-notice error" role="alert">{error}</div>}{notice&&<div className="social-notice success" role="status">{notice}</div>}{busy&&<ActivityStatus title={`${busy} 중`} detail="작업이 진행 중입니다. 전송 완료 여부는 실제 응답으로 확인합니다. 업로드 중에는 앱을 닫거나 동일한 작업을 다시 요청하지 마세요."/>}{!status&&!error&&!busy&&<ActivityStatus title="연결 상태 확인 중"/>}
-    <CodexifyPanel active={active} nativeMcpConfig={status?.mcpConfig} lastFileReceivedAt={status?.mcp.lastFileReceivedAt}/>
+    <div className="social-notice info"><span>Codexify와 ChatGPT 대화 연결은 코딩에서 관리합니다.</span><button className="social-button compact" onClick={onCoding}>코딩 열기</button></div>
     <div className="integration-layout">
       <div className="integration-connections">
         <section className="integration-section"><h2>YouTube 업로드 계정</h2><p>기존 SNS 읽기 로그인과 업로드 승인은 구분됩니다. 추가 권한은 시스템 브라우저에서 직접 승인합니다.</p><div className="integration-state"><ShieldCheck size={18}/><strong>{youtube?.uploadAuthorized?"업로드 권한 확인됨":youtube?.pending?"브라우저 로그인 대기":youtube?.connected?"읽기 연결됨 · 업로드 승인 필요":youtube?.clientConfigured?"업로드 로그인 필요":"OAuth 앱 설정 필요"}</strong></div>

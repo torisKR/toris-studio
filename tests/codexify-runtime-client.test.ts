@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyProxyAction, applyRuntimeAction, canStopRuntime, copyPublicMcpUrl, getRuntimeStatus, publicMcpUrl, runRuntimeDoctor, runtimeConfiguration, runtimeIdentity, runtimeStateLabel } from "../desktop/src/codexify-runtime-client";
+import { applyProxyAction, applyRuntimeAction, canStopRuntime, copyPublicMcpUrl, getProxyStatus, getRuntimeStatus, publicMcpUrl, runRuntimeDoctor, runtimeConfiguration, runtimeIdentity, runtimeStateLabel } from "../desktop/src/codexify-runtime-client";
 import type { BridgeInvoke } from "../desktop/src/codexify-client";
-import type { CodexifyRuntimeStatus } from "../desktop/src/codexify-runtime-client";
+import type { CodexifyProxyStatus, CodexifyRuntimeStatus } from "../desktop/src/codexify-runtime-client";
 
 const idle: CodexifyRuntimeStatus = { binaryAvailable: true, bundled: true, version: "1.7.0", configPath: "/config/runtime.json", sourceRoot: "/projects", port: 21228, running: false, managed: false, pid: null, service: { installed: true, running: false, enabled: true }, message: "준비됨" };
 
@@ -76,7 +76,7 @@ test("a system service doctor failure stays visible when the app bridge is healt
 });
 
 test("public endpoint copying rejects owner-chat credentials and only uses the Quick Tunnel MCP URL", async () => {
-  const proxy = { available: true, running: true, managed: true, mcpUrl: "https://fixture-tunnel.trycloudflare.com/mcp", message: "준비됨" };
+  const proxy: CodexifyProxyStatus = { provider: "cloudflare", available: true, running: true, managed: true, mcpUrl: "https://fixture-tunnel.trycloudflare.com/mcp", message: "준비됨" };
   const calls: unknown[] = [];
   const call: BridgeInvoke = async (command, args) => { calls.push({ command, args }); return null; };
   assert.equal(publicMcpUrl(proxy), proxy.mcpUrl);
@@ -93,9 +93,39 @@ test("public endpoint copying rejects owner-chat credentials and only uses the Q
 
 test("stopping a proxy also requires app ownership and never dispatches to an external launcher", async () => {
   let calls = 0;
-  const call: BridgeInvoke = async command => { calls++; assert.equal(command, "codexify_proxy_stop"); return { available: true, running: false, managed: false, mcpUrl: null, message: "종료됨" }; };
-  await assert.rejects(applyProxyAction("stop", { available: true, running: true, managed: false, mcpUrl: null, message: "외부" }, call), /앱에서 시작한/);
+  const call: BridgeInvoke = async (command, args) => { calls++; assert.equal(command, "codexify_proxy_stop"); assert.deepEqual(args, { input: { provider: "cloudflare" } }); return { provider: "cloudflare", available: true, running: false, managed: false, mcpUrl: null, message: "종료됨" }; };
+  await assert.rejects(applyProxyAction("stop", { provider: "cloudflare", available: true, running: true, managed: false, mcpUrl: null, message: "외부" }, "cloudflare", call), /앱에서 시작한/);
   assert.equal(calls, 0);
-  assert.equal((await applyProxyAction("stop", { available: true, running: true, managed: true, mcpUrl: null, message: "앱" }, call)).running, false);
+  assert.equal((await applyProxyAction("stop", { provider: "cloudflare", available: true, running: true, managed: true, mcpUrl: null, message: "앱" }, "cloudflare", call)).running, false);
   assert.equal(calls, 1);
+});
+
+test("provider-specific proxy calls preserve independent Cloudflare and ngrok ownership", async () => {
+  const proxies: Record<string, CodexifyProxyStatus> = { cloudflare: { provider: "cloudflare", available: true, running: true, managed: true, mcpUrl: "https://fixture-tunnel.trycloudflare.com/mcp", message: "실행 중" }, ngrok: { provider: "ngrok", available: true, running: false, managed: false, mcpUrl: null, message: "준비됨" } };
+  const call: BridgeInvoke = async (command, args) => {
+    const provider = (args?.input as { provider: string }).provider;
+    if (command === "codexify_proxy_start") proxies[provider] = { ...proxies[provider], running: true, managed: true, mcpUrl: "https://fixture.ngrok-free.app/mcp" };
+    if (command === "codexify_proxy_stop") proxies[provider] = { ...proxies[provider], running: false, managed: false, mcpUrl: null };
+    return proxies[provider];
+  };
+  assert.equal((await getProxyStatus("cloudflare", call)).running, true);
+  const ngrok = await applyProxyAction("start", await getProxyStatus("ngrok", call), "ngrok", call);
+  assert.equal(publicMcpUrl(ngrok), "https://fixture.ngrok-free.app/mcp");
+  assert.equal(proxies.cloudflare.running, true);
+  await applyProxyAction("stop", ngrok, "ngrok", call);
+  assert.equal(proxies.ngrok.running, false);
+  assert.equal(proxies.cloudflare.running, true);
+  await assert.rejects(applyProxyAction("stop", proxies.cloudflare, "ngrok", call), /선택한 프록시/);
+});
+
+test("ngrok URL validation rejects cross-provider, custom, credentialed and non-MCP URLs", () => {
+  const proxy: CodexifyProxyStatus = { provider: "ngrok", available: true, running: true, managed: true, mcpUrl: "https://fixture.ngrok-free.app/mcp", message: "실행 중" };
+  for (const domain of ["ngrok-free.app", "ngrok.app", "ngrok.io", "ngrok-free.dev", "ngrok.dev", "ngrok.pizza", "ngrok-free.pizza"]) assert.equal(publicMcpUrl({ ...proxy, mcpUrl: `https://fixture.${domain}/mcp` }), `https://fixture.${domain}/mcp`);
+  for (const url of ["https://fixture.trycloudflare.com/mcp", "https://ngrok-free.app.evil.test/mcp", "https://custom.example.com/mcp", "https://nested.fixture.ngrok.app/mcp", "https://name:secret@fixture.ngrok.io/mcp", "https://fixture.ngrok.app/mcp?token=secret", "https://fixture.ngrok.app/owner", "http://fixture.ngrok.app/mcp"]) assert.throws(() => publicMcpUrl({ ...proxy, mcpUrl: url }));
+});
+
+test("a proxy response for another provider is rejected without reassigning its state", async () => {
+  const wrong: BridgeInvoke = async () => ({ provider: "cloudflare", available: true, running: true, managed: true, mcpUrl: "https://fixture.trycloudflare.com/mcp", message: "다른 제공자" });
+  await assert.rejects(getProxyStatus("ngrok", wrong), /요청한 프록시/);
+  await assert.rejects(applyProxyAction("start", null, "ngrok", wrong), /요청한 프록시/);
 });

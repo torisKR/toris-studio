@@ -1,6 +1,13 @@
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+
+#[derive(Default, Deserialize)]
+pub struct CodexifyProxyInput {
+    #[serde(default)]
+    provider: crate::codexify_proxy::ProxyProvider,
+}
 
 #[tauri::command]
 pub async fn codexify_runtime_status(
@@ -50,26 +57,34 @@ pub async fn codexify_runtime_doctor(
 pub async fn codexify_proxy_status(
     window: tauri::WebviewWindow,
     proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+    input: Option<CodexifyProxyInput>,
 ) -> Result<crate::codexify_proxy::ProxyStatus, String> {
     crate::updater::authorize(&window)?;
-    proxy.status().await
+    proxy.status_for(input.unwrap_or_default().provider).await
 }
 #[tauri::command]
 pub async fn codexify_proxy_start(
     window: tauri::WebviewWindow,
     proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
     runtime: tauri::State<'_, std::sync::Arc<crate::codexify_runtime::RuntimeController>>,
+    input: Option<CodexifyProxyInput>,
 ) -> Result<crate::codexify_proxy::ProxyStatus, String> {
     crate::updater::authorize(&window)?;
-    proxy.start(runtime.status().await?.port).await
+    proxy
+        .start_for(
+            input.unwrap_or_default().provider,
+            runtime.status().await?.port,
+        )
+        .await
 }
 #[tauri::command]
 pub async fn codexify_proxy_stop(
     window: tauri::WebviewWindow,
     proxy: tauri::State<'_, std::sync::Arc<crate::codexify_proxy::ProxyController>>,
+    input: Option<CodexifyProxyInput>,
 ) -> Result<crate::codexify_proxy::ProxyStatus, String> {
     crate::updater::authorize(&window)?;
-    proxy.stop().await
+    proxy.stop_for(input.unwrap_or_default().provider).await
 }
 
 #[tauri::command]

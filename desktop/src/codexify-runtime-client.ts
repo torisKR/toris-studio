@@ -22,7 +22,10 @@ export type CodexifyRuntimeDoctor = {
 };
 export type CodexifyRuntimeInput = { sourceRoot: string; port: number };
 export type RuntimeAction = "configure" | "start" | "stop";
-export type CodexifyProxyStatus = { available: boolean; running: boolean; managed: boolean; mcpUrl: string | null; message: string };
+export type ProxyProvider = "cloudflare" | "ngrok";
+export const proxyProviders: ProxyProvider[] = ["cloudflare", "ngrok"];
+export const proxyLabels: Record<ProxyProvider, string> = { cloudflare: "Cloudflare", ngrok: "ngrok" };
+export type CodexifyProxyStatus = { provider: ProxyProvider; available: boolean; running: boolean; managed: boolean; mcpUrl: string | null; message: string };
 const nativeInvoke: BridgeInvoke = (command, args) => invoke(command, args);
 
 /** Existing listeners belong to their original launcher. The app can only stop its own process. */
@@ -76,23 +79,33 @@ export async function runRuntimeDoctor(call: BridgeInvoke = nativeInvoke): Promi
   return await call("codexify_runtime_doctor") as CodexifyRuntimeDoctor;
 }
 
-export async function getProxyStatus(call: BridgeInvoke = nativeInvoke): Promise<CodexifyProxyStatus> {
-  return await call("codexify_proxy_status") as CodexifyProxyStatus;
+export async function getProxyStatus(provider: ProxyProvider = "cloudflare", call: BridgeInvoke = nativeInvoke): Promise<CodexifyProxyStatus> {
+  const result = await call("codexify_proxy_status", { input: { provider } }) as CodexifyProxyStatus;
+  if (result.provider !== provider) throw new Error("요청한 프록시 제공자의 상태를 확인하지 못했습니다.");
+  return result;
 }
 
-export async function applyProxyAction(action: "start" | "stop", status: CodexifyProxyStatus | null, call: BridgeInvoke = nativeInvoke): Promise<CodexifyProxyStatus> {
+export async function applyProxyAction(action: "start" | "stop", status: CodexifyProxyStatus | null, provider: ProxyProvider = "cloudflare", call: BridgeInvoke = nativeInvoke): Promise<CodexifyProxyStatus> {
+  if (status && status.provider !== provider) throw new Error("선택한 프록시의 상태가 변경되었습니다. 상태를 다시 확인하세요.");
   if (action === "stop" && !(status?.running && status.managed)) throw new Error("앱에서 시작한 프록시만 종료할 수 있습니다.");
-  return await call(`codexify_proxy_${action}`) as CodexifyProxyStatus;
+  const result = await call(`codexify_proxy_${action}`, { input: { provider } }) as CodexifyProxyStatus;
+  if (result.provider !== provider) throw new Error("요청한 프록시 제공자의 결과를 확인하지 못했습니다.");
+  return result;
 }
 
-/** Copy only the public Quick Tunnel endpoint, never an owner-chat URL or credentials. */
+/** Copy only a public endpoint for its provider, never an owner-chat URL or credentials. */
 export function publicMcpUrl(status: CodexifyProxyStatus): string {
   if (!status.running || !status.mcpUrl) throw new Error("공개 MCP 주소가 아직 준비되지 않았습니다.");
   const url = new URL(status.mcpUrl);
-  if (url.protocol !== "https:" || !/^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname) || url.port || url.username || url.password || url.pathname !== "/mcp" || url.search || url.hash) {
+  const hostAllowed = status.provider === "cloudflare" ? /^[a-z0-9-]+\.trycloudflare\.com$/.test(url.hostname) : /^[a-z0-9-]+\.(?:ngrok-free\.app|ngrok\.app|ngrok\.io|ngrok-free\.dev|ngrok\.dev|ngrok\.pizza|ngrok-free\.pizza)$/.test(url.hostname);
+  if (url.protocol !== "https:" || !hostAllowed || url.port || url.username || url.password || url.pathname !== "/mcp" || url.search || url.hash) {
     throw new Error("공개 MCP 주소의 형식이 올바르지 않습니다. 프록시 상태를 다시 확인하세요.");
   }
   return url.href;
+}
+
+export async function openNgrokGuide(kind: "download" | "setup", call: BridgeInvoke = nativeInvoke): Promise<void> {
+  await call("open_external", { url: kind === "download" ? "https://ngrok.com/download" : "https://ngrok.com/docs/getting-started/" });
 }
 
 export async function copyPublicMcpUrl(status: CodexifyProxyStatus, call: BridgeInvoke = nativeInvoke): Promise<void> {
