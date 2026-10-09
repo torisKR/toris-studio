@@ -1,0 +1,16 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "imagegen": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "codex-imagegen-mcp@0.2",
+        "serve"
+      ],
+      "enabled": true,
+      "timeout": 300000
+    }
+  }
+}

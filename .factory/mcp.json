@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "imagegen": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "codex-imagegen-mcp@0.2",
+        "serve"
+      ],
+      "disabled": false,
+      "timeout": 300000,
+      "connectTimeout": 60000
+    }
+  }
+}

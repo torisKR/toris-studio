@@ -1,0 +1,12 @@
+{
+  "amp.mcpServers": {
+    "imagegen": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "codex-imagegen-mcp@0.2",
+        "serve"
+      ]
+    }
+  }
+}

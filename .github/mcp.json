@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "imagegen": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "-y",
+        "codex-imagegen-mcp@0.2",
+        "serve"
+      ],
+      "tools": [
+        "*"
+      ],
+      "timeout": 300000
+    }
+  }
+}
