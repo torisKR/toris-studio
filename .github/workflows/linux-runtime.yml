@@ -1,0 +1,53 @@
+name: Linux runtime checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'runtime/qwen3_tts_torch_server.py'
+      - 'runtime/requirements-linux.txt'
+      - 'scripts/*linux.sh'
+      - 'tests/test_linux_runtime.py'
+      - '.github/workflows/linux-runtime.yml'
+  pull_request:
+    paths:
+      - 'runtime/qwen3_tts_torch_server.py'
+      - 'runtime/requirements-linux.txt'
+      - 'scripts/*linux.sh'
+      - 'tests/test_linux_runtime.py'
+      - '.github/workflows/linux-runtime.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Scan committed history for exposed credentials
+        run: bash scripts/release-security.sh
+      - name: Install isolated test dependencies (no models or Torch)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/linux-runtime-tests"
+          "$RUNNER_TEMP/linux-runtime-tests/bin/python" -m pip install --disable-pip-version-check \
+            "$(sed -n '/^fastapi==/p' runtime/requirements-linux.txt)" \
+            'pydantic==2.13.4' 'numpy==2.3.5'
+      - name: Check Linux shell scripts
+        run: |
+          for script in scripts/*linux.sh; do
+            bash -n "$script"
+          done
+      - name: Check TTS options and pinned Whisper setup
+        run: |
+          "$RUNNER_TEMP/linux-runtime-tests/bin/python" -m unittest discover \
+            -s tests -p 'test_linux_runtime.py' -v

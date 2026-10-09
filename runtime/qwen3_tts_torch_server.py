@@ -33,6 +33,9 @@ class SynthesisRequest(BaseModel):
     language: str = "Korean"
     instruct: str = ""
     temperature: float = Field(default=0.85, ge=0.1, le=1.5)
+    top_p: float = Field(default=0.95, ge=0.1, le=1.0)
+    top_k: int = Field(default=50, ge=1, le=200)
+    repetition_penalty: float = Field(default=1.05, ge=0.8, le=2.0)
     max_tokens: int = Field(default=2048, ge=128, le=4096)
 
 
@@ -49,6 +52,8 @@ def synthesize(request: SynthesisRequest):
             # 0.6B CustomVoice supports preset voices but not instruction control.
             kwargs = dict(text=request.text, language=request.language,
                           speaker=request.speaker, temperature=request.temperature,
+                          top_p=request.top_p, top_k=request.top_k,
+                          repetition_penalty=request.repetition_penalty,
                           max_new_tokens=request.max_tokens)
             if os.environ.get("QWEN_TTS_STYLE_CONTROL") == "1":
                 kwargs["instruct"] = request.instruct
