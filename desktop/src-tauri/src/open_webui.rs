@@ -631,10 +631,15 @@ def check(kind):
  try:
   if kind=='provider':
    url=os.environ.get('OPENAI_API_BASE_URL','')+'/models'
-   headers=json.loads(os.environ.get('OPENAI_API_CONFIGS','{}')).get('0',{}).get('headers',{}).copy()
+   config=json.loads(os.environ.get('OPENAI_API_CONFIGS','{}')).get('0',{})
+   auth_type=config.get('auth_type')
+   if auth_type not in (None,'bearer','none'):return None
+   headers={}
+   if auth_type in (None,'bearer'):
+    key=os.environ.get('OPENAI_API_KEY','')
+    if key:headers['Authorization']='Bearer '+key
+   headers.update(config.get('headers',{}))
    if not any(name.lower()=='host' for name in headers) and len(sys.argv)>1:headers['Host']=sys.argv[1]
-   key=os.environ.get('OPENAI_API_KEY','')
-   if key: headers['Authorization']='Bearer '+key
    req=urllib.request.Request(url,headers=headers)
   else:
    tools=json.loads(os.environ.get('TOOL_SERVER_CONNECTIONS','[]'))
@@ -1199,6 +1204,62 @@ assert not initialized('data: '+result.replace('Codexify','OtherServer')+'\n\n')
         .await
         .expect("Python probe parser test timeout")
         .expect("Python is required to test the container probe parser");
+        assert!(status.success());
+    }
+    #[tokio::test]
+    async fn actual_provider_probe_honors_none_without_reading_api_key() {
+        let fixtures = r#"
+class GuardEnvironment(dict):
+ def get(self,key,default=None):
+  if key=='OPENAI_API_KEY':
+   if self.get('ALLOW_FIXTURE_KEY')!='yes':raise AssertionError('none/session must not read an API key')
+   return 'fixture-only-token'
+  return super().get(key,default)
+class Reply:
+ status=200
+ headers={'Content-Type':'application/json'}
+ def __enter__(self):return self
+ def __exit__(self,*args):return None
+ def read(self,*args):return b'{}'
+calls=[]
+def fake_open(request,timeout):
+ calls.append(request)
+ return Reply()
+urllib.request.urlopen=fake_open
+sys.argv=['-c','127.0.0.1:10100']
+os.environ=GuardEnvironment({'OPENAI_API_BASE_URL':'http://host.docker.internal:10100/v1','OPENAI_API_CONFIGS':'{"0":{"auth_type":"none"}}'})
+assert check('provider') is True
+assert calls[-1].get_header('Authorization') is None
+assert calls[-1].get_header('Host')=='127.0.0.1:10100'
+os.environ['ALLOW_FIXTURE_KEY']='yes'
+os.environ['OPENAI_API_CONFIGS']='{"0":{"auth_type":"bearer"}}'
+assert check('provider') is True
+assert calls[-1].get_header('Authorization')=='Bearer fixture-only-token'
+os.environ['OPENAI_API_CONFIGS']='{"0":{}}'
+assert check('provider') is True
+assert calls[-1].get_header('Authorization')=='Bearer fixture-only-token'
+os.environ.pop('ALLOW_FIXTURE_KEY')
+before=len(calls)
+os.environ['OPENAI_API_CONFIGS']='{"0":{"auth_type":"session"}}'
+assert check('provider') is None
+assert len(calls)==before
+"#;
+        let definitions = PROBE_CODE
+            .split("with concurrent.futures.ThreadPoolExecutor")
+            .next()
+            .unwrap();
+        let executable = if cfg!(windows) { "python" } else { "python3" };
+        let status = tokio::time::timeout(
+            Duration::from_secs(5),
+            Command::new(executable)
+                .arg("-c")
+                .arg(format!("{PROBE_MCP_PARSER}\n{definitions}\n{fixtures}"))
+                .kill_on_drop(true)
+                .status(),
+        )
+        .await
+        .expect("Python provider probe test timeout")
+        .expect("Python is required to test the container provider probe");
         assert!(status.success());
     }
     #[test]
