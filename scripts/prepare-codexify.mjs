@@ -23,6 +23,12 @@ export function licenseMatches(upstream, committed) {
   // GitHub's Windows checkout stores the same upstream license with CRLF.
   return upstream.toString('utf8').replace(/\r\n/g, '\n') === committed.toString('utf8').replace(/\r\n/g, '\n');
 }
+export function verifyCloudflaredLicense(committed) {
+  // Git's Windows checkout may change LF to CRLF; the upstream Git blob uses LF.
+  const canonical = Buffer.from(committed.toString('utf8').replace(/\r\n/g, '\n'));
+  const blob = createHash('sha1').update(`blob ${canonical.length}\0`).update(canonical).digest('hex');
+  if (blob !== CLOUDFLARED_MANIFEST.licenseGitBlob) fail('Cloudflared LICENSE differs from the pinned upstream source.');
+}
 export function targetSpec(target, runtime = 'codexify') {
   if (!['codexify', 'cloudflared'].includes(runtime)) fail('Unsupported bundled runtime.');
   const manifest = runtime === 'codexify' ? MANIFEST : CLOUDFLARED_MANIFEST;
@@ -335,7 +341,7 @@ export async function prepareTarget(target, { root = ROOT, fetcher = fetch, runt
   verifyBinary(binary, target);
   const committedLicense = await regularFile(path.join(root, `desktop/src-tauri/resources/${runtime}/LICENSE`), 16 * 1024);
   if (license && !licenseMatches(license, committedLicense)) fail('Codexify archive LICENSE differs from the committed license.');
-  if (runtime === 'cloudflared' && createHash('sha1').update(`blob ${committedLicense.length}\0`).update(committedLicense).digest('hex') !== CLOUDFLARED_MANIFEST.licenseGitBlob) fail('Cloudflared LICENSE differs from the pinned upstream source.');
+  if (runtime === 'cloudflared') verifyCloudflaredLicense(committedLicense);
   const file = path.join(directory, `${runtime}-${target}${target.includes('windows') ? '.exe' : ''}`);
   await atomicWrite(file, binary, 0o755);
   console.log(`Prepared ${runtime} ${spec.version} for ${target}; verified upstream SHA256 and license.`);

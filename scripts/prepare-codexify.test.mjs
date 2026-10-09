@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { crc32, gzipSync } from 'node:zlib';
-import { buildInvocation, cloudflaredBuild, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, MANIFEST, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyStaged } from './prepare-codexify.mjs';
+import { buildInvocation, cloudflaredBuild, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, MANIFEST, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-codexify.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function tar(entries) {
@@ -140,6 +140,16 @@ test('Windows archive license CRLF preserves exact upstream text while modified 
   assert.equal(licenseMatches(Buffer.from('MIT License\r\nCopyright author\r\n'), Buffer.from('MIT License\nCopyright author\n')), true);
   assert.equal(licenseMatches(Buffer.from('MIT License\r\nCopyright other\r\n'), Buffer.from('MIT License\nCopyright author\n')), false);
   assert.equal(licenseMatches(Buffer.from('MIT License\n Copyright author\n'), Buffer.from('MIT License\nCopyright author\n')), false);
+});
+
+test('Cloudflare pinned Git blob accepts Windows CRLF checkout and rejects modified license text', async () => {
+  const committed = await readFile(new URL('../desktop/src-tauri/resources/cloudflared/LICENSE', import.meta.url));
+  const windows = Buffer.from(committed.toString('utf8').replace(/\r?\n/g, '\r\n'));
+  assert.doesNotThrow(() => verifyCloudflaredLicense(windows));
+  assert.doesNotThrow(() => verifyCloudflaredLicense(Buffer.from(windows.toString('utf8').replace(/\r\n/g, '\n'))));
+  const modified = Buffer.from(windows.toString('utf8').replace('Apache License', 'Changed License'));
+  assert.throws(() => verifyCloudflaredLicense(modified), /pinned upstream source/);
+  assert.throws(() => verifyCloudflaredLicense(Buffer.concat([windows, Buffer.from(' ')])), /pinned upstream source/);
 });
 
 test('download refuses HTTP errors, untrusted redirects, excess bodies and mismatched SHA256 without network access', async () => {
