@@ -327,6 +327,80 @@ fn ngrok_failure(line: &str) -> Option<&'static str> {
         None
     }
 }
+fn ngrok_address_matches(value: &serde_json::Value, expected: &Url) -> bool {
+    let Some(port) = expected.port_or_known_default() else {
+        return false;
+    };
+    let Some(host) = expected.host_str() else {
+        return false;
+    };
+    let mut authorities = vec![
+        expected[url::Position::BeforeHost..url::Position::AfterPort].to_owned(),
+        format!("{host}:{port}"),
+    ];
+    if host == "127.0.0.1" {
+        authorities.push(format!("localhost:{port}"));
+        if expected.port().is_none() {
+            authorities.push("localhost".into());
+        }
+    }
+    let parsed = if let Some(raw) = value.as_str() {
+        if !authorities
+            .iter()
+            .map(|authority| format!("{}://{authority}", expected.scheme()))
+            .any(|origin| raw == origin || raw == format!("{origin}/"))
+        {
+            return false;
+        }
+        Url::parse(raw).ok()
+    } else if let Some(fields) = value.as_object() {
+        // The installed agent serializes net/url.URL, including every URL component.
+        // Reject extra or missing fields instead of dropping aliases or URL metadata.
+        const FIELDS: [&str; 11] = [
+            "Scheme",
+            "Opaque",
+            "User",
+            "Host",
+            "Path",
+            "Fragment",
+            "RawQuery",
+            "RawPath",
+            "RawFragment",
+            "ForceQuery",
+            "OmitHost",
+        ];
+        if fields.len() != FIELDS.len()
+            || !FIELDS.iter().all(|key| fields.contains_key(*key))
+            || fields["Scheme"].as_str() != Some(expected.scheme())
+            || !fields["User"].is_null()
+            || fields["ForceQuery"].as_bool() != Some(false)
+            || fields["OmitHost"].as_bool() != Some(false)
+            || ["Opaque", "Fragment", "RawQuery", "RawPath", "RawFragment"]
+                .iter()
+                .any(|key| fields[*key].as_str() != Some(""))
+            || !matches!(fields["Path"].as_str(), Some("" | "/"))
+        {
+            return false;
+        }
+        let Some(host) = fields["Host"].as_str() else {
+            return false;
+        };
+        // Restrict the authority before parsing so it cannot encode user info or a path.
+        if !authorities.iter().any(|authority| host == authority) {
+            return false;
+        }
+        Url::parse(&format!("{}://{host}/", expected.scheme())).ok()
+    } else {
+        None
+    };
+    let Some(mut addr) = parsed else {
+        return false;
+    };
+    if addr.host_str() == Some("localhost") && addr.set_host(Some("127.0.0.1")).is_err() {
+        return false;
+    }
+    addr == *expected
+}
 fn ngrok_event(line: &str, expected: &Url, accept_url: bool) -> Option<StartupEvent> {
     if let Some(message) = ngrok_failure(line) {
         return Some(StartupEvent::Failure(message));
@@ -342,11 +416,7 @@ fn ngrok_event(line: &str, expected: &Url, accept_url: bool) -> Option<StartupEv
     {
         return None;
     }
-    let mut addr = Url::parse(value["addr"].as_str()?).ok()?;
-    if addr.host_str() == Some("localhost") {
-        addr.set_host(Some("127.0.0.1")).ok()?;
-    }
-    if addr != *expected {
+    if !ngrok_address_matches(&value["addr"], expected) {
         return None;
     }
     ngrok_public_url(value["url"].as_str()?).map(StartupEvent::Endpoint)
@@ -848,6 +918,189 @@ mod tests {
         ] {
             assert!(ngrok_public_url(&format!("https://sample.{domain}")).is_some());
         }
+    }
+    #[test]
+    fn ngrok_serialized_url_object_preserves_every_component_and_matches_exact_upstream() {
+        let target = origin("http://127.0.0.1:21228/mcp", 21228).unwrap();
+        let address = serde_json::json!({
+            "Scheme":"http", "Opaque":"", "User":null, "Host":"127.0.0.1:21228",
+            "Path":"/", "Fragment":"", "RawQuery":"", "RawPath":"",
+            "RawFragment":"", "ForceQuery":false, "OmitHost":false
+        });
+        let event = serde_json::json!({"lvl":"info","msg":"started tunnel","obj":"tunnels","addr":address,"url":"https://sample.ngrok-free.dev"});
+        assert!(matches!(
+            ngrok_event(&event.to_string(), &target, true),
+            Some(StartupEvent::Endpoint(_))
+        ));
+        for (field, invalid) in [
+            ("Scheme", serde_json::json!("https")),
+            ("Opaque", serde_json::json!("127.0.0.1:21228")),
+            ("User", serde_json::json!({"Username":"private"})),
+            ("Path", serde_json::json!("/a/..")),
+            ("Path", serde_json::json!("/owner")),
+            ("Fragment", serde_json::json!("private")),
+            ("RawQuery", serde_json::json!("token=private")),
+            ("RawPath", serde_json::json!("/")),
+            ("RawFragment", serde_json::json!("private")),
+            ("ForceQuery", serde_json::json!(true)),
+            ("OmitHost", serde_json::json!(true)),
+            ("ForceQuery", serde_json::json!("false")),
+            ("Host", serde_json::json!("127.0.0.1:43157")),
+            ("Host", serde_json::json!("127.0.0.1:21228/a/..")),
+            ("Host", serde_json::json!("@127.0.0.1:21228")),
+            ("Host", serde_json::json!("127.0.0.1:21228?")),
+            ("Host", serde_json::json!("127.0.0.1:21228#")),
+            ("Host", serde_json::json!("127.0.0.1:21228\\")),
+        ] {
+            let mut invalid_address = address.clone();
+            invalid_address[field] = invalid;
+            assert!(
+                !ngrok_address_matches(&invalid_address, &target),
+                "field: {field}"
+            );
+        }
+        for alias in ["user", "rawQuery", "metadata", "url"] {
+            let mut invalid = address.clone();
+            invalid[alias] = serde_json::json!("private");
+            assert!(!ngrok_address_matches(&invalid, &target));
+        }
+        let mut missing = address.clone();
+        missing.as_object_mut().unwrap().remove("User");
+        assert!(!ngrok_address_matches(&missing, &target));
+        for raw in [
+            "http://@127.0.0.1:21228/",
+            "http://127.0.0.1:21228/a/..",
+            "http://127.0.0.1:21228/?",
+            "http://127.0.0.1:21228/#",
+        ] {
+            assert!(!ngrok_address_matches(&serde_json::json!(raw), &target));
+        }
+        for (raw, port, host) in [
+            ("https://127.0.0.1:21228/mcp", 21228, "127.0.0.1:21228"),
+            ("https://[::1]:21228/mcp", 21228, "[::1]:21228"),
+            ("https://[::1]/mcp", 443, "[::1]"),
+            ("http://localhost:21228/mcp", 21228, "localhost:21228"),
+        ] {
+            let expected = origin(raw, port).unwrap();
+            let mut addr = address.clone();
+            addr["Scheme"] = serde_json::json!(expected.scheme());
+            addr["Host"] = serde_json::json!(host);
+            assert!(ngrok_address_matches(&addr, &expected));
+            assert!(ngrok_address_matches(
+                &serde_json::json!(format!("{}://{host}/", expected.scheme())),
+                &expected
+            ));
+        }
+    }
+    /// Explicit network verification: exposes only this test's health JSON, never an MCP server.
+    #[tokio::test]
+    #[ignore = "requires explicit approval for a temporary public health-only ngrok fixture"]
+    async fn ngrok_cli_health_only_fixture_matches_real_stdout_and_stops_owned_child() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 1024];
+                let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_secs(2), socket.read(&mut request)).await
+                else {
+                    continue;
+                };
+                let (status, body) = if request[..n].starts_with(b"GET /health HTTP/") {
+                    ("200 OK", "{\"status\":\"ok\",\"tools\":0}")
+                } else {
+                    ("404 Not Found", "{\"error\":\"fixture-only\"}")
+                };
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let target = origin(&format!("http://127.0.0.1:{port}/mcp"), port).unwrap();
+        let (existing, configuration) = ngrok_configuration().unwrap();
+        let mut command = tokio::process::Command::new(
+            binary(ProxyProvider::Ngrok).expect("trusted ngrok CLI is unavailable"),
+        );
+        command
+            .arg("http")
+            .arg(target.as_str())
+            .arg("--config")
+            .arg(existing)
+            .arg("--config")
+            .arg(configuration.path())
+            .args([
+                "--log",
+                "stdout",
+                "--log-format",
+                "json",
+                "--log-level",
+                "info",
+                "--inspect=false",
+                "--upstream-tls-verify=true",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        for (key, _) in std::env::vars_os() {
+            if remove_environment(ProxyProvider::Ngrok, &key) {
+                command.env_remove(key);
+            }
+        }
+        let mut child = command
+            .spawn()
+            .expect("owned health fixture agent did not start");
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let readers = vec![
+            tokio::spawn(read_ngrok(
+                child.stdout.take().unwrap(),
+                target.clone(),
+                true,
+                sender.clone(),
+            )),
+            tokio::spawn(read_ngrok(
+                child.stderr.take().unwrap(),
+                target.clone(),
+                false,
+                sender,
+            )),
+        ];
+        let mut owned = Running {
+            child,
+            mcp_url: None,
+            profile_mcp_url: String::new(),
+            readers,
+            _configuration: configuration,
+        };
+        let endpoint = match tokio::time::timeout(Duration::from_secs(35), receiver.recv()).await {
+            Ok(Some(StartupEvent::Endpoint(endpoint))) => endpoint,
+            _ => panic!("real agent stdout did not yield a verified fixture endpoint"),
+        };
+        let mut health = Url::parse(&endpoint).unwrap();
+        health.set_path("/health");
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(12))
+            .build()
+            .unwrap();
+        let response = client
+            .get(health)
+            .header("ngrok-skip-browser-warning", "1")
+            .send()
+            .await
+            .expect("fixture HTTPS health request failed");
+        let result = bounded_json(response)
+            .await
+            .expect("fixture health exceeded bounds or returned invalid JSON");
+        assert_eq!(result, serde_json::json!({"status":"ok","tools":0}));
+        owned.child.start_kill().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), owned.child.wait())
+            .await
+            .expect("owned agent stop timed out")
+            .unwrap();
+        assert!(owned.child.try_wait().unwrap().is_some());
+        fixture.abort();
     }
     #[test]
     fn ngrok_errors_never_return_raw_auth_values_or_remote_output() {
