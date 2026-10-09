@@ -1,6 +1,6 @@
 [package]
 name = "toris-studio-desktop"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 rust-version = "1.90"
 default-run = "toris-studio-desktop"
