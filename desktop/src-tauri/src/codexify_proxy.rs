@@ -65,6 +65,9 @@ pub struct ProxyController {
     running: Mutex<RunningProviders>,
 }
 
+pub(crate) fn cloudflared_binary() -> Option<PathBuf> {
+    binary(ProxyProvider::Cloudflare)
+}
 fn binary(provider: ProxyProvider) -> Option<PathBuf> {
     let name = match (provider, cfg!(windows)) {
         (ProxyProvider::Cloudflare, true) => "cloudflared.exe",

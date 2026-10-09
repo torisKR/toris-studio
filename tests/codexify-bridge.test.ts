@@ -8,7 +8,7 @@ test("direct bridge preserves native arguments and disables Codex discovery with
  assert.equal(result.workDir,"/Users/toris/projects/toris_studio");assert.equal("multiProject" in result,false);assert.equal(result.agentChat.enabled,true);
  assert.equal(result.mcpServers.studio.mode,"direct");assert.deepEqual(result.mcpServers.studio.args,["--studio-mcp"]);
  assert.deepEqual(result.codexMcp,{enabled:false,useCli:false});assert.equal(result.mcpServers.studio.command,native.mcpServers["toris-studio"].command);
- assert.equal(result.mcpServers.studio.tools.length,9);assert.ok(result.mcpServers.studio.tools.includes("studio_asset_receive"));
+ assert.equal(result.mcpServers.studio.tools.length,10);assert.ok(result.mcpServers.studio.tools.includes("studio_asset_receive"));
  assert.doesNotMatch(JSON.stringify(result),/apiKey|token|openaiTunnel/);
 });
 test("copyable config rejects a shell, wrong worker argument, unsafe or relative project paths",()=>{

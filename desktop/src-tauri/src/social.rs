@@ -168,12 +168,13 @@ fn integrations(config: &AppConfig) -> Vec<SocialIntegration> {
             if naver { "검색어로 최신 블로그 글을 조회합니다. 검색 결과에는 조회수나 인기도 순위가 없습니다." }
             else { "채널·초안 관리를 지원합니다. 검색에는 로컬 NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 설정이 필요합니다." },
             &["채널 관리", "콘텐츠 계획", "블로그 검색"]),
-        integration("threads", "Threads", "manual", "로컬 초안·예약 계획·게시 URL 기록을 지원합니다. 자동 게시는 연결되어 있지 않습니다.",
-            &["채널 관리", "콘텐츠 계획", "게시 URL 기록"]),
-        integration("tiktok", "TikTok", "manual", "로컬 초안·예약 계획·게시 URL 기록을 지원합니다. 자동 게시·인기 순위 API는 연결되어 있지 않습니다.",
-            &["채널 관리", "콘텐츠 계획", "게시 URL 기록"]),
-        integration("instagram", "Instagram", "manual", "로컬 초안·예약 계획·게시 URL 기록을 지원합니다. 자동 게시·인기 순위 API는 연결되어 있지 않습니다.",
-            &["채널 관리", "콘텐츠 계획", "게시 URL 기록"]),
+        integration("facebook", "Facebook Page", "manual", "Facebook Page OAuth 게시 권한을 별도로 승인하면 게시 작업실에서 Reel을 전송할 수 있습니다.", &["채널 관리", "Page Reel 게시"]),
+        integration("threads", "Threads", "manual", "게시 작업실에서 OAuth 게시 권한을 승인하면 영상과 문구를 즉시 또는 예약 게시합니다.",
+            &["채널 관리", "콘텐츠 계획", "영상 게시", "승인 후 예약 게시"]),
+        integration("tiktok", "TikTok", "manual", "게시 작업실에서 Direct Post와 TikTok 초안 전송을 지원합니다. 공개 Direct Post는 앱 심사 조건을 확인해야 합니다.",
+            &["채널 관리", "콘텐츠 계획", "Direct Post", "TikTok 초안 전송"]),
+        integration("instagram", "Instagram", "manual", "게시 작업실에서 전문 계정의 OAuth 게시 권한을 승인하면 Reel을 즉시 또는 예약 게시합니다.",
+            &["채널 관리", "콘텐츠 계획", "Reel 게시", "승인 후 예약 게시"]),
     ]
 }
 
@@ -286,6 +287,13 @@ pub fn validate_platform_url(platform: &str, value: &str) -> Result<String, Stri
             "vt.tiktok.com",
         ],
         "instagram" => &["instagram.com", "www.instagram.com", "m.instagram.com"],
+        "facebook" => &[
+            "facebook.com",
+            "www.facebook.com",
+            "m.facebook.com",
+            "fb.com",
+            "www.fb.com",
+        ],
         _ => return Err(VALIDATION_ERROR.into()),
     };
     if url.scheme() != "https"

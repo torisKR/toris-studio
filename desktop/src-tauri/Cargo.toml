@@ -1,6 +1,6 @@
 [package]
 name = "toris-studio-desktop"
-version = "0.1.20"
+version = "0.1.21"
 edition = "2021"
 rust-version = "1.90"
 default-run = "toris-studio-desktop"
@@ -11,14 +11,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-clipboard-manager", "dep:tauri-plugin-updater", "dep:updater-http", "dep:tauri-plugin-dialog"]
+desktop = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-clipboard-manager", "dep:tauri-plugin-updater", "dep:updater-http", "dep:tauri-plugin-dialog", "dep:tauri-plugin-single-instance"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-tauri = { version = "2", features = [], optional = true }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"], optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
@@ -28,9 +29,9 @@ minisign-verify = "0.2"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "process", "io-util", "fs"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }

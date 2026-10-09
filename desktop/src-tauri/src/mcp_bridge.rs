@@ -47,6 +47,7 @@ pub fn tools() -> Vec<Value> {
       tool("studio_asset_create_3d","기본 3D 도형 생성","Create a bounded local box/sphere/cylinder/plane as GLB/OBJ/STL. Not AI text-to-3D reconstruction. Units meters. GLB includes material color.",object(json!({"spec":spec(),"shape":choice(&["box","sphere","cylinder","plane"]),"size":{"type":"array","items":{"type":"number","minimum":0.001,"maximum":1000},"minItems":3,"maxItems":3},"segments":{"type":"integer","minimum":8,"maximum":64},"color":string(),"format":choice(&["glb","obj","stl"])}),&["spec","shape","size"]),false,false),
       tool("studio_asset_review","에셋 검토·태그","Change tags, favorite or review on a saved asset. Approve only on user direction, not invented visual inspection.",object(json!({"id":string(),"favorite":{"type":"boolean"},"review":choice(&["pending","approved","rejected"]),"tags":{"type":"array","items":{"type":"string","maxLength":40},"maxItems":32}}),&["id"]),false,true),
       tool("studio_asset_job_status","요청 상태 변경","Set queued/waiting/cancelled; cannot manufacture completion.",object(json!({"id":string(),"status":choice(&["queued","waiting","cancelled"])}),&["id","status"]),false,true)
+      ,tool("studio_publication_draft_receive","SNS 콘텐츠 초안 수신","Save a structured draft for an existing app request. Return the actual ChatGPT-written title, description, tags, and hashtags. This never approves, schedules or publishes content. Same request and identical content is idempotent; cannot overwrite a received draft.",object(json!({"requestId":string(),"title":{"type":"string","minLength":1,"maxLength":300},"description":{"type":"string","maxLength":30000},"tags":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":100}},"hashtags":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":100}}}),&["requestId","title","description","tags","hashtags"]),false,true)
     ]
 }
 fn observation_path(root: &Path) -> std::path::PathBuf {
@@ -186,6 +187,7 @@ async fn call(root: &Path, name: &str, mut args: Value) -> Result<Value, String>
             json!({"presets":serde_json::from_str::<Value>(include_str!("../../src/assets/preset-catalog.json")).map_err(|_|"프리셋을 읽지 못했습니다.".to_string())?,"checkedAt":"2026-10-09","custom":{"minDimension":16,"maxDimension":8192,"maxPixels":33554432,"icoMaxDimension":256}})
         }
         "studio_asset_receive" => return receive(root, args).await,
+        "studio_publication_draft_receive" => crate::chatgpt_drafts::receive(args)?,
         "studio_asset_request" => {
             let mut result = assets::dispatch_at(root, "create_jobs", defaults(args))?;
             result["generated"] = json!(false);

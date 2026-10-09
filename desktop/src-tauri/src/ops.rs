@@ -8,6 +8,7 @@ const SCHEMA: &str = include_str!("../../../db/migrations/001_social.sql");
 const OPAL_SCHEMA: &str = include_str!("../../../db/migrations/004_opal_research.sql");
 const OPAL_RESULT_SHAPE: &str = include_str!("../../../db/migrations/005_opal_result_shape.sql");
 const KEYWORD_SCHEMA: &str = include_str!("../../../db/migrations/006_keyword_explorer.sql");
+const PUBLICATION_SCHEMA: &str = include_str!("../../../db/migrations/007_publications.sql");
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
 const CRAWLER_COMPOSE: &str = include_str!("../../../infrastructure/keyword-crawler/compose.yaml");
@@ -37,6 +38,11 @@ fn stack_root() -> Result<PathBuf, String> {
     fs::write(
         root.join("db/migrations/005_opal_result_shape.sql"),
         OPAL_RESULT_SHAPE,
+    )
+    .map_err(|_| "DB 설정 저장 실패")?;
+    fs::write(
+        root.join("db/migrations/007_publications.sql"),
+        PUBLICATION_SCHEMA,
     )
     .map_err(|_| "DB 설정 저장 실패")?;
     #[cfg(unix)]
@@ -280,10 +286,62 @@ pub async fn migrate_database() -> Result<(), String> {
         .await
         .map_err(|_| "키워드 탐색 DB 스키마 갱신 실패")?;
     transaction
+        .batch_execute(PUBLICATION_SCHEMA)
+        .await
+        .map_err(|_| "일괄 게시 DB 스키마 갱신 실패")?;
+    transaction
         .commit()
         .await
         .map_err(|_| "DB 스키마 갱신 실패")?;
     Ok(())
+}
+/// Upgrade only the app-owned local stack, with a recoverable dump first. A
+/// caller-configured database is never promoted to an owner connection by URL.
+pub async fn migrate_configured_publications(config: &AppConfig) -> Result<(), String> {
+    let session = crate::social::database(config).await?;
+    let exists = session
+        .client
+        .query_one(
+            "SELECT to_regclass('public.social_schema_migrations')::text",
+            &[],
+        )
+        .await
+        .map_err(|_| "DB 스키마 상태를 확인하지 못했습니다.")?
+        .get::<_, Option<String>>(0)
+        .is_some();
+    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='007_publications')",&[]).await
+        .map_err(|_|"DB 마이그레이션 상태를 확인하지 못했습니다.")?.get::<_,bool>(0) {return Ok(());}
+    drop(session);
+    let raw = config
+        .database_url
+        .as_deref()
+        .ok_or("로컬 DB 연결을 먼저 설정하세요.")?;
+    let url = url::Url::parse(raw).map_err(|_| "DB 주소 형식을 확인하세요.")?;
+    let root = config_path()
+        .parent()
+        .ok_or("DB 저장 경로 오류")?
+        .join("db-stack");
+    let owned=credentials(&root,false).map_err(|_|"새 게시 스키마가 없습니다. 사용자 지정 DB는 직접 마이그레이션하거나 앱의 로컬 DB 시작을 이용하세요.")?;
+    let port = owned
+        .get("TORIS_DB_PORT")
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(54329);
+    if !matches!(url.scheme(), "postgres" | "postgresql")
+        || !matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+        || url.username() != "toris_app"
+        || url.path() != "/toris_studio"
+        || url.port_or_known_default().unwrap_or(5432) != port
+        || url.password() != owned.get("TORIS_DB_APP_PASSWORD").map(String::as_str)
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "사용자 지정 DB의 새 게시 스키마는 직접 적용해야 합니다. 앱 소유 DB만 자동 갱신합니다."
+                .into(),
+        );
+    }
+    backup_database().await?;
+    migrate_database().await
 }
 pub async fn backup_database() -> Result<Value, String> {
     let root = stack_root()?;

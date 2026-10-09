@@ -1,4 +1,4 @@
-export const SOCIAL_PLATFORMS = ["youtube", "threads", "naver_blog", "tiktok", "instagram"] as const;
+export const SOCIAL_PLATFORMS = ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook"] as const;
 export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 export const CONTENT_STATUSES = ["draft", "ready", "scheduled", "published"] as const;
 export type ContentStatus = (typeof CONTENT_STATUSES)[number];

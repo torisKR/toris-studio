@@ -1,4 +1,4 @@
-export const STUDIO_TOOLS = ["studio_connection_check","studio_asset_presets","studio_asset_list","studio_asset_request","studio_asset_receive","studio_asset_resize","studio_asset_create_3d","studio_asset_review","studio_asset_job_status"] as const;
+export const STUDIO_TOOLS = ["studio_connection_check","studio_asset_presets","studio_asset_list","studio_asset_request","studio_asset_receive","studio_asset_resize","studio_asset_create_3d","studio_asset_review","studio_asset_job_status","studio_publication_draft_receive"] as const;
 function record(value:unknown):Record<string,unknown>{
  if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("설치 앱의 MCP 실행 설정을 확인하세요.");
  return value as Record<string,unknown>;

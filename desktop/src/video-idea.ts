@@ -16,14 +16,14 @@ export const motionPresets = {
 
 export type VideoIdeaCategory = keyof typeof ideaCategories;
 export type VideoMotionPreset = keyof typeof motionPresets;
-export type VideoIdeaProvider = "opencodex" | "teamclaude" | "claude-cli";
+export type VideoIdeaProvider = "chatgpt";
 export type VideoMotion = { preset: VideoMotionPreset; intensity: number };
 export type VideoIdeaInput = {
   topic: string; category: VideoIdeaCategory; format: VideoFormat; provider: VideoIdeaProvider;
   language: VideoProject["language"]; sceneCount: number; durationSec: number;
 };
 export type VideoIdeaMetadata = {
-  version: 1; topic: string; category: VideoIdeaCategory; provider: VideoIdeaProvider;
+  version: 1; topic: string; category: VideoIdeaCategory; provider: string;
   createdAt: string; reviewRequired: true; motionSkill: "toris-video-motion";
 };
 export type StudioVideoScene = VideoScene & { motion?: VideoMotion };
@@ -37,7 +37,7 @@ export function readIdeaMetadata(value: unknown): VideoIdeaMetadata | null {
   const candidate = value as Partial<VideoIdeaMetadata>;
   return candidate.version === 1 && typeof candidate.topic === "string" && candidate.topic.length <= 300
     && typeof candidate.category === "string" && owns(ideaCategories, candidate.category)
-    && typeof candidate.provider === "string" && ["opencodex", "teamclaude", "claude-cli"].includes(candidate.provider)
+    && typeof candidate.provider === "string" && ["chatgpt", "opencodex", "teamclaude", "claude-cli"].includes(candidate.provider)
     && typeof candidate.createdAt === "string" && candidate.reviewRequired === true && candidate.motionSkill === "toris-video-motion"
     ? candidate as VideoIdeaMetadata : null;
 }

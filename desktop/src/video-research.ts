@@ -16,7 +16,7 @@ export type VideoResearchSource = {
   fetchedAt: string;
 };
 
-export type VideoResearchProvider = "local" | "opencodex" | "teamclaude" | "claude-cli";
+export type VideoResearchProvider = "local" | "chatgpt";
 
 export type VideoResearchPreview = {
   sources: VideoResearchSource[];

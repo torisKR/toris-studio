@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import {
   ArrowUpRight, AtSign, Check, ChevronDown, CircleAlert, Clock3, KeyRound,
   LoaderCircle, LogIn, Music2, NotebookPen, RefreshCw, ShieldCheck, Unplug,
-  Camera as Instagram, Video as Youtube
+  Users, Camera as Instagram, Video as Youtube
 } from "lucide-react";
 import type { SocialPlatform } from "./types";
 import "./OAuthPanel.css";
@@ -21,21 +21,25 @@ type OAuthProviderStatus = {
   detail: string;
   redirectUri?: string | null;
   pending: boolean;
+  publishingAuthorized?: boolean;
+  publishingScopes?: string[];
+  tiktokAuditDeclared?: boolean;
 };
 type OAuthStatus = { providers: OAuthProviderStatus[] };
 type KeychainStatus = { blocked: boolean };
 type OAuthAction = "save" | "login" | "complete" | "refresh" | "disconnect";
 type OAuthNotice = { platform?: SocialPlatform; tone: "success" | "error" | "info"; text: string };
-type ClientForm = { clientId: string; clientSecret: string; redirectUri: string };
+type ClientForm = { clientId: string; clientSecret: string; redirectUri: string; tiktokAuditDeclared: boolean };
 
 const providerInfo = {
   youtube: { label: "YouTube", icon: Youtube, description: "YouTube 계정의 읽기 권한을 연결합니다. 공개 성과·영상은 YouTube 관리에서 API 키로 조회하세요.", setup: "Google Cloud에서 데스크톱 앱용 OAuth 클라이언트를 등록하세요.", https: false },
-  threads: { label: "Threads", icon: AtSign, description: "계정 기본 권한으로 연결합니다. 게시·자동 발행 권한은 요청하지 않습니다.", setup: "Meta 개발자 앱에서 Threads 로그인과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true },
+  threads: { label: "Threads", icon: AtSign, description: "Threads 계정 연결입니다. SNS 일괄 게시에서 게시 권한을 별도로 연결하세요.", setup: "Meta 개발자 앱에서 Threads 로그인과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true },
   naver_blog: { label: "네이버 블로그", icon: NotebookPen, description: "네이버 계정 로그인 연결입니다. 블로그 자동 발행 권한은 포함되지 않습니다.", setup: "네이버 개발자센터에서 네이버 로그인 앱과 콜백 주소를 등록하세요. 검색 API 설정과 별개입니다.", https: false },
-  tiktok: { label: "TikTok", icon: Music2, description: "계정 기본 정보 권한으로 연결합니다. 동영상 업로드 권한은 요청하지 않습니다.", setup: "TikTok 개발자 앱에 데스크톱 Login Kit와 리디렉션 주소를 등록하세요.", https: false },
+  tiktok: { label: "TikTok", icon: Music2, description: "기본 계정 연결입니다. Direct Post·초안 업로드 권한은 SNS 일괄 게시에서 연결하세요.", setup: "TikTok 개발자 앱에 데스크톱 Login Kit와 리디렉션 주소를 등록하세요.", https: false },
+  facebook: { label: "Facebook Page", icon: Users, description: "관리할 Facebook 페이지를 연결합니다. 게시 계정 조회에서 Page와 실제 게시 권한을 확인하세요.", setup: "Meta 개발자 앱에서 Facebook Login과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true },
   instagram: { label: "Instagram", icon: Instagram, description: "비즈니스·크리에이터 계정의 기본 권한을 연결합니다. 개인 계정은 지원되지 않습니다.", setup: "Meta 개발자 앱에서 Instagram 로그인과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true }
 } satisfies Record<SocialPlatform, { label: string; icon: typeof Youtube; description: string; setup: string; https: boolean }>;
-const providerOrder: SocialPlatform[] = ["youtube", "threads", "naver_blog", "tiktok", "instagram"];
+const providerOrder: SocialPlatform[] = ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook"];
 const setupGuides: Partial<Record<SocialPlatform, string>> = {
   youtube: "https://developers.google.com/identity/protocols/oauth2/native-app",
   naver_blog: "https://developers.naver.com/docs/login/devguide/devguide.md",
@@ -46,7 +50,7 @@ function redirectDefault(platform: SocialPlatform) {
   return providerInfo[platform].https ? "" : `http://127.0.0.1:38471/oauth/${platform}/callback`;
 }
 function blankClient(platform: SocialPlatform, status: OAuthProviderStatus): ClientForm {
-  return { clientId: "", clientSecret: "", redirectUri: status.redirectUri ?? redirectDefault(platform) };
+  return { clientId: "", clientSecret: "", redirectUri: status.redirectUri ?? redirectDefault(platform), tiktokAuditDeclared: status.tiktokAuditDeclared === true };
 }
 function failure(error: unknown) {
   return typeof error === "string" ? error : error instanceof Error ? error.message : "SNS 연결을 처리하지 못했습니다.";
@@ -70,7 +74,7 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
   busy: { platform: SocialPlatform; action: OAuthAction } | null;
   storageLocked: boolean;
   notice: OAuthNotice | null;
-  onAction: (platform: SocialPlatform, action: OAuthAction, input?: Record<string, string>) => Promise<boolean>;
+  onAction: (platform: SocialPlatform, action: OAuthAction, input?: Record<string, unknown>) => Promise<boolean>;
 }) {
   const info = providerInfo[status.platform];
   const Icon = info.icon;
@@ -134,10 +138,11 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
       setInputError("등록한 리디렉션 주소를 http:// 또는 https://부터 전체 입력하세요.");
       return;
     }
-    const input: Record<string, string> = {};
+    const input: Record<string, unknown> = {};
     for (const key of ["clientId", "clientSecret", "redirectUri"] as const) {
       if (form[key].trim()) input[key] = form[key].trim();
     }
+    if (status.platform === "tiktok") input.tiktokAuditDeclared = form.tiktokAuditDeclared;
     const success = await onAction(status.platform, "save", input);
     if (success) {
       setForm((current) => ({ ...current, clientId: "", clientSecret: "" }));
@@ -162,6 +167,7 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
     </div>
     <p className="desktop-oauth-description">{info.description}</p>
     <p className="desktop-oauth-detail">{status.detail}</p>
+    {status.platform !== "naver_blog" && <p className="desktop-oauth-detail"><ShieldCheck size={13}/> {status.publishingAuthorized ? "게시 권한 연결됨 · 실제 대상 계정은 SNS 일괄 게시에서 확인" : "게시 권한 확인 필요 · SNS 일괄 게시에서 권한 로그인"}</p>}
     {(status.connected || status.needsReconnect || status.expiresAt) && <dl className="desktop-oauth-session"><div><dt><Clock3 size={13} aria-hidden="true" />토큰 만료 (KST)</dt><dd>{expiry(status.expiresAt)}</dd></div><div><dt>연결 갱신</dt><dd>{status.refreshable ? "플랫폼 갱신 토큰 사용" : "필요할 때 다시 로그인"}</dd></div></dl>}
 
     {providerNotice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${providerNotice.tone}`} role={providerNotice.tone === "error" ? "alert" : "status"}>{providerNotice.tone === "error" ? <CircleAlert size={16} /> : providerNotice.tone === "success" ? <Check size={16} /> : <ShieldCheck size={16} />}<span>{providerNotice.text}</span></div>}
@@ -176,6 +182,7 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
         <input id={`oauth-secret-${status.platform}`} type="password" autoComplete="new-password" spellCheck={false} value={form.clientSecret} onChange={(event) => setForm((current) => ({ ...current, clientSecret: event.target.value }))} placeholder={status.clientConfigured ? "빈 입력은 저장된 시크릿 유지" : "등록한 앱의 클라이언트 시크릿"} required={status.platform !== "youtube" && !status.clientConfigured} maxLength={4000} />
         <label htmlFor={`oauth-redirect-${status.platform}`}>등록한 리디렉션 주소</label>
         <input id={`oauth-redirect-${status.platform}`} type="url" autoComplete="off" spellCheck={false} value={form.redirectUri} onChange={(event) => setForm((current) => ({ ...current, redirectUri: event.target.value }))} placeholder={info.https ? "등록한 https:// 주소" : redirectDefault(status.platform)} required maxLength={2000} aria-describedby={`oauth-redirect-help-${status.platform}`} />
+        {status.platform === "tiktok" && <label className="integration-checkbox"><input type="checkbox" checked={form.tiktokAuditDeclared} onChange={event => setForm(current => ({ ...current, tiktokAuditDeclared: event.target.checked }))}/><span>개발자 콘솔에서 이 앱의 공개 Direct Post 심사 승인을 직접 확인했습니다. 이 표시는 사용자의 확인 선언이며 API 검증 결과와 구분됩니다.</span></label>}
         <p id={`oauth-redirect-help-${status.platform}`} className="social-form-hint">{info.https ? "Meta 앱에 등록한 HTTPS 주소와 정확히 같아야 합니다. 로그인 후 이동한 전체 주소를 아래에 붙여넣어 연결을 완료합니다." : "플랫폼 앱에 등록한 주소와 정확히 같아야 합니다. 기본 로컬 주소를 사용하면 로그인 완료를 자동으로 받습니다."}</p>
         <div className="desktop-oauth-save"><span>입력한 비밀 정보는 저장 후 다시 표시하지 않습니다.</span><button type="submit" className="social-button compact">{currentBusy === "save" ? <LoaderCircle size={14} className="social-spin" /> : <Check size={14} />}{currentBusy === "save" ? "저장 중" : "앱 설정 저장"}</button></div>
       </fieldset>
@@ -245,7 +252,7 @@ export function OAuthPanel({ active }: { active: boolean }) {
     return () => window.clearInterval(interval);
   }, [active, pending, keychainBlocked, keychainRetryBusy, reload]);
 
-  async function action(platform: SocialPlatform, kind: OAuthAction, input?: Record<string, string>): Promise<boolean> {
+  async function action(platform: SocialPlatform, kind: OAuthAction, input?: Record<string, unknown>): Promise<boolean> {
     if (actionRequest.current || statusRequest.current || keychainRetryRequest.current || keychainBlocked) return false;
     actionRequest.current = true;
     generation.current += 1;

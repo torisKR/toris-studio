@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-pub const SOCIAL_PLATFORMS: [&str; 5] = ["youtube", "threads", "naver_blog", "tiktok", "instagram"];
+pub const SOCIAL_PLATFORMS: [&str; 6] = [
+    "youtube",
+    "threads",
+    "naver_blog",
+    "tiktok",
+    "instagram",
+    "facebook",
+];
 pub const CONTENT_STATUSES: [&str; 4] = ["draft", "ready", "scheduled", "published"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
