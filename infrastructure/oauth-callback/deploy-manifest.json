@@ -1,0 +1,67 @@
+{
+  "status": "deployed_verified",
+  "callbackUrl": "https://toris.kr/oauth/instagram/callback",
+  "workerName": "toris-site",
+  "baselineSourceSha256": "76a7a66647548239692c4d86d6ce1c856592c5a012e21aab2b0b6f813aa5977a",
+  "existingUpstreamOrigin": "https://toris-product-studio.toriskr.chatgpt.site",
+  "compatibilityDate": "2026-07-01",
+  "customDomains": [
+    "toris.kr",
+    "www.toris.kr"
+  ],
+  "deployFiles": [
+    {
+      "path": "worker.ts",
+      "sha256": "51aab09bb6ebb38832b464f190b25374f818ee8e1ef24c1f7d24292216864cd9",
+      "bytes": 2728
+    },
+    {
+      "path": "wrangler.jsonc",
+      "sha256": "48a1f516c84898589041bdb0a366c753723cf1a97047cf701d83fdd03da287ee",
+      "bytes": 382
+    }
+  ],
+  "tests": {
+    "command": "node --test infrastructure/oauth-callback/callback.test.mjs",
+    "passed": 10,
+    "failed": 0
+  },
+  "dryRun": {
+    "wranglerVersion": "4.115.0",
+    "succeeded": true
+  },
+  "containsCredentials": false,
+  "liveBaseline": {
+    "sourceSha256": "4447a1afbef9f1e5494703c912f33fc0a65000566f0aa89da992375812aa243c",
+    "sourceBytes": 1004,
+    "expectedSitesProxy": true,
+    "existingCallbackGuard": false,
+    "matchesCompiledLocalProxy": true,
+    "retrievedAtUtc": "2026-10-08T06:23:18.501808Z"
+  },
+  "authCheck": {
+    "authenticated": true,
+    "accountCount": 1,
+    "credentialsPrinted": false,
+    "newCredentialsCreated": false
+  },
+  "regressionCheck": {
+    "ordinaryRequestsCompared": 8,
+    "unchanged": true,
+    "syntheticCallbackUpstreamRequestsBefore": 1,
+    "syntheticCallbackUpstreamRequestsAfter": 0
+  },
+  "deployment": {
+    "versionId": "fea9d07a-ac80-48bb-b3a4-759e6ac74c4a",
+    "verifiedAtUtc": "2026-10-08T06:43:12.229Z",
+    "callbackStatus": 200,
+    "syntheticQueryNotReflected": true,
+    "callbackProxied": false,
+    "homepageStatus": 200,
+    "homepageProxyMarker": "chatgpt-sites",
+    "baselineUnchangedAtDeployment": true,
+    "priorObservabilityAbsent": true,
+    "priorLogpush": false,
+    "priorTailConsumers": 0
+  }
+}

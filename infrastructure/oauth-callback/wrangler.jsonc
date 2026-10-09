@@ -1,0 +1,16 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "toris-site",
+  "main": "worker.ts",
+  "compatibility_date": "2026-07-01",
+  "routes": [
+    { "pattern": "toris.kr", "custom_domain": true },
+    { "pattern": "www.toris.kr", "custom_domain": true }
+  ],
+  "observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": false
+    }
+  }
+}
