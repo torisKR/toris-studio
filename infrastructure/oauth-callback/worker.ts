@@ -50,21 +50,31 @@ export default {
       return Response.redirect(incomingUrl.toString(), 301);
     }
 
-    const upstreamUrl = new URL(
-      `${incomingUrl.pathname}${incomingUrl.search}`,
-      SITES_ORIGIN
-    );
+    // Set path components on the trusted origin; a leading // must remain a path.
+    const upstreamUrl = new URL(SITES_ORIGIN);
+    upstreamUrl.pathname = incomingUrl.pathname;
+    upstreamUrl.search = incomingUrl.search;
     const upstream = await fetch(new Request(upstreamUrl, request), {
       redirect: 'manual'
     });
     const response = new Response(upstream.body, upstream);
     const location = response.headers.get('location');
 
-    if (location?.startsWith(SITES_ORIGIN)) {
-      response.headers.set(
-        'location',
-        location.replace(SITES_ORIGIN, incomingUrl.origin)
-      );
+    if (location) {
+      try {
+        // Resolve relative redirects against the requested upstream page, then
+        // compare parsed origins. Credential-bearing and other-origin URLs stay intact.
+        const redirectUrl = new URL(location, upstreamUrl);
+        if (redirectUrl.origin === upstreamUrl.origin && !redirectUrl.username && !redirectUrl.password) {
+          const publicRedirect = new URL(incomingUrl.origin);
+          publicRedirect.pathname = redirectUrl.pathname;
+          publicRedirect.search = redirectUrl.search;
+          publicRedirect.hash = redirectUrl.hash;
+          response.headers.set('location', publicRedirect.toString());
+        }
+      } catch {
+        // Preserve an invalid upstream Location without interpreting it as local.
+      }
     }
 
     response.headers.set('x-toris-origin', 'chatgpt-sites');

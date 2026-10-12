@@ -6,10 +6,13 @@ import { pathToFileURL } from 'node:url';
 import proposed from './worker.ts';
 
 const baselinePath = process.argv[2];
-assert.ok(baselinePath, 'Pass the path to the read-only Cloudflare Worker source backup.');
+assert.ok(baselinePath, 'Pass the path to the historical Worker source or read-only live backup.');
 const manifest = JSON.parse(await readFile(new URL('./deploy-manifest.json', import.meta.url), 'utf8'));
 const baselineSource = await readFile(baselinePath);
-assert.equal(createHash('sha256').update(baselineSource).digest('hex'), manifest.liveBaseline.sourceSha256, 'Baseline differs from the reviewed live Worker backup.');
+const baselineHash = createHash('sha256').update(baselineSource).digest('hex');
+const baselineSourceKind = baselineHash === manifest.baselineSourceSha256 ? 'historicalTrackedSource'
+  : baselineHash === manifest.historicalDeployment.liveBaseline.sourceSha256 ? 'historicalLiveBackup' : null;
+assert.ok(baselineSourceKind, 'Baseline differs from both reviewed historical Worker sources.');
 const baseline = (await import(pathToFileURL(resolve(baselinePath)).href)).default;
 const originalFetch = globalThis.fetch;
 
@@ -19,6 +22,9 @@ async function execute(worker, url, method = 'GET') {
     calls.push({ url: request.url, method: request.method, headers: [...request.headers], body: method === 'POST' ? await request.text() : null, init });
     if (new URL(request.url).pathname === '/old') {
       return new Response(null, { status: 302, headers: { location: 'https://toris-product-studio.toriskr.chatgpt.site/new?retain=1' } });
+    }
+    if (new URL(request.url).pathname === '/lookalike-redirect') {
+      return new Response(null, { status: 302, headers: { location: 'https://toris-product-studio.toriskr.chatgpt.site.attacker.invalid/new' } });
     }
     return new Response('Original Sites response', { status: 200, headers: { 'content-type': 'text/html', 'x-original-header': 'retained' } });
   };
@@ -52,4 +58,18 @@ const after = await execute(proposed, syntheticCallback);
 assert.equal(before.calls.length, 1);
 assert.equal(after.calls.length, 0);
 assert.ok(!after.body.includes('synthetic-only'));
-console.log(JSON.stringify({ ordinaryRequestsCompared: 8, ordinaryBehaviorUnchanged: true, callbackUpstreamRequestsBefore: before.calls.length, callbackUpstreamRequestsAfter: after.calls.length, callbackQueryReflected: false }));
+
+const networkPath = 'https://toris.kr//attacker.invalid/content?retain=1';
+const beforeNetworkPath = await execute(baseline, networkPath, 'POST');
+const afterNetworkPath = await execute(proposed, networkPath, 'POST');
+assert.equal(new URL(beforeNetworkPath.calls[0].url).origin, 'https://attacker.invalid');
+assert.equal(afterNetworkPath.calls[0].url, 'https://toris-product-studio.toriskr.chatgpt.site//attacker.invalid/content?retain=1');
+assert.equal(afterNetworkPath.calls[0].method, 'POST');
+assert.equal(afterNetworkPath.calls[0].body, 'synthetic body');
+
+const beforeRedirect = await execute(baseline, 'https://toris.kr/lookalike-redirect');
+const afterRedirect = await execute(proposed, 'https://toris.kr/lookalike-redirect');
+assert.equal(new Headers(beforeRedirect.headers).get('location'), 'https://toris.kr.attacker.invalid/new');
+assert.equal(new Headers(afterRedirect.headers).get('location'), 'https://toris-product-studio.toriskr.chatgpt.site.attacker.invalid/new');
+
+console.log(JSON.stringify({ baselineSourceKind, publicDeploymentChecked: false, ordinaryRequestsCompared: 8, ordinaryBehaviorUnchanged: true, callbackUpstreamRequestsBefore: before.calls.length, callbackUpstreamRequestsAfter: after.calls.length, callbackQueryReflected: false, networkPathOriginFixed: true, lookalikeRedirectUnchanged: true }));

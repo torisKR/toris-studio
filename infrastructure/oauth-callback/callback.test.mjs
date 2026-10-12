@@ -6,14 +6,14 @@ import worker from './worker.ts';
 const callback = 'https://toris.kr/oauth/instagram/callback';
 const originalFetch = globalThis.fetch;
 
-async function withFetchSpy(run) {
+async function withFetchSpy(run, respond = () => new Response('Sites unchanged', {
+  status: 200,
+  headers: { 'content-type': 'text/html', 'x-existing-header': 'retained' }
+})) {
   const calls = [];
   globalThis.fetch = async (request, init) => {
     calls.push({ request, init });
-    return new Response('Sites unchanged', {
-      status: 200,
-      headers: { 'content-type': 'text/html', 'x-existing-header': 'retained' }
-    });
+    return respond(request, init);
   };
   try { await run(calls); } finally { globalThis.fetch = originalFetch; }
 }
@@ -101,6 +101,53 @@ test('unrelated paths remain proxied and callback matching stays exact', async (
   });
 });
 
+test('network paths, normalized backslashes, and encoded delimiters cannot replace the upstream origin', async () => {
+  await withFetchSpy(async calls => {
+    const paths = [
+      '//attacker.invalid/content?retain=1',
+      '///attacker.invalid/content',
+      '/\\attacker.invalid/content',
+      '/\\\\attacker.invalid/content',
+      '/%2f%2fattacker.invalid/content',
+      '/%5c%5cattacker.invalid/content',
+      '/%252f%252fattacker.invalid/content',
+      '//attacker.invalid@lookalike.invalid/content',
+      '//attacker.invalid:8443/content',
+    ];
+    for (const path of paths) {
+      const request = new Request(`https://toris.kr${path}`);
+      const incoming = new URL(request.url);
+      const response = await worker.fetch(request);
+      const forwarded = new URL(calls.at(-1).request.url);
+      assert.equal(forwarded.origin, 'https://toris-product-studio.toriskr.chatgpt.site', path);
+      assert.equal(forwarded.pathname, incoming.pathname, path);
+      assert.equal(forwarded.search, incoming.search, path);
+      assert.equal(await response.text(), 'Sites unchanged');
+    }
+    assert.equal(calls.length, paths.length);
+  });
+});
+
+test('method, body, and headers are copied only to the fixed upstream host', async () => {
+  await withFetchSpy(async calls => {
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      const response = await worker.fetch(new Request('https://toris.kr//attacker.invalid/submit?retain=1', {
+        method,
+        headers: { 'content-type': 'text/plain', 'x-test-marker': 'retained' },
+        body: `synthetic ${method} body`,
+      }));
+      const { request, init } = calls.at(-1);
+      assert.equal(request.url, 'https://toris-product-studio.toriskr.chatgpt.site//attacker.invalid/submit?retain=1');
+      assert.equal(request.method, method);
+      assert.equal(request.headers.get('x-test-marker'), 'retained');
+      assert.equal(request.headers.get('content-type'), 'text/plain');
+      assert.equal(await request.text(), `synthetic ${method} body`);
+      assert.deepEqual(init, { redirect: 'manual' });
+      assert.equal(await response.text(), 'Sites unchanged');
+    }
+  });
+});
+
 test('www canonical redirects preserve the existing behavior without an upstream call', async () => {
   await withFetchSpy(async calls => {
     const response = await worker.fetch(new Request('https://www.toris.kr/blog/example?preview=1'));
@@ -110,14 +157,47 @@ test('www canonical redirects preserve the existing behavior without an upstream
   });
 });
 
-test('upstream Location rewriting is retained', async () => {
-  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: 'https://toris-product-studio.toriskr.chatgpt.site/blog/example?preview=1' } });
-  try {
-    const response = await worker.fetch(new Request('https://toris.kr/blog'));
-    assert.equal(response.status, 302);
-    assert.equal(response.headers.get('location'), 'https://toris.kr/blog/example?preview=1');
-    assert.equal(response.headers.get('x-toris-origin'), 'chatgpt-sites');
-  } finally { globalThis.fetch = originalFetch; }
+test('exact-origin absolute and relative Locations are rewritten with path, query, and fragment retained', async () => {
+  const locations = [
+    ['https://toris-product-studio.toriskr.chatgpt.site/blog/example?preview=1#section', '/blog/example?preview=1#section'],
+    ['https://toris-product-studio.toriskr.chatgpt.site:443/blog/example', '/blog/example'],
+    ['HTTPS://TORIS-PRODUCT-STUDIO.TORISKR.CHATGPT.SITE/blog/example', '/blog/example'],
+    ['//toris-product-studio.toriskr.chatgpt.site/blog/example', '/blog/example'],
+    ['/blog/example?preview=1#section', '/blog/example?preview=1#section'],
+    ['../next?preview=1#section', '/next?preview=1#section'],
+    ['?preview=1', '/blog/current?preview=1'],
+    ['#section', '/blog/current?existing=1#section'],
+  ];
+  for (const [location, expected] of locations) {
+    await withFetchSpy(async () => {
+      const response = await worker.fetch(new Request('https://toris.kr/blog/current?existing=1'));
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get('location'), `https://toris.kr${expected}`, location);
+      assert.equal(response.headers.get('x-toris-origin'), 'chatgpt-sites');
+    }, () => new Response(null, { status: 302, headers: { location } }));
+  }
+});
+
+test('other-origin, lookalike, non-default-port, and credential-bearing Locations stay unchanged', async () => {
+  const locations = [
+    'https://attacker.invalid/blog',
+    'https://toris-product-studio.toriskr.chatgpt.site.attacker.invalid/blog',
+    'https://toris-product-studio.toriskr.chatgpt.site-attacker.invalid/blog',
+    'https://toris-product-studio.toriskr.chatgpt.site@attacker.invalid/blog',
+    'https://toris-product-studio.toriskr.chatgpt.site:8443/blog',
+    'http://toris-product-studio.toriskr.chatgpt.site/blog',
+    'https://toris-product-studio.toriskr.chatgpt.site./blog',
+    '//attacker.invalid/blog',
+    'https://user@toris-product-studio.toriskr.chatgpt.site/blog',
+    'https://user:synthetic-password@toris-product-studio.toriskr.chatgpt.site/blog',
+    'https://[invalid-host/blog',
+  ];
+  for (const location of locations) {
+    await withFetchSpy(async () => {
+      const response = await worker.fetch(new Request('https://toris.kr/blog'));
+      assert.equal(response.headers.get('location'), location);
+    }, () => new Response(null, { status: 302, headers: { location } }));
+  }
 });
 
 test('Worker has no console calls and invocation URL logging is disabled in the deploy config', async () => {
