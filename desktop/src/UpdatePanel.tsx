@@ -4,21 +4,10 @@ import { ArrowDownToLine, Check, CircleAlert, Download, ExternalLink, LoaderCirc
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { External } from "./External";
+import { createUpdateSession, type UpdatePhase, type UpdateStatus } from "./update-session";
 import "./UpdatePanel.css";
 
-type UpdatePhase = "idle" | "checking" | "available" | "upToDate" | "downloading" | "ready" | "installing" | "installed" | "cancelled" | "error";
-export type UpdateStatus = {
-  configured: boolean;
-  currentVersion: string;
-  phase: UpdatePhase;
-  availableVersion: string | null;
-  notes: string | null;
-  publishedAt: string | null;
-  downloadedBytes: number;
-  totalBytes: number | null;
-  message: string;
-  canCancel: boolean;
-};
+export type { UpdateStatus } from "./update-session";
 type Props = {
   hasUnsavedChanges?: boolean;
   otherOperationBusy?: boolean;
@@ -65,8 +54,8 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
   const [error, setError] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [savedConfirmation, setSavedConfirmation] = useState(false);
-  const mounted = useRef(true);
-  const revision = useRef(0);
+  const [eventsConnected, setEventsConnected] = useState<boolean | null>(null);
+  const subscription = useRef<ReturnType<typeof createUpdateSession> | null>(null);
   const actionPending = useRef(false);
   const cancellationPending = useRef(false);
   const confirmationRef = useRef<HTMLDivElement>(null);
@@ -76,37 +65,27 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
   const installing = pending === "install" || (status !== null && installPhases.has(status.phase));
 
   const refresh = useCallback(async () => {
-    const request = ++revision.current;
-    try {
-      const next = await invoke<UpdateStatus>("get_update_status");
-      if (mounted.current && request === revision.current) setStatus(next);
-    } catch {
-      if (mounted.current && request === revision.current) setError("앱의 업데이트 상태를 불러오지 못했습니다. 다시 확인하거나 공식 릴리스에서 설치 파일을 받으세요.");
-    } finally {
-      if (mounted.current) setInitialLoading(false);
-    }
+    await subscription.current?.refresh();
   }, []);
 
   useEffect(() => {
-    mounted.current = true;
-    void refresh();
-    let stopListening: (() => void) | undefined;
-    let disposed = false;
-    void listen<UpdateStatus>("desktop-update-status", (event) => {
-      if (!mounted.current) return;
-      revision.current += 1;
-      setStatus(event.payload); setError(""); setInitialLoading(false);
-    }).then((unlisten) => {
-      if (disposed) unlisten(); else stopListening = unlisten;
-    }).catch(() => { /* Active operations are also refreshed below. */ });
-    return () => { disposed = true; mounted.current = false; revision.current += 1; stopListening?.(); };
-  }, [refresh]);
+    const session = createUpdateSession({
+      subscribe: receive => listen<UpdateStatus>("desktop-update-status", event => receive(event.payload), { target: { kind: "WebviewWindow", label: "main" } }),
+      read: () => invoke<UpdateStatus>("get_update_status"),
+      onStatus: next => { setStatus(next); setError(""); setInitialLoading(false); },
+      onReadError: () => setError("앱의 업데이트 상태를 불러오지 못했습니다. 다시 확인하거나 공식 릴리스에서 설치 파일을 받으세요."),
+      onReady: () => setInitialLoading(false),
+      onConnected: setEventsConnected,
+    });
+    subscription.current = session;
+    return () => { session.dispose(); if (subscription.current === session) subscription.current = null; };
+  }, []);
 
   useEffect(() => {
-    if (!active && pending === null) return;
+    if (!active && pending === null && eventsConnected !== false) return;
     const timer = window.setInterval(() => { void refresh(); }, 1200);
     return () => window.clearInterval(timer);
-  }, [active, pending, refresh]);
+  }, [active, pending, eventsConnected, refresh]);
 
   useEffect(() => {
     onInstallBusyChange?.(installing);
@@ -117,7 +96,7 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
     if (!installing) return;
     const dialog = installDialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
-    return () => { if (dialog?.open) dialog.close(); checkButtonRef.current?.focus(); };
+    return () => { if (dialog?.open) dialog.close(); if (subscription.current?.active()) checkButtonRef.current?.focus(); };
   }, [installing]);
 
   useEffect(() => { setConfirmationOpen(false); setSavedConfirmation(false); }, [status?.availableVersion]);
@@ -125,37 +104,39 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
   useEffect(() => { if (confirmationOpen) confirmationRef.current?.focus({ preventScroll: true }); }, [confirmationOpen]);
 
   async function runAction(action: "check" | "install") {
+    const session = subscription.current;
+    if (!session?.active()) return;
     if (actionPending.current) return;
     if (otherOperationBusy || active) return;
     if (action === "install" && (!status?.availableVersion || !status.configured || hasUnsavedChanges || !savedConfirmation)) return;
     actionPending.current = true;
     setPending(action); setError("");
     if (action === "install") setConfirmationOpen(false);
-    const request = ++revision.current;
     try {
       const next = await invoke<UpdateStatus>(action === "check" ? "check_for_updates" : "install_update", action === "install" ? { input: { expectedVersion: status!.availableVersion, confirmed: true } } : undefined);
-      if (mounted.current && request === revision.current) setStatus(next);
+      session.receive(next);
     } catch {
-      if (mounted.current) setError(action === "install" ? "업데이트를 완료하지 못했습니다. 상태를 다시 확인한 뒤 재시도하거나 공식 설치 파일을 받으세요." : "새 버전을 확인하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도하세요.");
+      if (session.active()) setError(action === "install" ? "업데이트를 완료하지 못했습니다. 상태를 다시 확인한 뒤 재시도하거나 공식 설치 파일을 받으세요." : "새 버전을 확인하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도하세요.");
     } finally {
       actionPending.current = false;
-      if (mounted.current) { setPending(null); void refresh(); }
+      if (session.active()) { setPending(null); void session.refresh(); }
     }
   }
 
   async function cancelDownload() {
+    const session = subscription.current;
+    if (!session?.active()) return;
     if (cancellationPending.current || !status?.canCancel) return;
     cancellationPending.current = true;
     setCancelling(true); setError("");
-    const request = ++revision.current;
     try {
       const next = await invoke<UpdateStatus>("cancel_update");
-      if (mounted.current && request === revision.current) setStatus(next);
+      session.receive(next);
     } catch {
-      if (mounted.current) setError("취소 상태를 확인하지 못했습니다. 아래의 설치 상태를 확인하세요.");
+      if (session.active()) setError("취소 상태를 확인하지 못했습니다. 아래의 설치 상태를 확인하세요.");
     } finally {
       cancellationPending.current = false;
-      if (mounted.current) { setCancelling(false); void refresh(); }
+      if (session.active()) { setCancelling(false); void session.refresh(); }
     }
   }
 
@@ -173,7 +154,9 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
     <p>다운로드와 서명 검증을 마친 뒤 새 버전으로 교체합니다. 설치가 끝나면 앱을 다시 시작합니다.</p>
   </div>;
 
-  return <section className="desktop-update" aria-labelledby="settings-update-title">
+  const retrying = Boolean(error || status?.phase === "error" || status?.phase === "cancelled");
+
+  return <section className="desktop-update" aria-labelledby="settings-update-title" aria-busy={initialLoading || updateBusy}>
     <div className="desktop-update-heading">
       <span className="desktop-update-icon"><ArrowDownToLine size={21} aria-hidden="true" /></span>
       <div><h2 id="settings-update-title">앱 업데이트</h2><p>공식 GitHub 릴리스에서 새 버전을 확인하고 설치하세요.</p></div>
@@ -184,20 +167,26 @@ export function UpdatePanel({ hasUnsavedChanges = false, otherOperationBusy = fa
       <div className="desktop-update-state-copy"><strong role="status" aria-live="polite">{label}</strong>{status?.availableVersion && <span>새 버전 {status.availableVersion}{releaseDate ? ` · ${releaseDate} 공개` : ""}</span>}{status?.message && <p>{status.message}</p>}</div>
       <div className="desktop-update-actions">
         {status?.canCancel && !installing && <button type="button" className="social-button compact" disabled={cancelling} onClick={() => void cancelDownload()}><X size={15} />{cancelling ? "취소 중" : status.phase === "checking" ? "확인 취소" : "다운로드 취소"}</button>}
-        {!installing && <button ref={checkButtonRef} type="button" className="social-button" disabled={initialLoading || updateBusy || otherOperationBusy} onClick={() => void runAction("check")}><RefreshCw size={16} className={pending === "check" ? "social-spin" : ""} />{pending === "check" || status?.phase === "checking" ? "확인 중" : "업데이트 확인"}</button>}
-        {canInstall && !updateBusy && <button type="button" className="social-button primary" disabled={hasUnsavedChanges || otherOperationBusy} aria-expanded={confirmationOpen} aria-controls="settings-update-confirmation" onClick={() => { setSavedConfirmation(false); setConfirmationOpen(true); }}><Download size={16} />새 버전 설치</button>}
+        {!installing && <button ref={checkButtonRef} type="button" className="social-button" disabled={initialLoading || updateBusy || otherOperationBusy} onClick={() => void runAction("check")}><RefreshCw size={16} className={pending === "check" ? "social-spin" : ""} />{pending === "check" || status?.phase === "checking" ? "확인 중" : retrying ? "다시 확인" : "업데이트 확인"}</button>}
+        {canInstall && !updateBusy && <button type="button" className="social-button primary" disabled={hasUnsavedChanges || otherOperationBusy} aria-expanded={confirmationOpen} aria-controls="settings-update-confirmation" onClick={() => { setSavedConfirmation(false); setConfirmationOpen(true); }}><Download size={16} />{retrying ? "다운로드 다시 시도" : "새 버전 설치"}</button>}
       </div>
     </div>
     {error && <p className="desktop-update-error" role="alert">{error}</p>}
     {installing && <dialog ref={installDialogRef} tabIndex={-1} className="desktop-update-install-dialog" aria-modal="true" aria-labelledby="settings-update-install-title" aria-describedby="settings-update-install-description" onKeyDown={trapInstallFocus} onCancel={(event) => { event.preventDefault(); if (status?.canCancel) void cancelDownload(); }}>
       <div className="desktop-update-dialog-heading"><LoaderCircle size={21} className="social-spin" aria-hidden="true" /><h2 id="settings-update-install-title" role="status" aria-live="polite">{phaseLabels[status?.phase === "downloading" || status?.phase === "ready" || status?.phase === "installing" ? status.phase : "downloading"]}</h2></div>
       <p id="settings-update-install-description">버전 {status?.availableVersion} · 업데이트가 끝날 때까지 작업 화면을 잠시 잠급니다.</p>
+      <ol className="desktop-update-steps" aria-label="업데이트 설치 단계">
+        <li className={status?.phase === "downloading" || pending === "install" && !installPhases.has(status?.phase ?? "idle") ? "current" : "done"}><span>1</span>다운로드</li>
+        <li className={status?.phase === "ready" ? "done" : status?.phase === "installing" || status?.phase === "installed" ? "done" : ""}><span>2</span>서명 확인</li>
+        <li className={status?.phase === "installing" || status?.phase === "installed" ? "current" : ""}><span>3</span>설치 · 다시 시작</li>
+      </ol>
       {progress}
       {error && <p className="desktop-update-error" role="alert">{error}</p>}
-      <div className="desktop-update-dialog-footer">{status?.canCancel ? <button type="button" className="social-button" autoFocus disabled={cancelling} onClick={() => void cancelDownload()}><X size={16} />{cancelling ? "취소 중" : "다운로드 취소"}</button> : <span>설치 중에는 앱을 종료하지 마세요.</span>}</div>
+      <div className="desktop-update-dialog-footer">{status?.canCancel ? <button type="button" className="social-button" autoFocus disabled={cancelling} onClick={() => void cancelDownload()}><X size={16} />{cancelling ? "취소 중" : "다운로드 취소"}</button> : <span>{status?.phase === "downloading" ? "취소 요청을 확인하고 있습니다." : "설치 중에는 앱을 종료하지 마세요."}</span>}</div>
     </dialog>}
     {hasUnsavedChanges && <p className="desktop-update-hint"><CircleAlert size={15} aria-hidden="true" />연결 설정에 저장하지 않은 변경이 있습니다. 아래에서 설정을 저장한 뒤 업데이트를 설치하세요.</p>}
     {otherOperationBusy && !installing && <p className="desktop-update-hint">진행 중인 설정 작업이 끝나면 업데이트를 확인하고 설치할 수 있습니다.</p>}
+    {eventsConnected === false && <p className="desktop-update-hint">실시간 연결을 확인하지 못해 업데이트 상태를 주기적으로 확인합니다.</p>}
     {confirmationOpen && <div id="settings-update-confirmation" ref={confirmationRef} tabIndex={-1} className="desktop-update-confirmation" role="group" aria-labelledby="settings-update-confirmation-title">
       <strong id="settings-update-confirmation-title">버전 {status?.availableVersion}을 설치할까요?</strong>
       <p>설치가 끝나면 Toris Studio가 자동으로 다시 시작됩니다. 콘텐츠, 채널, SNS 연결과 로컬 설정은 같은 저장소에서 불러옵니다.</p>

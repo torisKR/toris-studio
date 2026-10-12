@@ -1,7 +1,7 @@
 //! Create editable video drafts from selected, already saved research records.
 //! No source media is downloaded. AI may select source excerpts, never introduce
 //! new factual prose, URLs, file paths, shell commands, or project identifiers.
-use crate::{ai, config::AppConfig, keyword, media, social};
+use crate::{ai, config::AppConfig, keyword, media, social, video_templates};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,6 +29,7 @@ pub struct CreateInput {
     pub topic: Option<String>,
     pub format: String,
     pub provider: Option<String>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq)]
@@ -102,6 +103,9 @@ fn validate_preview(input: &PreviewInput) -> Result<(String, String), String> {
 }
 
 fn validate_create(input: &CreateInput) -> Result<PreviewInput, String> {
+    if let Some(template_id) = &input.template_id {
+        video_templates::validate_template_id(template_id)?;
+    }
     if !matches!(
         input.format.as_str(),
         "shorts" | "vertical" | "youtube-landscape"
@@ -428,7 +432,10 @@ pub async fn create(config: &AppConfig, input: CreateInput) -> Result<ResearchRe
             Err(_) => warnings.push("AI 대본 생성 또는 출처 검증에 실패해 로컬 초안을 저장했습니다. AI 연결·사용량을 확인하거나 원문을 직접 편집하세요.".into()),
         }
     }
-    let project = assemble_project(&preview, &input.format, &provider, scenes);
+    let mut project = assemble_project(&preview, &input.format, &provider, scenes);
+    if let Some(template_id) = &input.template_id {
+        video_templates::apply_recipe(&mut project, template_id)?;
+    }
     let project = media::save_project(project)?;
     Ok(ResearchResult {
         project,
@@ -477,7 +484,8 @@ mod tests {
                 keyword: None,
                 topic: None,
                 format: format.into(),
-                provider: Some(provider.into())
+                provider: Some(provider.into()),
+                template_id: None,
             })
             .is_err());
         }
@@ -485,6 +493,48 @@ mod tests {
             json!({"trendIds":[source(1).trend_id],"format":"shorts","outputPath":"/private/tmp"})
         )
         .is_err());
+    }
+
+    #[test]
+    fn optional_template_is_validated_before_loading_and_legacy_input_stays_compatible() {
+        let legacy = json!({"trendIds":[source(1).trend_id],"format":"shorts","provider":"local"});
+        let legacy_input: CreateInput = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(legacy_input.template_id.is_none());
+        assert!(validate_create(&legacy_input).is_ok());
+        let mut styled = legacy.clone();
+        styled["templateId"] = json!("trend-brief");
+        let styled: CreateInput = serde_json::from_value(styled).unwrap();
+        assert!(validate_create(&styled).is_ok());
+        let mut invalid = legacy;
+        invalid["templateId"] = json!("unknown-template");
+        let invalid: CreateInput = serde_json::from_value(invalid).unwrap();
+        assert!(validate_create(&invalid).is_err());
+        let preview = make_preview(&input(2), vec![source(1), source(2)]).unwrap();
+        let mut project =
+            assemble_project(&preview, "shorts", "local", local_scenes(&preview.sources));
+        let previous = project.clone();
+        video_templates::apply_recipe(&mut project, "trend-brief").unwrap();
+        assert_eq!(project["research"], previous["research"]);
+        assert_eq!(project["template"], "reference-briefing");
+        for (before, after) in previous["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(project["scenes"].as_array().unwrap())
+        {
+            for field in [
+                "id",
+                "headline",
+                "body",
+                "narration",
+                "sourceUrl",
+                "researchSourceIds",
+                "durationSec",
+            ] {
+                assert_eq!(after.get(field), before.get(field));
+            }
+            assert!(after.get("motion").is_some());
+        }
     }
     #[test]
     fn local_drafts_keep_every_selected_source_and_all_supported_formats() {

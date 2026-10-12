@@ -27,6 +27,7 @@ pub enum UpdatePhase {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
+    pub revision: u64,
     pub configured: bool,
     pub current_version: String,
     pub phase: UpdatePhase,
@@ -144,7 +145,7 @@ mod native {
 
     pub struct UpdateController {
         status: Mutex<UpdateStatus>,
-        available: Mutex<Option<Update>>,
+        available: Mutex<Option<Arc<Update>>>,
         operation: tokio::sync::Mutex<()>,
         cancellation: Mutex<Option<watch::Sender<bool>>>,
     }
@@ -155,11 +156,31 @@ mod native {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn emit_status(app: &AppHandle, status: &UpdateStatus) {
+        use crate::native_windows::{set_update_activity, NativeActivity};
+        let activity = match &status.phase {
+            UpdatePhase::Checking | UpdatePhase::Ready | UpdatePhase::Installing => {
+                NativeActivity::Busy
+            }
+            UpdatePhase::Downloading => match status.total_bytes.filter(|total| *total > 0) {
+                Some(total) => NativeActivity::Progress {
+                    current: status.downloaded_bytes.min(total),
+                    total,
+                },
+                None => NativeActivity::Busy,
+            },
+            _ => NativeActivity::Idle,
+        };
+        set_update_activity(app, activity);
+        let _ = app.emit_to("main", "desktop-update-status", status);
+    }
+
     impl Default for UpdateController {
         fn default() -> Self {
             let configured = configured_public_key().is_ok();
             Self {
                 status: Mutex::new(UpdateStatus {
+                    revision: 0,
                     configured,
                     current_version: env!("CARGO_PKG_VERSION").into(),
                     phase: UpdatePhase::Idle,
@@ -205,9 +226,10 @@ mod native {
             let snapshot = {
                 let mut status = lock(&self.status);
                 edit(&mut status);
+                status.revision = status.revision.saturating_add(1);
                 status.clone()
             };
-            let _ = app.emit_to("main", "desktop-update-status", &snapshot);
+            emit_status(app, &snapshot);
             snapshot
         }
 
@@ -227,7 +249,7 @@ mod native {
         }
 
         pub fn cancel(&self) -> Result<UpdateStatus, String> {
-            let status = lock(&self.status);
+            let mut status = lock(&self.status);
             if !status.can_cancel {
                 return Err("설치가 시작된 뒤에는 업데이트를 취소할 수 없습니다.".into());
             }
@@ -237,11 +259,15 @@ mod native {
                 .ok_or("취소할 업데이트 작업이 없습니다.")?
                 .send(true)
                 .map_err(|_| "업데이트 작업이 이미 완료되었습니다.".to_owned())?;
+            status.can_cancel = false;
+            status.revision = status.revision.saturating_add(1);
+            status.message = "취소 요청을 보냈습니다. 작업이 멈출 때까지 기다려 주세요.".into();
             Ok(status.clone())
         }
 
         fn seal_verified(&self, cancellation: &watch::Receiver<bool>) -> UpdateStatus {
             let mut status = lock(&self.status);
+            status.revision = status.revision.saturating_add(1);
             status.can_cancel = false;
             if *cancellation.borrow() {
                 status.phase = UpdatePhase::Cancelled;
@@ -353,7 +379,12 @@ mod native {
                             .map(|date| date.to_rfc3339())
                         });
                     });
-                    *lock(&self.available) = Some(update);
+                    // The plugin keeps the complete release JSON for diagnostics;
+                    // download/install use its URL, signature, version and context instead.
+                    // Keep only those fields and share them instead of cloning the JSON.
+                    update.raw_json = serde_json::Value::Null;
+                    update.body = None;
+                    *lock(&self.available) = Some(Arc::new(update));
                     Ok(self.phase(
                         app,
                         UpdatePhase::Available,
@@ -410,14 +441,16 @@ mod native {
             let stop_download = lock(&self.cancellation).clone();
             let download = update.download(
                 |chunk, length| {
-                    let snapshot = {
+                    let should_emit = last_event.elapsed() >= Duration::from_millis(150);
+                    let (downloaded, snapshot) = {
                         let mut status = lock(&self.status);
                         status.downloaded_bytes =
                             status.downloaded_bytes.saturating_add(chunk as u64);
                         status.total_bytes = length;
-                        status.clone()
+                        status.revision = status.revision.saturating_add(1);
+                        (status.downloaded_bytes, should_emit.then(|| status.clone()))
                     };
-                    if snapshot.downloaded_bytes > MAX_DOWNLOAD_BYTES
+                    if downloaded > MAX_DOWNLOAD_BYTES
                         || length.is_some_and(|length| length > MAX_DOWNLOAD_BYTES)
                     {
                         oversized.store(true, Ordering::SeqCst);
@@ -425,8 +458,8 @@ mod native {
                             let _ = sender.send(true);
                         }
                     }
-                    if last_event.elapsed() >= Duration::from_millis(150) {
-                        let _ = app.emit_to("main", "desktop-update-status", &snapshot);
+                    if let Some(snapshot) = snapshot {
+                        emit_status(app, &snapshot);
                         last_event = Instant::now();
                     }
                 },
@@ -458,7 +491,7 @@ mod native {
             // Use the same status lock as cancel(): a cancellation accepted before this
             // transition wins; after this transition cancellation is explicitly rejected.
             let verified = self.seal_verified(&cancellation);
-            let _ = app.emit_to("main", "desktop-update-status", &verified);
+            emit_status(app, &verified);
             if verified.phase == UpdatePhase::Cancelled {
                 return Ok(verified);
             }
@@ -560,6 +593,25 @@ mod native {
             assert!(controller.operation.try_lock().is_err());
             drop(permit);
             assert!(controller.operation.try_lock().is_ok());
+        }
+
+        #[test]
+        fn accepted_cancellation_is_idempotent_and_status_order_is_monotonic() {
+            let controller = UpdateController::default();
+            let receiver = controller.cancellation();
+            {
+                let mut status = lock(&controller.status);
+                status.phase = UpdatePhase::Downloading;
+                status.can_cancel = true;
+            }
+            let before = controller.status().revision;
+            let requested = controller.cancel().unwrap();
+            assert!(requested.revision > before);
+            assert!(!requested.can_cancel);
+            assert!(controller.cancel().is_err());
+            let settled = controller.seal_verified(&receiver);
+            assert!(settled.revision > requested.revision);
+            assert_eq!(settled.phase, UpdatePhase::Cancelled);
         }
     }
 }

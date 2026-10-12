@@ -1,0 +1,8 @@
+.native-render-preview { min-height: 100vh; padding: 24px; background: #121715; color: #edf4ef; display: flex; flex-direction: column; gap: 18px; }
+.native-render-preview header { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.native-render-preview header span, .native-render-preview small, .native-render-preview footer { color: #adbbb3; font-size: 13px; }
+.native-render-preview h1 { margin: 5px 0 0; font-size: 20px; }
+.native-render-preview section { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; gap: 16px; }
+.native-render-preview video { width: 100%; max-height: calc(100vh - 180px); background: #000; border-radius: 10px; }
+.native-render-preview section p { color: #c9d6ce; }
+.native-render-preview footer { line-height: 1.6; }

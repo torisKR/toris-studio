@@ -27,7 +27,7 @@ export type VideoIdeaMetadata = {
   createdAt: string; reviewRequired: true; motionSkill: "toris-video-motion";
 };
 export type StudioVideoScene = VideoScene & { motion?: VideoMotion };
-export type StudioVideoProject = Omit<VideoProject, "scenes"> & { scenes: StudioVideoScene[]; research?: VideoResearchMetadata; idea?: VideoIdeaMetadata };
+export type StudioVideoProject = Omit<VideoProject, "scenes"> & { scenes: StudioVideoScene[]; research?: VideoResearchMetadata; idea?: VideoIdeaMetadata; templateRecipe?: { version: 1; id: string; name: string } };
 export type VideoIdeaResult = { project: StudioVideoProject; provider: string; warnings: string[] };
 
 const owns = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key);

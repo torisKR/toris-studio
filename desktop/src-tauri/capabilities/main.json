@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-local",
-  "description": "Only the bundled main window can invoke Rust commands. No remote web permissions.",
+  "description": "Bundled main window application commands and native event listeners. No remote web permissions.",
+  "local": true,
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "main-window-commands",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
 }

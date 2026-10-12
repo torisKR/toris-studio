@@ -8,6 +8,7 @@ export function CodingPanel({ active, refreshKey = 0 }: { active: boolean; refre
   const [metadata, setMetadata] = useState<CodingMetadata | null>(null);
   const alive = useRef(false), epoch = useRef(0);
   const load = useCallback(async () => {
+    if (!alive.current) return;
     const generation = ++epoch.current;
     try {
       const value = await invoke<CodingMetadata>("integration_status");

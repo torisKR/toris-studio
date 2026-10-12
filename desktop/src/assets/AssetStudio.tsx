@@ -47,13 +47,15 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
   const serial=useRef(0);
   const chatRetry=useRef<{message:string;requestId:string}|null>(null);
   const pendingReads=useRef(0);
+  const mounted=useRef(false);
+  const noticeFrame=useRef<number|null>(null);
   const activeRef=useRef(active);
   activeRef.current=active;
   const noticeRef=useRef<HTMLDivElement>(null);
   const refresh=useCallback(async(background=false)=>{
     // A slow native read must not be invalidated by the next automatic tick.
     // Explicit filter/refresh changes can supersede it; only the latest result applies.
-    if(!activeRef.current || (background && pendingReads.current>0)) return;
+    if(!mounted.current || !activeRef.current || (background && pendingReads.current>0)) return;
     const request=++serial.current;
     pendingReads.current++;
     try {
@@ -69,20 +71,24 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     }
   },[search,purpose,kind,favorites,offset]);
   useEffect(()=>{
+    mounted.current=true;
+    return()=>{mounted.current=false;serial.current++;if(noticeFrame.current!==null)cancelAnimationFrame(noticeFrame.current);noticeFrame.current=null;};
+  },[]);
+  useEffect(()=>{
     if(!active) return;
     void refresh();
     const timer=window.setInterval(()=>{if(document.visibilityState==="visible")void refresh(true);},5000);
-    return()=>{window.clearInterval(timer);serial.current++;};
+    return()=>{window.clearInterval(timer);serial.current++;if(noticeFrame.current!==null)cancelAnimationFrame(noticeFrame.current);noticeFrame.current=null;};
   },[active,refresh,refreshKey]);
-  useEffect(()=>{const timer=setTimeout(()=>{setSearch(query);setOffset(0);},250);return()=>clearTimeout(timer);},[query]);
+  useEffect(()=>{if(!active)return;const timer=setTimeout(()=>{setSearch(query);setOffset(0);},250);return()=>clearTimeout(timer);},[active,query]);
   useEffect(()=>{try{localStorage.setItem("toris.asset.draft",JSON.stringify(spec));}catch{/* The native job remains the durable record. */}},[spec]);
   const pending=snapshot?.jobs.filter(j=>j.status==="queued"||j.status==="waiting") ?? [];
   const setField=<K extends keyof AssetSpec>(key:K,value:AssetSpec[K])=>setSpec(current=>({...current,[key]:value}));
-  const inform=(text:string)=>{setNotice(text);requestAnimationFrame(()=>noticeRef.current?.scrollIntoView({block:"nearest"}));};
+  const inform=(text:string)=>{if(!mounted.current)return;setNotice(text);if(!activeRef.current)return;if(noticeFrame.current!==null)cancelAnimationFrame(noticeFrame.current);noticeFrame.current=requestAnimationFrame(()=>{noticeFrame.current=null;if(mounted.current&&activeRef.current)noticeRef.current?.scrollIntoView({block:"nearest"});});};
   async function execute(task:()=>Promise<void>) {
-    if(busy)return;
+    if(busy||!mounted.current)return;
     setBusy(true);setError("");setNotice("");
-    try{await task();}catch(error){setError(assetError(error));}finally{setBusy(false);}
+    try{await task();}catch(error){if(mounted.current)setError(assetError(error));}finally{if(mounted.current)setBusy(false);}
   }
   async function copyJobs(jobs:AssetJob[]) {
     const text=handoffText(jobs);
@@ -94,6 +100,7 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     const text=handoffText(jobs);
     if(text.length>39000) throw new Error("전송할 요청이 큽니다. 작업별 보내기 버튼으로 나누어 전달하세요.");
     const connection=await invoke<{fileReceiverReady:boolean}>("codexify_connection_check");
+    if(!mounted.current)return;
     if(!connection.fileReceiverReady) throw new Error("연결·게시 QA에서 Studio 파일 수신 도구를 먼저 연결하세요.");
     if(chatRetry.current?.message!==text) chatRetry.current={message:text,requestId:crypto.randomUUID()};
     const {waiting}=await sendToConnectedChat(text,chatRetry.current.requestId);
@@ -105,11 +112,11 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     if(invalid)throw new Error(invalid);
     if(mode==="image") {
       await assetApi<{jobs:AssetJob[]}>("create_jobs",spec);
-      await refresh();setView("queue");
+      await refresh();if(!mounted.current)return;setView("queue");
       inform(`${spec.quantity}개 요청을 저장했습니다. 아직 이미지는 생성되지 않았습니다. ChatGPT에 요청을 전달하세요.`);
     } else {
       const result=await assetApi<{asset:Asset}>("create_mesh",{spec,shape,size,color,segments,format:modelFormat});
-      await refresh();setSelected(result.asset);setView("library");
+      await refresh();if(!mounted.current)return;setSelected(result.asset);setView("library");
       inform(`${modelFormat.toUpperCase()} 파일을 로컬에서 생성하고 저장했습니다.`);
     }
   }
@@ -118,19 +125,20 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     const invalid=validationError(outputSpec,false);
     if(invalid) throw new Error(invalid);
     const result=await assetApi<{asset:Asset}>("resize_asset",{id:resizeSource.id,spec:outputSpec});
-    resetFilters();await refresh();setSelected(result.asset);setResizeSource(null);setView("library");
+    if(!mounted.current)return;resetFilters();await refresh();if(!mounted.current)return;setSelected(result.asset);setResizeSource(null);setView("library");
     inform(`${outputSpec.width} × ${outputSpec.height} ${outputSpec.format.toUpperCase()} 파일을 새 에셋으로 저장했습니다. 원본과 이전 출력은 유지됩니다.`);
   }
   async function importFiles(job?:AssetJob) {
     const useSpec=job?.spec ?? spec;
     const invalid=validationError(useSpec,false);if(invalid)throw new Error(invalid);
     const paths=await invoke<string[]>("asset_choose_files");
-    if(!paths.length)return;
+    if(!paths.length||!mounted.current)return;
     if(job && paths.length!==1)throw new Error("한 작업에는 결과 파일 하나를 선택하세요. 묶음 가져오기는 상단 버튼을 이용하세요.");
     const result=await assetApi<{results:Array<{asset?:Asset;error?:string}>}>("import_paths",{paths,spec:useSpec,...(job ? {jobId:job.id} : {})});
     const added=result.results.filter(r=>r.asset);
     const failures=result.results.filter(r=>r.error);
     await refresh();
+    if(!mounted.current)return;
     if(added.length){setView("library");setSelected(added[0].asset!);inform(`${added.length}개 에셋을 가져왔습니다. 원본 파일은 삭제하거나 덮어쓰지 않았습니다.`);}
     if(failures.length)setError(`${failures.length}개 파일을 가져오지 못했습니다. ${failures.map(r=>r.error).join(" · ")}`);
   }

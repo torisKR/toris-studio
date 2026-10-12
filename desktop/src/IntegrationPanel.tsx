@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, FileVideo, KeyRound, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import "./IntegrationPanel.css";
 import { ActivityStatus } from "./ActivityStatus";
+import { createDisposalScope, createPanelReadGate } from "./native-lifecycle";
 type Provider={platform:string;clientConfigured:boolean;connected:boolean;uploadAuthorized?:boolean;pending:boolean};
 type UploadRecord={attemptId:string;status:string;title:string;channelTitle:string;requestedPrivacy:string;actualPrivacy?:string;url?:string;error?:string};
 type Status={oauth:{providers:Provider[]};mcp:{lastToolCallAt:string|null;lastFileReceivedAt:string|null;chatgptLoginVerified:boolean};mcpConfig:object;lastUpload:UploadRecord|null;version:string};
@@ -15,12 +16,12 @@ export function IntegrationPanel({active,onOAuth,onCoding,refreshKey=0}:{active:
   const [channels,setChannels]=useState<Array<{id:string;title:string}>>([]),[channelId,setChannelId]=useState(""),[file,setFile]=useState<FileSelection|null>(null);
   const [title,setTitle]=useState("[Toris Studio QA] 업로드 연결 테스트"),[description,setDescription]=useState("Toris Studio의 업로드 연결을 확인하기 위한 테스트 영상입니다. 실제 서비스 콘텐츠가 아닙니다.");
   const [privacy,setPrivacy]=useState("private"),[confirmPublic,setConfirmPublic]=useState(false),[madeForKids,setMadeForKids]=useState("false"),[confirmed,setConfirmed]=useState(false),[ticket,setTicket]=useState<Ticket|null>(null);
-  const gate=useRef(false),reading=useRef(false);
+  const gate=useRef(false),reading=useRef(createPanelReadGate());
   const refresh=useCallback(async()=>{
-    if(reading.current)return;reading.current=true;
-    try{setStatus(await invoke<Status>("integration_status"));}catch(e){setError(failure(e));}finally{reading.current=false;}
+    const request=reading.current.begin();if(!request)return;
+    try{const value=await invoke<Status>("integration_status");if(request.current())setStatus(value);}catch(e){if(request.current())setError(failure(e));}finally{request.finish();}
   },[]);
-  useEffect(()=>{if(!active)return;void refresh();const id=setInterval(()=>{if(document.visibilityState==="visible"&&!gate.current)void refresh();},10000);return()=>clearInterval(id);},[active,refresh,refreshKey]);
+  useEffect(()=>{if(!active)return;const scope=createDisposalScope();reading.current.activate();void refresh();const id=setInterval(()=>{if(document.visibilityState==="visible"&&!gate.current)void refresh();},10000);scope.add(()=>clearInterval(id));return()=>{reading.current.deactivate();scope.dispose();};},[active,refresh,refreshKey]);
   const youtube=status?.oauth.providers.find(p=>p.platform==="youtube");
   function invalidate(){setTicket(null);setConfirmed(false);}
   async function run(label:string,work:()=>Promise<void>){

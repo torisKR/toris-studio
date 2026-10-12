@@ -6,6 +6,8 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { assetApi, assetError } from "./transport";
 import type { Asset } from "./contracts";
+import { createDisposalScope } from "../native-lifecycle";
+import { disposePreviewObject } from "./model-preview-lifecycle";
 
 export default function ModelPreview({ asset }: { asset: Asset }) {
   const host = useRef<HTMLDivElement>(null);
@@ -14,12 +16,11 @@ export default function ModelPreview({ asset }: { asset: Asset }) {
   useEffect(() => {
     const element = host.current;
     if (!element) return;
-    let cancelled = false;
-    let dispose = () => {};
+    const scope = createDisposalScope();
     setError(""); setLoading(true);
     void (async () => {
       const payload = await assetApi<{ base64: string }>("payload", { id: asset.id });
-      if (cancelled) return;
+      if (!scope.active()) return;
       const bytes = Uint8Array.from(atob(payload.base64), char => char.charCodeAt(0));
       const manager = new THREE.LoadingManager();
       // Validation rejects external model references; keep the viewer network-isolated too.
@@ -37,20 +38,14 @@ export default function ModelPreview({ asset }: { asset: Asset }) {
         geometry.computeVertexNormals();
         object = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x92b8ff, roughness: 0.65, side: THREE.DoubleSide }));
       }
-      const releaseObject = () => object.traverse(node => {
-        if (node instanceof THREE.Mesh) {
-          node.geometry.dispose();
-          const materials = Array.isArray(node.material) ? node.material : [node.material];
-          for (const material of materials) {
-            for (const value of Object.values(material)) if (value instanceof THREE.Texture) value.dispose();
-            material.dispose();
-          }
-        }
-      });
-      if (cancelled) { releaseObject(); return; }
-      let renderer: THREE.WebGLRenderer;
-      try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); }
-      catch (e) { releaseObject(); throw e; }
+      // Registration happens before any renderer setup or first render can throw.
+      // If parseAsync finished after unmount, add() releases this object immediately.
+      scope.add(() => disposePreviewObject(object));
+      if (!scope.active()) return;
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      scope.add(() => renderer.domElement.remove());
+      scope.add(() => renderer.forceContextLoss());
+      scope.add(() => renderer.dispose());
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setClearColor(0x0e151e);
       renderer.domElement.setAttribute("aria-label", "3D 모델: 드래그 회전, 휠 확대·축소, 방향키 이동");
@@ -68,27 +63,26 @@ export default function ModelPreview({ asset }: { asset: Asset }) {
       camera.near = span / 1000; camera.far = span * 1000;
       camera.position.set(span * 1.7, span * 1.2, span * 2.2);
       const controls = new OrbitControls(camera, renderer.domElement);
+      scope.add(() => controls.dispose());
       controls.enableDamping = false;
       controls.minDistance = span * 0.1; controls.maxDistance = span * 15;
       controls.listenToKeyEvents(renderer.domElement);
-      const render = () => renderer.render(scene, camera);
+      const render = () => { if (scope.active()) renderer.render(scene, camera); };
       controls.addEventListener("change", render);
+      scope.add(() => controls.removeEventListener("change", render));
       const resize = () => {
+        if (!scope.active()) return;
         const width = element.clientWidth, height = Math.max(element.clientHeight, 280);
         if (!width) return;
         camera.aspect = width / height; camera.updateProjectionMatrix();
         renderer.setSize(width, height, false); controls.update(); render();
       };
       const observer = new ResizeObserver(resize);
+      scope.add(() => observer.disconnect());
       element.appendChild(renderer.domElement); observer.observe(element); resize();
-      dispose = () => {
-        observer.disconnect(); controls.removeEventListener("change", render);
-        controls.dispose(); releaseObject(); renderer.dispose(); renderer.forceContextLoss();
-        renderer.domElement.remove();
-      };
       setLoading(false);
-    })().catch(error => { if (!cancelled) { setError(assetError(error)); setLoading(false); } });
-    return () => { cancelled = true; dispose(); };
+    })().catch(error => { if (scope.active()) { scope.dispose(); setError(assetError(error)); setLoading(false); } });
+    return scope.dispose;
   }, [asset.id, asset.format]);
   return <div className="asset-model-wrap">
     <div className="asset-model-canvas" ref={host} />

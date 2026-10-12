@@ -20,7 +20,7 @@ test("topic/reference actions are separate, repeat selection is idempotent and o
 });
 test("a matching source upgrades its description to body evidence without duplicate references",()=>{
   const description=materialFromTrend(trend);
-  const other=materialFromTrend({...trend,id:"other",url:"https://example.com/other",details:{...trend.details,description:"다른 출처의 설명입니다."}});
+  const other=materialFromTrend({...trend,id:"other",url:"https://example.com/other",details:{...trend.details,discovery:"youtube_keyword",description:"다른 출처의 설명입니다."}});
   const original=[description,other];
   const body=materialFromTrend({...trend,id:"new-observation"},"원문 키워드","새로 수집한 실제 본문입니다.");
   const upgraded=addReference(original,body);

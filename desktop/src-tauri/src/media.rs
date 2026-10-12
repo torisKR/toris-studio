@@ -179,7 +179,7 @@ fn resolve_asset_at(base: &Path, reference: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
-fn validate_project(project: &Value) -> Result<(), String> {
+pub(crate) fn validate_project(project: &Value) -> Result<(), String> {
     if !project.is_object()
         || serde_json::to_vec(project)
             .map_err(|_| "프로젝트 형식 오류")?
@@ -995,23 +995,83 @@ fn media_kind(path: &Path, declared: &str) -> Result<&'static str, String> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderStage {
+    Preparing,
+    Rendering,
+    Joining,
+    Completed,
+}
+
+/// Scene counts describe completed work, not an estimate of remaining time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderProgress {
+    pub stage: RenderStage,
+    pub completed_scenes: usize,
+    pub total_scenes: usize,
+}
+
+pub type RenderObserver = Box<dyn Fn(RenderProgress) + Send + Sync>;
+
+fn report_render_progress(
+    observer: Option<&(dyn Fn(RenderProgress) + Send + Sync)>,
+    stage: RenderStage,
+    completed_scenes: usize,
+    total_scenes: usize,
+) {
+    if let Some(observer) = observer {
+        observer(RenderProgress {
+            stage,
+            completed_scenes,
+            total_scenes,
+        });
+    }
+}
+
 pub async fn render_project(project: Value) -> Result<Value, String> {
+    render_project_with_progress(project, None).await
+}
+
+pub async fn render_project_with_progress(
+    project: Value,
+    observer: Option<RenderObserver>,
+) -> Result<Value, String> {
     // The updater acquires this same barrier immediately before installing.
     // Keep the order identical to research creation: update gate, video gate.
     let _update_guard = crate::keyword::lock_for_update()
         .map_err(|_| "키워드 탐색 또는 업데이트 작업이 끝난 뒤 영상을 출력하세요.")?;
     let _permit = lock_for_video_activity()?;
-    render_project_at(project, &data_dir()?.join("renders"), &public_dir()?).await
+    render_project_at_with_progress(
+        project,
+        &data_dir()?.join("renders"),
+        &public_dir()?,
+        observer.as_deref(),
+    )
+    .await
 }
 
 // The renderer accepts directories only from the privileged core. This narrow
 // helper also permits real FFmpeg diagnostics without touching user projects.
+#[cfg(test)]
 async fn render_project_at(
     project: Value,
     render_dir: &Path,
     assets: &Path,
 ) -> Result<Value, String> {
+    render_project_at_with_progress(project, render_dir, assets, None).await
+}
+
+async fn render_project_at_with_progress(
+    project: Value,
+    render_dir: &Path,
+    assets: &Path,
+    observer: Option<&(dyn Fn(RenderProgress) + Send + Sync)>,
+) -> Result<Value, String> {
     validate_project(&project)?;
+    let scenes = project["scenes"].as_array().ok_or("장면 목록 오류")?;
+    report_render_progress(observer, RenderStage::Preparing, 0, scenes.len());
     let format = project["format"].as_str().ok_or("영상 비율 오류")?;
     let (width, height) = if format == "youtube-landscape" {
         (1280, 720)
@@ -1023,11 +1083,11 @@ async fn render_project_at(
     let temporary =
         tempfile::tempdir_in(render_dir).map_err(|_| "렌더링 작업 폴더를 만들 수 없습니다.")?;
     let working = temporary.path();
-    let scenes = project["scenes"].as_array().ok_or("장면 목록 오류")?;
     let mut total_frames = 0_u64;
     let mut concat = String::new();
     let has_motion = scenes.iter().any(|scene| scene.get("motion").is_some());
     for (index, scene) in scenes.iter().enumerate() {
+        report_render_progress(observer, RenderStage::Rendering, index, scenes.len());
         let duration = scene["durationSec"].as_f64().ok_or("장면 길이 오류")?;
         let frames = (duration * 24.0).ceil().max(1.0) as u64;
         total_frames += frames;
@@ -1246,7 +1306,9 @@ async fn render_project_at(
         )
         .await?;
         concat.push_str(&format!("file '{segment_name}'\n"));
+        report_render_progress(observer, RenderStage::Rendering, index + 1, scenes.len());
     }
+    report_render_progress(observer, RenderStage::Joining, scenes.len(), scenes.len());
     fs::write(working.join("segments.txt"), concat).map_err(|_| "렌더링 장면 목록 저장 오류")?;
     let output_name = format!("{}.mp4", Uuid::new_v4());
     let mut arguments = args(&[
@@ -1282,6 +1344,7 @@ async fn render_project_at(
         fs::set_permissions(&output, fs::Permissions::from_mode(0o600))
             .map_err(|_| "완성 영상의 로컬 접근 권한을 설정할 수 없습니다.")?;
     }
+    report_render_progress(observer, RenderStage::Completed, scenes.len(), scenes.len());
     Ok(
         json!({"path": output.to_string_lossy(), "durationSec": total_frames as f64 / 24.0, "format":format, "renderer":if has_motion {"rust-ffmpeg-motion"} else {"rust-ffmpeg-slides"}, "width":width, "height":height, "fps":24}),
     )
@@ -1656,6 +1719,101 @@ mod tests {
         assert!(save_project_at(&file, project()).is_err());
         assert_eq!(fs::read(&file).unwrap(), b"broken");
     }
+    #[test]
+    fn template_recipes_roundtrip_with_editable_scenes_and_keep_legacy_records() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("projects.json");
+        let legacy = project();
+        save_project_at(&path, legacy.clone()).unwrap();
+        let catalog = crate::video_templates::catalog();
+        for template in &catalog {
+            for format in ["shorts", "vertical", "youtube-landscape"] {
+                let draft = crate::video_templates::preview(crate::video_templates::CreateInput {
+                    template_id: template.id.clone(),
+                    topic: Some("내가 만드는 새로운 영상".into()),
+                    category: None,
+                    format: Some(format.into()),
+                    language: Some("ko".into()),
+                    scene_count: None,
+                    duration_sec: None,
+                })
+                .unwrap()
+                .project;
+                validate_project(&draft).unwrap();
+                let recipe = draft["templateRecipe"].clone();
+                let scenes = draft["scenes"].clone();
+                let mut saved = save_project_at(&path, draft).unwrap();
+                assert_eq!(saved["templateRecipe"], recipe);
+                assert_eq!(saved["scenes"], scenes);
+                saved["scenes"][0]["headline"] = json!("직접 편집한 첫 장면");
+                let saved = save_project_at(&path, saved).unwrap();
+                let restored = read_store_at(&path).unwrap();
+                assert!(restored["projects"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| {
+                        value["id"] == saved["id"]
+                            && value["templateRecipe"] == recipe
+                            && value["scenes"][0]["headline"] == "직접 편집한 첫 장면"
+                    }));
+            }
+        }
+        let restored = read_store_at(&path).unwrap();
+        assert_eq!(
+            restored["projects"].as_array().unwrap().len(),
+            1 + catalog.len() * 3
+        );
+        assert!(restored["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["id"] == legacy["id"] && value["scenes"] == legacy["scenes"]));
+    }
+    #[tokio::test]
+    #[ignore = "requires FFmpeg, FFprobe and OS font; renders only synthetic template samples in a temporary directory"]
+    async fn native_template_samples_render_in_both_orientations() {
+        let temporary = tempfile::tempdir().unwrap();
+        for template_id in ["quick-explainer", "mini-documentary"] {
+            let mut sample = crate::video_templates::preview(crate::video_templates::CreateInput {
+                template_id: template_id.into(),
+                topic: None,
+                category: None,
+                format: None,
+                language: None,
+                scene_count: Some(3),
+                duration_sec: Some(18.0),
+            })
+            .unwrap()
+            .project;
+            // Shorten the synthetic fixture, preserving the recipe and motions.
+            for scene in sample["scenes"].as_array_mut().unwrap() {
+                scene["durationSec"] = json!(1.0);
+            }
+            let rendered = render_project_at(sample.clone(), temporary.path(), temporary.path())
+                .await
+                .unwrap();
+            let info = probe(Path::new(rendered["path"].as_str().unwrap()))
+                .await
+                .unwrap();
+            let stream = info["streams"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|stream| stream["codec_type"] == "video")
+                .unwrap();
+            let width = stream["width"].as_u64().unwrap();
+            let height = stream["height"].as_u64().unwrap();
+            assert_eq!(width > height, sample["format"] == "youtube-landscape");
+            let seconds: f64 = info["format"]["duration"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((seconds - 3.0).abs() < 0.15);
+            assert_eq!(rendered["format"], sample["format"]);
+        }
+    }
     #[cfg(unix)]
     #[test]
     fn prevents_symlink_media_escape() {
@@ -1696,12 +1854,100 @@ mod tests {
         assert!(pcm16_wav(&invalid).is_err());
     }
     #[tokio::test]
+    async fn invalid_render_never_reports_progress_or_completion() {
+        let temporary = tempfile::tempdir().unwrap();
+        let observer = |_| panic!("invalid project must fail before native rendering");
+        assert!(render_project_at_with_progress(
+            json!({"scenes": []}),
+            temporary.path(),
+            temporary.path(),
+            Some(&observer),
+        )
+        .await
+        .is_err());
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires OS font; validates failure progress without touching user projects or running FFmpeg"]
+    async fn missing_render_media_never_reports_completion() {
+        let temporary = tempfile::tempdir().unwrap();
+        let events = Mutex::new(Vec::new());
+        let observer = |event| events.lock().unwrap().push(event);
+        let mut sample = project();
+        sample["scenes"][0]["mediaType"] = json!("image");
+        sample["scenes"][0]["mediaUrl"] = json!("/missing.png");
+        assert!(render_project_at_with_progress(
+            sample,
+            temporary.path(),
+            temporary.path(),
+            Some(&observer),
+        )
+        .await
+        .is_err());
+        let events = events.lock().unwrap();
+        assert_eq!(events[0].stage, RenderStage::Preparing);
+        assert!(events.iter().all(|event| event.completed_scenes == 0));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event.stage, RenderStage::Joining | RenderStage::Completed)));
+        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
     #[ignore = "requires installed FFmpeg, FFprobe and OS font; creates an actual MP4 in a temporary directory"]
     async fn native_two_scene_render() {
         let temporary = tempfile::tempdir().unwrap();
-        let output = render_project_at(project(), temporary.path(), temporary.path())
-            .await
-            .unwrap();
+        let events = Mutex::new(Vec::new());
+        let observer = |event| events.lock().unwrap().push(event);
+        let output = render_project_at_with_progress(
+            project(),
+            temporary.path(),
+            temporary.path(),
+            Some(&observer),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                RenderProgress {
+                    stage: RenderStage::Preparing,
+                    completed_scenes: 0,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Rendering,
+                    completed_scenes: 0,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Rendering,
+                    completed_scenes: 1,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Rendering,
+                    completed_scenes: 1,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Rendering,
+                    completed_scenes: 2,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Joining,
+                    completed_scenes: 2,
+                    total_scenes: 2
+                },
+                RenderProgress {
+                    stage: RenderStage::Completed,
+                    completed_scenes: 2,
+                    total_scenes: 2
+                },
+            ]
+        );
         let path = PathBuf::from(output["path"].as_str().unwrap());
         let result = probe(&path).await.unwrap();
         assert!(fs::metadata(&path).unwrap().len() > 1000);

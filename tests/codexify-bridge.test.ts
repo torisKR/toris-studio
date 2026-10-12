@@ -13,8 +13,8 @@ test("direct bridge preserves native arguments and disables Codex discovery with
 });
 test("copyable config rejects a shell, wrong worker argument, unsafe or relative project paths",()=>{
  for(const project of ["../project","/","/.","//","/./","//./","/\\","C:\\","C:/","C:\\.","C:\\.\\","C:/./","C:////","/Users/toris/../etc","/tmp/\nproject"]){
-  assert.throws(()=>codexifyOverlay(native,project),undefined,project);
-  assert.throws(()=>connectionPrompt(project),undefined,project);
+  assert.throws(()=>codexifyOverlay(native,project),project);
+  assert.throws(()=>connectionPrompt(project),project);
  }
  assert.throws(()=>codexifyOverlay({mcpServers:{studio:{command:"sh",args:["-c","echo"]}}},"/tmp/project"));
 });

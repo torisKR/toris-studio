@@ -5,6 +5,7 @@ import { CalendarClock, Check, CircleAlert, FileVideo, Image, LoaderCircle, Paus
 import { ActivityStatus } from "./ActivityStatus";
 import { External } from "./External";
 import { openConnectedChat, sendToConnectedChat } from "./codexify-client";
+import { createDisposalScope, createPanelReadGate } from "./native-lifecycle";
 import { FIELD_SUPPORT, JOB_LABELS, PLATFORM_LABELS, PUBLISH_PLATFORMS, jobActions, kstSchedule, newPublication, newTarget, publicationApi, publishingError, safePostUrl, scheduleInput, splitTags, submissionInput, targetCaption, targetContent } from "./publication-client";
 import type { Publication, PublicationMedia, PublicationPreflight, PublicationTarget, PublicationsSnapshot, PublishAccount, PublishAccounts, PublishPlatform, PublishingJob } from "./publication-client";
 import "./PublicationPanel.css";
@@ -28,6 +29,14 @@ function TagInput({ label, value, onChange, hashtags = false }: { label: string;
 function MediaPreview({ media }: { media: PublicationMedia | undefined }) {
   const [src, setSrc] = useState("");
   const [error, setError] = useState("");
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    // React may reuse the element while the preceding effect releases its old
+    // source. Restore the committed source before keeping the new decoder alive.
+    if (element && element.getAttribute("src") !== src) element.src = src;
+    return () => { if (element) { element.pause(); element.removeAttribute("src"); element.load(); } };
+  }, [src]);
   useEffect(() => {
     let alive = true; setSrc(""); setError("");
     if (media) void invoke<{ path: string }>("publication_preview_media", { id: media.id }).then(result => {
@@ -37,7 +46,7 @@ function MediaPreview({ media }: { media: PublicationMedia | undefined }) {
     return () => { alive = false; };
   }, [media?.id]);
   return <div className={`publication-media-preview ${media?.kind || "empty"}`}>
-    {src && media?.kind === "video" ? <video src={src} controls preload="metadata" aria-label={`${media.name} 영상 미리보기`} /> : src && media ? <img src={src} alt={`${media.name} 썸네일 미리보기`} /> : <><FileVideo size={28}/><span>{error || (media ? "미리보기 준비 중" : "파일을 선택하세요")}</span></>}
+    {src && media?.kind === "video" ? <video ref={video} src={src} controls preload="metadata" aria-label={`${media.name} 영상 미리보기`} /> : src && media ? <img src={src} alt={`${media.name} 썸네일 미리보기`} /> : <><FileVideo size={28}/><span>{error || (media ? "미리보기 준비 중" : "파일을 선택하세요")}</span></>}
     {media && <div className="publication-media-meta"><strong>{media.name}</strong><small>{(media.bytes / 1024 / 1024).toFixed(1)} MiB{media.probe?.width ? ` · ${media.probe.width} × ${media.probe.height}` : ""}{media.probe?.durationSeconds ? ` · ${media.probe.durationSeconds.toFixed(1)}초` : ""}</small></div>}
   </div>;
 }
@@ -93,37 +102,38 @@ export function PublicationPanel({ active, refreshKey = 0, seed, onOpenOAuth, on
   const [actionConfirmed, setActionConfirmed] = useState(false);
   const [actionResolution, setActionResolution] = useState("remote");
   const [actionUrl, setActionUrl] = useState("");
-  const gate = useRef(false), alive = useRef(false), generation = useRef(0), seenSeed = useRef<number | undefined>(undefined);
-  const reading = useRef(false);
+  const gate = useRef(false), seenSeed = useRef<number | undefined>(undefined);
+  const reading = useRef(createPanelReadGate());
   const feedback = useRef<HTMLDivElement>(null);
   const chatRetry = useRef<{ key: string; message: string; requestId: string } | null>(null);
   const load = useCallback(async (silent = false) => {
-    if (reading.current) return;
-    reading.current = true;
-    const epoch = ++generation.current;
+    const request = reading.current.begin();
+    if (!request) return;
     if (!silent) setLoading(true);
     try {
       const value = await invoke<PublicationsSnapshot>("publication_list");
-      if (alive.current && generation.current === epoch) setSnapshot(value);
+      if (!request.current()) return;
+      setSnapshot(value);
       const drafts = await invoke<{ requests: AiDraftRequest[] }>("publication_ai_drafts");
-      if (alive.current && generation.current === epoch) setAiDrafts(drafts.requests);
-    } catch (reason) { if (alive.current && generation.current === epoch && !silent) setError(publishingError(reason)); }
-    finally { reading.current = false; if (alive.current && generation.current === epoch) setLoading(false); }
+      if (request.current()) setAiDrafts(drafts.requests);
+    } catch (reason) { if (request.current() && !silent) setError(publishingError(reason)); }
+    finally { request.finish(); if (request.current()) setLoading(false); }
   }, []);
   useEffect(() => {
     if (!active) return;
-    alive.current = true; void load();
-    void invoke<MediaSources>("publication_media_sources").then(value => { if (alive.current) setSources(value); }).catch(reason => { if (alive.current) setNotice(`로컬 에셋·렌더 목록 확인: ${publishingError(reason)}`); });
+    const scope = createDisposalScope();
+    reading.current.activate(); void load();
+    void invoke<MediaSources>("publication_media_sources").then(value => { if (scope.active()) setSources(value); }).catch(reason => { if (scope.active()) setNotice(`로컬 에셋·렌더 목록 확인: ${publishingError(reason)}`); });
     const id = setInterval(() => { if (!gate.current && document.visibilityState === "visible") void load(true); }, 5000);
-    return () => { alive.current = false; ++generation.current; clearInterval(id); };
+    scope.add(() => clearInterval(id));
+    return () => { reading.current.deactivate(); scope.dispose(); };
   }, [active, refreshKey, load]);
   useEffect(() => {
     if (!active) return;
-    let mounted = true;
-    const stops: (() => void)[] = [];
-    void listen<PublicationsSnapshot["scheduler"]>("publication-scheduler-status", event => { if (mounted) setSnapshot(current => ({ ...current, scheduler: event.payload })); }).then(stop => { if (mounted) stops.push(stop); else stop(); }).catch(() => { /* Periodic native status read remains available. */ });
-    void listen<string>("publication-runtime-error", event => { if (mounted) setError(publishingError(event.payload)); }).then(stop => { if (mounted) stops.push(stop); else stop(); }).catch(() => { /* Native command errors remain visible. */ });
-    return () => { mounted = false; stops.forEach(stop => stop()); };
+    const scope = createDisposalScope();
+    void listen<PublicationsSnapshot["scheduler"]>("publication-scheduler-status", event => { if (scope.active()) setSnapshot(current => ({ ...current, scheduler: event.payload })); }).then(scope.add).catch(() => { /* Periodic native status read remains available. */ });
+    void listen<string>("publication-runtime-error", event => { if (scope.active()) setError(publishingError(event.payload)); }).then(scope.add).catch(() => { /* Native command errors remain visible. */ });
+    return scope.dispose;
   }, [active]);
   useEffect(() => {
     if (!active || !seed || seed.key === seenSeed.current) return;

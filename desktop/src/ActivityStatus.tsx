@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { beginMainActivity } from "./native-windows";
 import "./ActivityStatus.css";
 /** Activity, not simulated progress. The clock is observational and is not a live announcement. */
 export function ActivityStatus({title,detail,state="running",children,clock=true,since}:{title:string;detail?:string;state?:"running"|"waiting";children?:ReactNode;clock?:boolean;since?:number}) {
@@ -8,17 +9,20 @@ export function ActivityStatus({title,detail,state="running",children,clock=true
   const [seconds,setSeconds]=useState(0),[visible,setVisible]=useState(true),[paused,setPaused]=useState(false);
   useEffect(()=>{
     started.current=since??Date.now();setSeconds(Math.max(0,Math.floor((Date.now()-started.current)/1000)));
-    if(!clock)return;
+  },[title,since]);
+  useEffect(()=>{
+    if(!clock||!visible)return;
     const tick=()=>{if(document.visibilityState==="visible")setSeconds(Math.floor((Date.now()-started.current)/1000));};
     const timer=setInterval(tick,1000);return()=>clearInterval(timer);
-  },[title,clock,since]);
+  },[title,clock,since,visible]);
+  useEffect(()=>state==="running"?beginMainActivity():undefined,[state]);
   useEffect(()=>{
-    let onScreen=true;
-    const update=()=>setVisible(onScreen&&document.visibilityState==="visible");
-    const observer=new IntersectionObserver(entries=>{onScreen=entries[0]?.isIntersecting??false;update();});
-    if(element.current)observer.observe(element.current);
+    let onScreen=true,disposed=false;
+    const update=()=>{if(!disposed)setVisible(onScreen&&document.visibilityState==="visible");};
+    const observer=typeof IntersectionObserver==="undefined"?null:new IntersectionObserver(entries=>{onScreen=entries[0]?.isIntersecting??false;update();});
+    if(element.current)observer?.observe(element.current);
     document.addEventListener("visibilitychange",update);update();
-    return()=>{observer.disconnect();document.removeEventListener("visibilitychange",update);};
+    return()=>{disposed=true;observer?.disconnect();document.removeEventListener("visibilitychange",update);};
   },[]);
   const elapsed=seconds<60?`${seconds}초`:`${Math.floor(seconds/60)}분 ${seconds%60}초`;
   return <div ref={element} className={`activity-status ${state}`} data-paused={!visible||paused}>

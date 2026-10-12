@@ -8,12 +8,15 @@ pub mod config;
 pub mod credentials;
 #[cfg(feature = "desktop")]
 mod integration_native;
+pub mod ipc_commands;
 pub mod keyword;
 pub mod legacy_cleanup;
 pub mod mcp_bridge;
 pub mod media;
 pub mod models;
 pub mod motion;
+#[cfg(any(feature = "desktop", test))]
+pub mod native_windows;
 pub mod oauth;
 pub mod publications;
 #[cfg(feature = "desktop")]
@@ -33,7 +36,10 @@ pub mod updater;
 pub mod vault;
 pub mod video_embed;
 pub mod video_idea;
+pub mod video_project_export;
 pub mod video_research;
+pub mod video_template_library;
+pub mod video_templates;
 pub mod youtube;
 
 #[cfg(feature = "desktop")]
@@ -79,7 +85,7 @@ fn merge_bootstrapped_database(
 #[cfg(feature = "desktop")]
 mod desktop {
     use super::*;
-    use tauri::State;
+    use tauri::{Manager, State};
     #[tauri::command]
     pub fn get_update_status(
         window: tauri::WebviewWindow,
@@ -294,6 +300,105 @@ mod desktop {
         media::save_project(input)
     }
     #[tauri::command]
+    pub fn video_template_catalog(
+        window: tauri::WebviewWindow,
+    ) -> Result<Vec<video_templates::TemplateDescriptor>, String> {
+        updater::authorize(&window)?;
+        Ok(video_templates::catalog())
+    }
+    #[tauri::command]
+    pub fn video_template_preview(
+        window: tauri::WebviewWindow,
+        input: video_templates::CreateInput,
+    ) -> Result<video_templates::PreviewResult, String> {
+        updater::authorize(&window)?;
+        video_templates::preview(input)
+    }
+    #[tauri::command]
+    pub fn video_template_library_get(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+    ) -> Result<video_template_library::TemplateLibraryState, String> {
+        updater::authorize(&window)?;
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "템플릿 저장 경로를 확인하세요.")?;
+        video_template_library::get(&directory)
+    }
+    #[tauri::command]
+    pub fn video_template_favorite(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        template_id: String,
+        enabled: bool,
+    ) -> Result<video_template_library::TemplateLibraryState, String> {
+        updater::authorize(&window)?;
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "템플릿 저장 경로를 확인하세요.")?;
+        video_template_library::set_favorite(&directory, &template_id, enabled)
+    }
+    #[tauri::command]
+    pub fn video_template_record_use(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        template_id: String,
+    ) -> Result<video_template_library::TemplateLibraryState, String> {
+        updater::authorize(&window)?;
+        let directory = app
+            .path()
+            .app_data_dir()
+            .map_err(|_| "템플릿 저장 경로를 확인하세요.")?;
+        video_template_library::record_use(&directory, &template_id)
+    }
+    #[tauri::command]
+    pub async fn video_export_project(
+        window: tauri::WebviewWindow,
+        app: tauri::AppHandle,
+        updates: State<'_, Arc<updater::UpdateController>>,
+        project: Value,
+        format: String,
+    ) -> Result<Option<String>, String> {
+        use tauri_plugin_dialog::DialogExt;
+        static EXPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 내보내세요.".into());
+        }
+        let _guard = EXPORT_LOCK
+            .try_lock()
+            .map_err(|_| "현재 내보내기를 마친 뒤 다시 실행하세요.")?;
+        let bytes = video_project_export::prepare(&project, &format)?;
+        let extension = video_project_export::extension(&format)?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("영상 스토리보드 내보내기")
+            .set_file_name(format!("toris-video-storyboard.{extension}"))
+            .add_filter("영상 스토리보드", &[extension])
+            .save_file(move |file| {
+                let _ = sender.send(file);
+            });
+        let Some(file) = receiver
+            .await
+            .map_err(|_| "파일 선택을 완료하지 못했습니다.")?
+        else {
+            return Ok(None);
+        };
+        let path = file
+            .into_path()
+            .map_err(|_| "로컬 저장 경로를 확인하세요.")?;
+        tauri::async_runtime::spawn_blocking(move || {
+            video_project_export::write_selected_file(&path, &format, &bytes)?;
+            Ok(Some(path.to_string_lossy().into_owned()))
+        })
+        .await
+        .map_err(|_| "스토리보드를 내보내지 못했습니다.")?
+    }
+    #[tauri::command]
     pub async fn video_research_preview(
         window: tauri::WebviewWindow,
         state: State<'_, Arc<AppState>>,
@@ -333,8 +438,17 @@ mod desktop {
         Err("ChatGPT 대화에서 영상 기획을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
     }
     #[tauri::command]
-    pub async fn video_render_project(project: Value) -> Result<Value, String> {
-        media::render_project(project).await
+    pub async fn video_render_project(
+        window: tauri::WebviewWindow,
+        project: Value,
+        on_progress: tauri::ipc::Channel<media::RenderProgress>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        let observer: media::RenderObserver = Box::new(move |progress| {
+            // Closing the UI must not abort a native render or lose its output.
+            let _ = on_progress.send(progress);
+        });
+        media::render_project_with_progress(project, Some(observer)).await
     }
     #[tauri::command]
     pub async fn video_generate_voice(input: Value) -> Result<Value, String> {
@@ -499,6 +613,11 @@ mod desktop {
             .manage(updater::shared())
             .manage(codexify_runtime::shared())
             .manage(Arc::new(codexify_proxy::ProxyController::default()))
+            .manage(Arc::new(native_windows::NativeWindows::default()))
+            .register_asynchronous_uri_scheme_protocol(
+                native_windows::PREVIEW_SCHEME,
+                native_windows::protocol,
+            )
             .on_window_event(|window, event| {
                 use tauri::Manager;
                 if window.label() == "main" {
@@ -600,98 +719,14 @@ mod desktop {
                 });
                 Ok(())
             })
-            .invoke_handler(tauri::generate_handler![
-                crate::integration_native::codexify_connection_get,
-                crate::integration_native::codexify_connection_save,
-                crate::integration_native::codexify_connection_check,
-                crate::integration_native::codexify_chats,
-                crate::integration_native::codexify_chat_read,
-                crate::integration_native::codexify_chat_send,
-                crate::publication_native::publication_list,
-                crate::publication_native::publication_get,
-                crate::publication_native::publication_save,
-                crate::publication_native::publication_preflight,
-                crate::publication_native::publication_submit,
-                crate::publication_native::publication_cancel,
-                crate::publication_native::publication_retry,
-                crate::publication_native::publication_reconcile,
-                crate::publication_native::publication_accounts,
-                crate::publication_native::publication_begin_login,
-                crate::publication_native::publication_scheduler_status,
-                crate::publication_native::publication_set_paused,
-                crate::publication_native::publication_media_sources,
-                crate::publication_native::publication_import_media,
-                crate::publication_native::publication_preview_media,
-                crate::publication_native::publication_ai_request,
-                crate::publication_native::publication_ai_drafts,
-                crate::integration_native::codexify_runtime_status,
-                crate::integration_native::codexify_runtime_configure,
-                crate::integration_native::codexify_runtime_start,
-                crate::integration_native::codexify_runtime_stop,
-                crate::integration_native::codexify_runtime_doctor,
-                crate::integration_native::codexify_proxy_status,
-                crate::integration_native::codexify_proxy_start,
-                crate::integration_native::codexify_proxy_stop,
-                crate::integration_native::integration_status,
-                crate::integration_native::integration_upload_login,
-                crate::integration_native::integration_channels,
-                crate::integration_native::integration_choose_video,
-                crate::integration_native::integration_sample_video,
-                crate::integration_native::integration_prepare_upload,
-                crate::integration_native::integration_upload,
-                crate::integration_native::integration_acknowledge_upload,
-                assets::native::asset_command,
-                assets::native::asset_choose_folder,
-                assets::native::asset_choose_files,
-                assets::native::asset_reveal,
-                get_dashboard,
-                get_update_status,
-                check_for_updates,
-                install_update,
-                cancel_update,
-                create_channel,
-                create_content,
-                update_content,
-                refresh_trends,
-                ai_status,
-                ai_generate,
-                get_settings,
-                get_keychain_status,
-                retry_keychain_access,
-                get_saved_collection_secret,
-                save_settings,
-                get_scheduler_status,
-                set_scheduler,
-                open_external,
-                copy_text,
-                start_database,
-                backup_database,
-                start_keyword_crawler,
-                video_list_projects,
-                video_save_project,
-                video_research_preview,
-                video_create_research_project,
-                video_create_idea_project,
-                video_render_project,
-                video_generate_voice,
-                media_status,
-                open_rendered_video,
-                youtube_lookup_channel,
-                youtube_channel_videos,
-                prepare_youtube_embed,
-                get_keyword_status,
-                search_keywords,
-                get_content_keywords,
-                get_keyword_runs,
-                crawl_keyword_content,
-                cancel_keyword_search,
-                oauth_status,
-                oauth_save_client,
-                oauth_begin_login,
-                oauth_complete_login,
-                oauth_refresh_session,
-                oauth_disconnect
-            ])
+            .invoke_handler({
+                macro_rules! registered_handler {
+                    ($( [$($module:ident)::*] $command:ident, )*) => {
+                        tauri::generate_handler![$($($module::)*$command),*]
+                    };
+                }
+                crate::ipc_commands::app_command_registry!(registered_handler)
+            })
             .build(tauri::generate_context!())
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {

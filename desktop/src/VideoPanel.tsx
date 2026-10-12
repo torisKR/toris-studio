@@ -1,6 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { openRenderPreview } from "./native-windows";
 import {
-  ArrowRight, BookOpen, Check, CircleAlert, Clapperboard, Clock3, ExternalLink, FileJson, FolderOpen,
+  ArrowRight, BookOpen, Check, CircleAlert, Clapperboard, Clock3, Copy, Download, ExternalLink, FileJson, FolderOpen,
   Hash, LoaderCircle, Mic, Play, Plus, RefreshCw, Save, Search, Sparkles, Trash2, WandSparkles, X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
@@ -9,6 +10,11 @@ import { External } from "./External";
 import { getProfile, openConnectedChat, sendToConnectedChat } from "./codexify-client";
 import type { VideoResearchMetadata, VideoResearchPreview, VideoResearchProvider, VideoResearchResult, VideoResearchSeed, VideoResearchSource } from "./video-research";
 import { ideaCategories, motionPresets, readIdeaMetadata, readMotion, type StudioVideoProject, type StudioVideoScene, type VideoIdeaCategory, type VideoIdeaInput, type VideoIdeaProvider, type VideoMotionPreset } from "./video-idea";
+import { createRenderProgressSession, initialRenderProgress, VideoRenderProgress, type VideoRenderProgressMessage } from "./video-render-progress";
+import { VideoTemplateGallery } from "./VideoTemplateGallery";
+import { readVideoTemplateCatalog, readVideoTemplateLibrary, readVideoTemplatePreview, type VideoTemplateDescriptor, type VideoTemplateLibrary, type VideoTemplatePreview } from "./video-templates";
+import { duplicateVideoProject } from "./video-project-actions";
+import { createSingleFlight } from "./desktop-interactions";
 import "./VideoPanel.css";
 
 type MediaStatus = {
@@ -16,8 +22,9 @@ type MediaStatus = {
   ttsConfigured: boolean; dataPath: string; renderer: string;
 };
 type RenderResult = { path: string; durationSec: number; format: VideoFormat; renderer: string };
-type PendingProject = { kind: "new" } | { kind: "select"; project: StudioVideoProject } | { kind: "import" } | { kind: "research"; seed: VideoResearchSeed };
+type PendingProject = { kind: "new" } | { kind: "select"; project: StudioVideoProject } | { kind: "import" } | { kind: "research"; seed: VideoResearchSeed } | { kind: "template" | "duplicate"; project: StudioVideoProject };
 type Notice = { text: string; tone: "success" | "error" | "info" };
+type RenderOperation = { channel: Channel<VideoRenderProgressMessage> | null; session: ReturnType<typeof createRenderProgressSession> | null };
 type AiStatus = { providers: Array<{ id: string; label: string; available: boolean; detail: string }>; defaultProvider: string | null };
 type Props = { active: boolean; researchSeed?: VideoResearchSeed | null; onResearchSeedHandled?: (requestId: string) => void; onOpenKeywords?: () => void; onOpenSettings?: () => void };
 const sourceLabels: Record<string, string> = { youtube: "YouTube", naver_blog: "네이버 블로그", google_trends: "Google 트렌드" };
@@ -110,9 +117,10 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   const [statusError, setStatusError] = useState("");
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState("");
-  const [busy, setBusy] = useState<"save" | "render" | "voice" | "import" | "open" | "research" | "idea" | null>(null);
+  const [busy, setBusy] = useState<"save" | "render" | "voice" | "import" | "open" | "research" | "idea" | "export" | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [render, setRender] = useState<RenderResult | null>(null);
+  const [renderProgress, setRenderProgress] = useState<VideoRenderProgressMessage | null>(null);
   const [renderVersion, setRenderVersion] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [importJson, setImportJson] = useState("");
@@ -138,6 +146,21 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   const [ideaSceneCount, setIdeaSceneCount] = useState(5);
   const [ideaDuration, setIdeaDuration] = useState(45);
   const [ideaError, setIdeaError] = useState("");
+  const [templates, setTemplates] = useState<VideoTemplateDescriptor[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<VideoTemplatePreview | null>(null);
+  const [templateCatalogLoading, setTemplateCatalogLoading] = useState(false);
+  const [templatePreviewLoading, setTemplatePreviewLoading] = useState(false);
+  const [templateError, setTemplateError] = useState("");
+  const [templateRefresh, setTemplateRefresh] = useState(0);
+  const [templateLibrary, setTemplateLibrary] = useState<VideoTemplateLibrary | null>(null);
+  const [templateLibraryLoading, setTemplateLibraryLoading] = useState(false);
+  const [templateLibraryError, setTemplateLibraryError] = useState("");
+  const libraryQueue = useRef<Promise<void>>(Promise.resolve());
+  const libraryPending = useRef(0);
+  const [readTemplates] = useState(() => createSingleFlight<unknown>());
+  const templateAction = useRef(false);
+  const exportAction = useRef(false);
   const ideaTopicField = useRef<HTMLInputElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null);
   const changesDialog = useRef<HTMLDialogElement>(null);
@@ -147,6 +170,10 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   const previewVersion = useRef(0);
   const acceptedSeeds = useRef(new Set<string>());
   const activeResearch = useRef<VideoResearchSeed | null>(null);
+  const mounted = useRef(false);
+  const panelActive = useRef(active);
+  const renderOperation = useRef<RenderOperation | null>(null);
+  panelActive.current = active;
   const onSeedHandled = useRef(onResearchSeedHandled);
   onSeedHandled.current = onResearchSeedHandled;
   selectedProject.current = project;
@@ -161,6 +188,65 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   const preferredProvider = aiProviders.find((id) => id === aiStatus.defaultProvider && availableProviders.includes(id));
   const resolvedIdeaProvider = ideaProvider && availableProviders.includes(ideaProvider) ? ideaProvider : preferredProvider ?? availableProviders[0];
   const canRender = !!project && !!status?.ffmpegAvailable && !!status.ffprobeAvailable && !!status.fontAvailable;
+  const selectedTemplate = templates.find(item => item.id === selectedTemplateId) ?? null;
+  const templateLoading = templateCatalogLoading || templatePreviewLoading;
+  const templateInput = useMemo(() => selectedTemplate ? {
+    templateId: selectedTemplate.id, topic: research ? researchTopic : ideaTopic,
+    category: ideaCategory || selectedTemplate.categories[0], format: research ? researchFormat : ideaFormat,
+    language: ideaLanguage, sceneCount: ideaSceneCount, durationSec: ideaDuration,
+  } : null, [selectedTemplate, research, researchTopic, ideaTopic, ideaCategory, researchFormat, ideaFormat, ideaLanguage, ideaSceneCount, ideaDuration]);
+  const templateInputKey = JSON.stringify(templateInput);
+  const readyTemplateKey = useRef("");
+
+  const runTemplateLibrary = useCallback((command: string, args = {}, current: () => boolean = () => true) => {
+    libraryPending.current += 1; setTemplateLibraryLoading(true);
+    libraryQueue.current = libraryQueue.current.then(async () => {
+      const value = await invoke<unknown>(command, args);
+      const next = readVideoTemplateLibrary(value);
+      if (!next) throw new Error("템플릿 라이브러리 정보를 확인하지 못했습니다.");
+      if (mounted.current && current()) { setTemplateLibrary(next); setTemplateLibraryError(""); }
+    }).catch(error => { if (mounted.current && current()) setTemplateLibraryError(message(error)); })
+      .finally(() => { libraryPending.current -= 1; if (mounted.current && libraryPending.current === 0) setTemplateLibraryLoading(false); });
+    return libraryQueue.current;
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    let disposed = false;
+    void runTemplateLibrary("video_template_library_get", {}, () => !disposed);
+    return () => { disposed = true; };
+  }, [active, templateRefresh, runTemplateLibrary]);
+
+  useEffect(() => {
+    if (!active) { setTemplateCatalogLoading(false); return; }
+    let disposed = false;
+    setTemplateCatalogLoading(true); setTemplateError("");
+    void readTemplates(() => invoke<unknown>("video_template_catalog")).then(value => {
+      if (disposed) return;
+      const catalog = readVideoTemplateCatalog(value);
+      if (!catalog) throw new Error("영상 템플릿 정보를 확인하지 못했습니다.");
+      setTemplates(catalog);
+    }).catch(error => { if (!disposed) setTemplateError(message(error)); })
+      .finally(() => { if (!disposed) setTemplateCatalogLoading(false); });
+    return () => { disposed = true; };
+  }, [active, templateRefresh, readTemplates]);
+
+  useEffect(() => {
+    let disposed = false;
+    readyTemplateKey.current = ""; setTemplatePreview(null);
+    if (!active || !templateInput) { setTemplatePreviewLoading(false); return; }
+    setTemplatePreviewLoading(true); setTemplateError("");
+    const timer = window.setTimeout(() => {
+      void invoke<unknown>("video_template_preview", { input: templateInput }).then(value => {
+        if (disposed) return;
+        const result = readVideoTemplatePreview(value);
+        if (!result) throw new Error("영상 템플릿 미리보기를 확인하지 못했습니다.");
+        readyTemplateKey.current = templateInputKey; setTemplatePreview(result);
+      }).catch(error => { if (!disposed) setTemplateError(message(error)); })
+        .finally(() => { if (!disposed) setTemplatePreviewLoading(false); });
+    }, 250);
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [active, templateInput, templateInputKey, templateRefresh]);
 
   const checkStatus = useCallback(async () => {
     setStatusError("");
@@ -208,6 +294,23 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   useEffect(() => () => { previewVersion.current += 1; selectionVersion.current += 1; }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const operation = renderOperation.current;
+      // Channel has no public dispose API. Rust dropping it unregisters its callback;
+      // replacing the handler prevents a completed native request touching this view.
+      if (operation?.channel) operation.channel.onmessage = () => {};
+      operation?.session?.close();
+      renderOperation.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (active && renderOperation.current?.session) setRenderProgress(renderOperation.current.session.snapshot());
+  }, [active]);
+
+  useEffect(() => {
     if (importOpen) importDialog.current?.showModal();
     else importDialog.current?.close();
   }, [importOpen]);
@@ -232,6 +335,11 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     setPending(null);
     if (action.kind === "new") selectProject(blankProject(), false);
     else if (action.kind === "select") selectProject(action.project);
+    else if (action.kind === "template" || action.kind === "duplicate") {
+      selectProject(action.project, false);
+      if (action.project.templateRecipe) void runTemplateLibrary("video_template_record_use", { templateId: action.project.templateRecipe.id });
+      setNotice({ tone: "info", text: action.kind === "duplicate" ? "현재 편집 내용을 새 사본으로 복제했습니다. 저장하면 별도의 프로젝트로 보관됩니다." : "템플릿 구성을 편집기에 적용했습니다. 예시 본문과 내레이션을 수정한 뒤 저장하고 MP4로 출력하세요." });
+    }
     else if (action.kind === "research") {
       selectionVersion.current += 1; selectedProject.current = null;
       activeResearch.current = action.seed;
@@ -241,6 +349,36 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
       void loadResearchPreview(action.seed);
     }
     else { setImportError(""); setImportOpen(true); }
+  }
+
+  function chooseTemplate(template: VideoTemplateDescriptor) {
+    if (busy || pending || importOpen) return;
+    setSelectedTemplateId(template.id);
+    setIdeaFormat(template.format); setResearchFormat(template.format);
+    setIdeaSceneCount(template.sampleProject.scenes.length); setIdeaDuration(template.durationSec);
+    if (!ideaCategory) setIdeaCategory(template.categories[0] as VideoIdeaCategory);
+    setIdeaError("");
+  }
+
+  function templateSceneCount(count: number) {
+    setIdeaSceneCount(count);
+    setIdeaDuration(current => Math.max(Math.max(18, count * 3), Math.min(current, count * 30)));
+  }
+
+  function favoriteTemplate(templateId: string, enabled: boolean) {
+    if (busy || pending || importOpen || libraryPending.current || !templateLibrary) return;
+    void runTemplateLibrary("video_template_favorite", { templateId, enabled });
+  }
+
+  function useTemplate(template: VideoTemplateDescriptor, result: VideoTemplatePreview) {
+    if (busy || pending || importOpen || templateLoading || readyTemplateKey.current !== templateInputKey
+      || selectedTemplateId !== template.id || result !== templatePreview) return;
+    const now = new Date().toISOString();
+    requestProject({ kind: "template", project: { ...result.project, id: crypto.randomUUID(), createdAt: now, updatedAt: now } });
+  }
+
+  function retryTemplates() {
+    readTemplates.invalidate(); setTemplateRefresh(value => value + 1);
   }
 
   function submitIdea(event: FormEvent<HTMLFormElement>) {
@@ -254,18 +392,28 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   }
 
   async function createIdeaProject(input: VideoIdeaInput) {
-    if (busy) return;
+    if (busy || templateAction.current) return;
     if (!aiStatus.providers.some((provider) => provider.id === input.provider && provider.available)) {
       setIdeaError("선택한 AI 연결이 끊어졌습니다. AI 연결을 다시 확인하고 생성하세요."); return;
     }
+    templateAction.current = true;
     setBusy("idea"); setIdeaError(""); setNotice(null);
     try {
-      const template = { ...blankProject(), title: input.topic, format: input.format, language: input.language };
-      const prompt = ["실제 ChatGPT 대화에서 영상의 장면·본문·내레이션을 작성해줘. 외부 모델이나 API를 호출하지 마.", JSON.stringify(input), "아래 VideoProject JSON 형식을 유지해 유효한 JSON 한 개로 반환해줘. 장면마다 id,headline,body,narration,durationSec,mediaType:'none',accent,layout,role을 채우고 원본 미디어·음성을 생성했다고 주장하지 마. 모션은 kinetic-title,stagger-rise,slide-reveal,focus-pulse,parallax-pan,orbit-cards 중 preset과 0~1 intensity만 사용해줘. 응답은 앱의 JSON 가져오기에 붙여넣어 사용자가 검토·저장해야 하며 자동 게시하지 않아.", JSON.stringify(template, null, 2)].join("\n\n");
+      let prompt: string;
+      if (selectedTemplate) {
+        const value = await invoke<unknown>("video_template_preview", { input: { templateId: selectedTemplate.id, topic: input.topic, category: input.category, format: input.format, language: input.language, sceneCount: input.sceneCount, durationSec: input.durationSec } });
+        const prepared = readVideoTemplatePreview(value);
+        if (!prepared) throw new Error("선택한 템플릿으로 ChatGPT 요청을 준비하지 못했습니다.");
+        prompt = prepared.prompt;
+      } else {
+        const template = { ...blankProject(), title: input.topic, format: input.format, language: input.language };
+        prompt = ["실제 ChatGPT 대화에서 영상의 장면·본문·내레이션을 작성해줘. 외부 모델이나 API를 호출하지 마.", JSON.stringify(input), "아래 VideoProject JSON 형식을 유지해 유효한 JSON 한 개로 반환해줘. 장면마다 id,headline,body,narration,durationSec,mediaType:'none',accent,layout,role을 채우고 원본 미디어·음성을 생성했다고 주장하지 마. 모션은 kinetic-title,stagger-rise,slide-reveal,focus-pulse,parallax-pan,orbit-cards 중 preset과 0~1 intensity만 사용해줘. 응답은 앱의 JSON 가져오기에 붙여넣어 사용자가 검토·저장해야 하며 자동 게시하지 않아.", JSON.stringify(template, null, 2)].join("\n\n");
+      }
+      if (!mounted.current) return;
       const result = await sendToConnectedChat(prompt);
-      setNotice({ tone: "info", text: result.waiting ? "ChatGPT 영상 요청을 저장했습니다. 응답 JSON을 검토한 뒤 JSON 가져오기로 저장하세요." : "요청을 저장했습니다. ChatGPT 대화에서 시작·재개한 뒤 응답 JSON을 가져오세요." });
-    } catch (error) { setIdeaError(message(error)); }
-    finally { setBusy(null); }
+      if (mounted.current) setNotice({ tone: "info", text: result.waiting ? "ChatGPT 영상 요청을 저장했습니다. 응답 JSON을 검토한 뒤 JSON 가져오기로 저장하세요." : "요청을 저장했습니다. ChatGPT 대화에서 시작·재개한 뒤 응답 JSON을 가져오세요." });
+    } catch (error) { if (mounted.current) setIdeaError(message(error)); }
+    finally { templateAction.current = false; if (mounted.current) setBusy(null); }
   }
 
   async function loadResearchPreview(seed: VideoResearchSeed) {
@@ -291,13 +439,20 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     setBusy("research"); setNotice(null); setResearchWarnings([]);
     try {
       if (researchProvider === "chatgpt") {
-        const prompt = ["실제 ChatGPT 대화에서 제공된 출처만 근거로 영상 대본을 구성하고 아래 형식의 VideoProject JSON 한 개로 반환해줘. 원문을 확인하지 않았다면 사실과 추정을 구분해줘. 외부 모델을 호출하거나 자동 게시하지 마.", JSON.stringify({ keyword: researchKeyword, topic: researchTopic, format: researchFormat, sources: preview.sources }), JSON.stringify({ ...blankProject(), title: researchTopic, format: researchFormat }, null, 2), "응답은 사용자가 JSON 가져오기로 검토·저장한 뒤 로컬에서 렌더할 수 있도록 장면의 headline,body,narration,durationSec을 작성해줘."] .join("\n\n");
+        let structure = JSON.stringify({ ...blankProject(), title: researchTopic, format: researchFormat }, null, 2);
+        if (selectedTemplate) {
+          const value = await invoke<unknown>("video_template_preview", { input: { templateId: selectedTemplate.id, topic: researchTopic, category: ideaCategory || selectedTemplate.categories[0], format: researchFormat, language: ideaLanguage, sceneCount: ideaSceneCount, durationSec: ideaDuration } });
+          const prepared = readVideoTemplatePreview(value);
+          if (!prepared) throw new Error("선택한 템플릿의 장면 구성을 확인하지 못했습니다.");
+          structure = prepared.prompt;
+        }
+        const prompt = ["실제 ChatGPT 대화에서 제공된 출처만 근거로 영상 대본을 구성하고 아래 형식의 VideoProject JSON 한 개로 반환해줘. 원문을 확인하지 않았다면 사실과 추정을 구분해줘. 예시 문장은 근거가 아니므로 아래 실제 출처에 맞춰 교체해줘. 외부 모델을 호출하거나 자동 게시하지 마.", JSON.stringify({ keyword: researchKeyword, topic: researchTopic, format: researchFormat, sources: preview.sources }), structure, "응답은 사용자가 JSON 가져오기로 검토·저장한 뒤 로컬에서 렌더할 수 있도록 장면의 headline,body,narration,durationSec을 작성해줘."] .join("\n\n");
         const result = await sendToConnectedChat(prompt);
         setNotice({ tone: "info", text: result.waiting ? "ChatGPT에 근거 기반 영상 대본 요청을 저장했습니다. 응답 JSON을 검토·가져오기 하세요." : "영상 대본 요청을 저장했습니다. ChatGPT 대화를 시작·재개하고 응답 JSON을 가져오세요." });
         return;
       }
       const result = await invoke<VideoResearchResult>("video_create_research_project", {
-        input: { trendIds: research.trendIds, keyword: researchKeyword.trim(), topic: researchTopic.trim(), format: researchFormat, provider: "local" }
+        input: { trendIds: research.trendIds, keyword: researchKeyword.trim(), topic: researchTopic.trim(), format: researchFormat, provider: "local", templateId: selectedTemplateId ?? undefined }
       });
       clearResearch(); rememberSaved(result.project); setSceneId(result.project.scenes[0]?.id ?? ""); setRender(null);
       setResearchWarnings(result.warnings);
@@ -349,16 +504,32 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
   }
 
   async function renderProject() {
-    if (!project) return;
+    if (!project || busy || renderOperation.current || !active) return;
+    const operation: RenderOperation = { channel: null, session: null };
+    renderOperation.current = operation;
+    const current = () => mounted.current && renderOperation.current === operation;
+    const visible = () => current() && panelActive.current;
     setBusy("render"); setNotice(null); setRender(null);
     try {
+      setRenderProgress(initialRenderProgress(project.scenes.length));
       const saved = await invoke<StudioVideoProject>("video_save_project", { input: project });
+      if (!current()) return;
       rememberSaved(saved);
-      const result = await invoke<RenderResult>("video_render_project", { project: saved });
+      operation.session = createRenderProgressSession(saved.scenes.length, value => { if (visible()) setRenderProgress(value); });
+      if (visible()) setRenderProgress(operation.session.snapshot());
+      operation.channel = new Channel<VideoRenderProgressMessage>(value => {
+        if (current()) operation.session?.receive(value);
+      });
+      const result = await invoke<RenderResult>("video_render_project", { project: saved, onProgress: operation.channel });
+      if (!current()) return;
       setRender(result); setRenderVersion(JSON.stringify(saved));
       setNotice({ tone: "success", text: "Rust · FFmpeg로 MP4 출력을 완료했습니다." });
-    } catch (error) { setNotice({ tone: "error", text: message(error) }); }
-    finally { setBusy(null); }
+    } catch (error) { if (current()) setNotice({ tone: "error", text: message(error) }); }
+    finally {
+      if (operation.channel) operation.channel.onmessage = () => {};
+      operation.session?.settle();
+      if (current()) { renderOperation.current = null; setRenderProgress(null); setBusy(null); }
+    }
   }
 
 
@@ -379,12 +550,26 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     finally { setBusy(null); }
   }
 
-  async function openRender() {
+  async function openRender(preview = false) {
     if (!render) return;
     setBusy("open");
-    try { await invoke("open_rendered_video", { path: render.path }); }
+    try {
+      if (preview) await openRenderPreview(render.path);
+      else await invoke("open_rendered_video", { path: render.path });
+    }
     catch (error) { setNotice({ tone: "error", text: message(error) }); }
     finally { setBusy(null); }
+  }
+
+  async function exportProject(format: "json" | "markdown") {
+    if (!project || busy || pending || importOpen || !active || exportAction.current) return;
+    exportAction.current = true;
+    setBusy("export"); setNotice(null);
+    try {
+      const path = await invoke<string | null>("video_export_project", { project, format });
+      if (mounted.current) setNotice({ tone: "info", text: path ? `${format === "json" ? "프로젝트 JSON" : "스토리보드 Markdown"}을 저장했습니다: ${path}` : "내보내기를 취소했습니다." });
+    } catch (error) { if (mounted.current) setNotice({ tone: "error", text: message(error) }); }
+    finally { exportAction.current = false; if (mounted.current) setBusy(null); }
   }
 
   function addScene() {
@@ -414,14 +599,26 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     {notice && <div className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={17} /> : <CircleAlert size={17} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="영상 알림 닫기" onClick={() => setNotice(null)}><X size={15} /></button></div>}
     {researchWarnings.length > 0 && <div className="desktop-video-research-warnings" role="status"><CircleAlert size={16} /><div><strong>초안 생성 안내</strong>{researchWarnings.map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
 
-    <ol className="desktop-video-flow" aria-label="영상 제작 단계"><li className={research || busy === "idea" ? "current" : ""}><span>01</span><strong>주제·소재 선택</strong></li><li className={project && !render ? "current" : ""}><span>02</span><strong>초안·모션 편집</strong></li><li className={render ? "current" : ""}><span>03</span><strong>MP4 출력</strong></li></ol>
+    <ol className="desktop-video-flow" aria-label="영상 제작 단계"><li className={selectedTemplate || research || busy === "idea" ? "current" : ""}><span>01</span><strong>템플릿·주제 선택</strong></li><li className={project && !render && busy !== "render" ? "current" : ""}><span>02</span><strong>초안·모션 편집</strong></li><li className={render || busy === "render" ? "current" : ""}><span>03</span><strong>MP4 출력</strong></li></ol>
+
+    {templateLibraryError && <p className="social-form-error" role="alert">템플릿 라이브러리: {templateLibraryError}</p>}
+    <VideoTemplateGallery templates={templates} selectedId={selectedTemplateId} onSelect={chooseTemplate} onUse={useTemplate} preview={templatePreview} loading={templateLoading} error={templateError} disabled={!!busy || !!pending || importOpen} active={active} onRetry={retryTemplates} library={templateLibrary} libraryLoading={templateLibraryLoading} onFavorite={favoriteTemplate} controls={selectedTemplate && <fieldset className="desktop-video-template-controls" disabled={!!busy || !!pending || importOpen}>
+      <legend>내 영상으로 구성</legend>
+      <label className="desktop-video-template-topic">주제<input aria-label="템플릿 영상 주제" value={research ? researchTopic : ideaTopic} maxLength={300} placeholder={selectedTemplate.sampleTopic} onChange={event => research ? setResearchTopic(event.target.value) : setIdeaTopic(event.target.value)} /></label>
+      <label>카테고리<select aria-label="템플릿 카테고리" value={ideaCategory} onChange={event => setIdeaCategory(event.target.value as VideoIdeaCategory)}>{Object.entries(ideaCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label>형식<select aria-label="템플릿 영상 형식" value={research ? researchFormat : ideaFormat} onChange={event => research ? setResearchFormat(event.target.value as VideoFormat) : setIdeaFormat(event.target.value as VideoFormat)}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <label>언어<select aria-label="템플릿 언어" value={ideaLanguage} onChange={event => setIdeaLanguage(event.target.value as VideoProject["language"])}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label>
+      <label>장면 수<select aria-label="템플릿 장면 수" value={ideaSceneCount} onChange={event => templateSceneCount(Number(event.target.value))}>{[3, 4, 5, 6, 7, 8].map(count => <option key={count} value={count}>{count}장면</option>)}</select></label>
+      <label>길이<select aria-label="템플릿 목표 길이" value={ideaDuration} onChange={event => setIdeaDuration(Number(event.target.value))}>{[...new Set([18, 30, 40, 45, 48, 60, 72, 90, 120, 180, ideaDuration])].filter(seconds => seconds >= Math.max(18, ideaSceneCount * 3) && seconds <= Math.min(180, ideaSceneCount * 30)).sort((a, b) => a - b).map(seconds => <option key={seconds} value={seconds}>{seconds}초</option>)}</select></label>
+    </fieldset>} />
 
     <section className="desktop-video-idea" aria-labelledby="desktop-video-idea-title" aria-busy={busy === "idea"}>
-      <div className="desktop-video-idea-heading"><div><span><WandSparkles size={15} />주제 → AI 영상 초안</span><h2 id="desktop-video-idea-title">어떤 이야기를 영상으로 만들까요?</h2><p>주제와 카테고리만 정하면 AI가 장면, 화면 본문, 내레이션과 모션을 구성합니다.</p></div><span className="desktop-video-idea-defaults">기본 Shorts · 한국어 · 5장면 · 45초</span></div>
+      <div className="desktop-video-idea-heading"><div><span><WandSparkles size={15} />주제 → AI 영상 초안</span><h2 id="desktop-video-idea-title">어떤 이야기를 영상으로 만들까요?</h2><p>{selectedTemplate ? `${selectedTemplate.name}의 장면 순서와 모션에 맞춰 ChatGPT에 본문·내레이션을 요청합니다.` : "주제와 카테고리만 정하면 AI가 장면, 화면 본문, 내레이션과 모션을 구성합니다."}</p></div><span className="desktop-video-idea-defaults">{selectedTemplate?.name ?? "자유 구성"} · {ideaSceneCount}장면 · {ideaDuration}초</span></div>
+      {selectedTemplate && <button type="button" className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => setSelectedTemplateId(null)}>템플릿 없이 직접 구성</button>}
       <form onSubmit={submitIdea}>
         <fieldset className="desktop-video-idea-fields" disabled={!!busy || !!pending || importOpen}><legend className="social-sr-only">AI 영상 기획</legend>
           <div className="desktop-video-idea-main"><label htmlFor="desktop-video-idea-topic">영상 주제<input ref={ideaTopicField} id="desktop-video-idea-topic" value={ideaTopic} required maxLength={300} placeholder="예: AI 도구로 하루 업무 시간을 줄이는 방법" onChange={(event) => setIdeaTopic(event.target.value)} /></label><label htmlFor="desktop-video-idea-category">카테고리<select id="desktop-video-idea-category" value={ideaCategory} required onChange={(event) => setIdeaCategory(event.target.value as VideoIdeaCategory)}><option value="" disabled>카테고리 선택</option>{Object.entries(ideaCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
-          <details className="desktop-video-idea-options"><summary>영상 형식·길이·AI 선택 <span>선택사항</span></summary><div className="desktop-video-idea-options-grid"><label>영상 형식<select value={ideaFormat} onChange={(event) => setIdeaFormat(event.target.value as VideoFormat)}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>언어<select value={ideaLanguage} onChange={(event) => setIdeaLanguage(event.target.value as VideoProject["language"])}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label><label>목표 길이<select value={ideaDuration} onChange={(event) => setIdeaDuration(Number(event.target.value))}>{[30, 45, 60].map((seconds) => <option key={seconds} value={seconds}>{seconds}초</option>)}</select></label><label>장면 수<select value={ideaSceneCount} onChange={(event) => setIdeaSceneCount(Number(event.target.value))}>{[3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count}장면</option>)}</select></label><label className="desktop-video-idea-provider">AI 연결<select value={resolvedIdeaProvider ?? ""} onChange={(event) => setIdeaProvider(event.target.value as VideoIdeaProvider)}><option value="" disabled>연결된 AI가 없습니다</option>{aiProviders.map((id) => { const provider = aiStatus.providers.find((item) => item.id === id); return <option key={id} value={id} disabled={!provider?.available}>{provider?.label ?? "ChatGPT 대화"} · {provider?.available ? "연결됨" : "연결 필요"}</option>; })}</select></label></div></details>
+          <details className="desktop-video-idea-options"><summary>영상 형식·길이·AI 선택 <span>선택사항</span></summary><div className="desktop-video-idea-options-grid"><label>영상 형식<select value={ideaFormat} onChange={(event) => setIdeaFormat(event.target.value as VideoFormat)}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>언어<select value={ideaLanguage} onChange={(event) => setIdeaLanguage(event.target.value as VideoProject["language"])}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label><label>목표 길이<select value={ideaDuration} onChange={(event) => setIdeaDuration(Number(event.target.value))}>{[...new Set([30, 45, 60, ideaDuration])].sort((a,b) => a-b).map((seconds) => <option key={seconds} value={seconds}>{seconds}초</option>)}</select></label><label>장면 수<select value={ideaSceneCount} onChange={(event) => templateSceneCount(Number(event.target.value))}>{[3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count}장면</option>)}</select></label><label className="desktop-video-idea-provider">AI 연결<select value={resolvedIdeaProvider ?? ""} onChange={(event) => setIdeaProvider(event.target.value as VideoIdeaProvider)}><option value="" disabled>연결된 AI가 없습니다</option>{aiProviders.map((id) => { const provider = aiStatus.providers.find((item) => item.id === id); return <option key={id} value={id} disabled={!provider?.available}>{provider?.label ?? "ChatGPT 대화"} · {provider?.available ? "연결됨" : "연결 필요"}</option>; })}</select></label></div></details>
         </fieldset>
         <div className="desktop-video-idea-footer"><div><p>{resolvedIdeaProvider ? <><Sparkles size={13} />{aiStatus.providers.find((provider) => provider.id === resolvedIdeaProvider)?.label ?? resolvedIdeaProvider}에 주제·카테고리를 요청합니다. ChatGPT 사용 한도가 적용됩니다.</> : aiChecking ? "AI 연결 상태를 확인하고 있습니다." : "코딩 메뉴에서 실제 ChatGPT 대화와 Codexify를 연결하세요."}</p><small>AI 초안은 검토가 필요합니다. 내레이션 텍스트가 생성되며, 기존 음성 파일이 연결된 프로젝트는 해당 파일로 렌더합니다.</small></div><button type="submit" className="social-button primary" disabled={!!busy || !!pending || importOpen || !ideaTopic.trim() || !ideaCategory || !resolvedIdeaProvider}>{busy === "idea" ? <LoaderCircle size={16} className="social-spin" /> : <WandSparkles size={16} />}{busy === "idea" ? "ChatGPT에 요청 저장 중" : "ChatGPT에 영상 초안 요청"}<ArrowRight size={15} /></button></div>
       </form>
@@ -444,6 +641,7 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
           <label>초안 생성 방식<select value={researchProvider} onChange={(event) => setResearchProvider(event.target.value as VideoResearchProvider)}><option value="local">기본 초안 · AI 없이 로컬에서 생성</option>{aiProviders.map((id) => { const provider = aiStatus.providers.find((item) => item.id === id); return <option key={id} value={id} disabled={!provider?.available}>{provider?.label ?? "ChatGPT 대화"} · {provider?.available ? "연결됨" : "연결 필요"}</option>; })}</select></label>
         </fieldset>
         <div className="desktop-video-research-mode-note"><span>{researchProvider === "local" ? <BookOpen size={16} /> : <Sparkles size={16} />}</span><p>{researchProvider === "local" ? "제목·설명에서 기본 장면과 내레이션을 구성합니다. 외부 AI나 원본 미디어를 다운로드하지 않습니다." : `ChatGPT에 주제와 근거를 전달합니다. 수신한 JSON을 검토·가져오기 해야 새 프로젝트로 저장됩니다. ChatGPT 사용 한도가 적용됩니다.`}</p></div>
+        {selectedTemplate && <p className="social-form-hint">{selectedTemplate.name} 적용 · {researchProvider === "local" ? "출처와 문장 순서를 유지하고 템플릿의 색상·모션을 적용합니다." : "선택한 템플릿의 장면 구성과 실제 출처를 함께 요청합니다."}</p>}
         {aiStatusError && <p className="social-form-error" role="alert">AI 연결 확인: {aiStatusError} 기본 초안은 사용할 수 있습니다.</p>}
         <div className="desktop-video-research-actions"><button type="button" className="social-button compact" disabled={!!busy || aiChecking} onClick={() => void checkAi()}>{aiChecking ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}AI 연결 확인</button><button type="button" className="social-button primary" disabled={!!busy || !preview.sources.length || !researchTopic.trim()} onClick={() => void createResearchProject()}>{busy === "research" ? <LoaderCircle size={16} className="social-spin" /> : researchProvider === "local" ? <Clapperboard size={16} /> : <Sparkles size={16} />}{busy === "research" ? "초안 생성·저장 중" : researchProvider === "local" ? "기본 영상 초안 생성" : "ChatGPT에 영상 대본 요청"}<ArrowRight size={15} /></button></div>
         {busy === "research" && <p className="desktop-video-research-loading" role="status">새 프로젝트를 생성해 로컬에 저장합니다. 완료되면 장면 편집기가 열립니다.</p>}
@@ -463,7 +661,7 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
       </aside>
 
       {project && scene ? <div className="desktop-video-editor">
-        <div className="desktop-video-editor-heading"><div><h2>{project.title || "제목 없는 영상"}</h2><span>{dirty ? "저장하지 않은 변경사항" : "로컬에 저장됨"} <i />{project.scenes.length}장면 · {duration.toFixed(1)}초</span></div><div><button className="social-button" disabled={!!busy || !dirty} onClick={() => void saveProject()}>{busy === "save" ? <LoaderCircle size={15} className="social-spin" /> : <Save size={15} />}저장</button><button className="social-button primary" disabled={!!busy || !canRender} onClick={() => void renderProject()}>{busy === "render" ? <LoaderCircle size={15} className="social-spin" /> : <Clapperboard size={15} />}{busy === "render" ? "MP4 출력 중" : "MP4 출력"}</button></div></div>
+        <div className="desktop-video-editor-heading"><div><h2>{project.title || "제목 없는 영상"}</h2><span>{dirty ? "저장하지 않은 변경사항" : "로컬에 저장됨"} <i />{project.scenes.length}장면 · {duration.toFixed(1)}초</span></div><div><button className="social-button compact" aria-label="영상 프로젝트 복제" disabled={!!busy || !!pending || importOpen} onClick={() => requestProject({ kind: "duplicate", project: duplicateVideoProject(project) })}><Copy size={14} />복제</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("markdown")}><Download size={14} />Markdown 내보내기</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("json")}><FileJson size={14} />JSON 내보내기</button><button className="social-button" disabled={!!busy || !dirty} onClick={() => void saveProject()}>{busy === "save" ? <LoaderCircle size={15} className="social-spin" /> : <Save size={15} />}저장</button><button className="social-button primary" disabled={!!busy || !canRender} onClick={() => void renderProject()}>{busy === "render" ? <LoaderCircle size={15} className="social-spin" /> : <Clapperboard size={15} />}{busy === "render" ? "MP4 출력 중" : "MP4 출력"}</button></div></div>
         <fieldset className="desktop-video-project-fields" disabled={!!busy}><legend className="social-sr-only">영상 기본 정보</legend><label>영상 제목<input value={project.title} maxLength={300} onChange={(event) => patchProject({ title: event.target.value })} /></label><div className="desktop-video-metadata"><label>출력 형식<select value={project.format} onChange={(event) => patchProject({ format: event.target.value as VideoFormat })}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>음성 언어<select value={project.language} onChange={(event) => patchProject({ language: event.target.value as VideoProject["language"] })}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label></div></fieldset>
         {projectResearch && <details className="desktop-video-saved-research"><summary><BookOpen size={15} />영상 기획에 사용한 자료 {projectResearch.sources.length}개 <span>{projectResearch.provider === "local" ? "기본 초안" : projectResearch.provider}</span></summary><p><Hash size={12} />{projectResearch.keyword || "키워드 미지정"} · {projectResearch.topic}</p><ResearchSources sources={projectResearch.sources} /><p className="desktop-video-source-review">원문 사실과 표현을 검토하고 내 관점으로 편집하세요. 원본 미디어는 복사되지 않았습니다.</p></details>}
         {projectIdea && <div className="desktop-video-saved-idea"><div><Sparkles size={15} /><strong>AI가 구성한 영상 초안</strong><span>{ideaCategories[projectIdea.category]}</span></div><p>{projectIdea.topic}</p><small>{aiStatus.providers.find((provider) => provider.id === projectIdea.provider)?.label ?? projectIdea.provider} · {projectDate(projectIdea.createdAt)} 생성 · toris-video-motion</small><p className="desktop-video-source-review">AI가 만든 설명과 표현을 확인하고 편집하세요. 주제로 생성한 초안에는 검증된 출처가 자동으로 연결되지 않습니다.</p></div>}
@@ -473,8 +671,8 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
         <fieldset className="desktop-video-motion-fields" disabled={!!busy}><legend><WandSparkles size={14} />장면 모션</legend><div className="desktop-video-motion-controls"><label htmlFor="desktop-video-motion-preset">모션 스타일<select id="desktop-video-motion-preset" value={sceneMotion?.preset ?? ""} onChange={(event) => patchScene({ motion: event.target.value ? { preset: event.target.value as VideoMotionPreset, intensity: sceneMotion?.intensity ?? .6 } : undefined })}><option value="">정지 장면 · 모션 없음</option>{Object.entries(motionPresets).map(([value, preset]) => <option key={value} value={value}>{preset.label}</option>)}</select></label><label htmlFor="desktop-video-motion-intensity">모션 강도 <output htmlFor="desktop-video-motion-intensity">{Math.round((sceneMotion?.intensity ?? .6) * 100)}%</output><input id="desktop-video-motion-intensity" type="range" min={0} max={1} step={.1} value={sceneMotion?.intensity ?? .6} disabled={!sceneMotion} onChange={(event) => { if (sceneMotion) patchScene({ motion: { ...sceneMotion, intensity: Number(event.target.value) } }); }} /></label></div></fieldset>
         <MotionPreview scene={scene} format={project.format} active={active} disabled={!!busy} />
         {!canRender && status && <p className="social-form-hint desktop-video-render-hint">MP4 출력에는 로컬 FFmpeg·FFprobe와 자막 글꼴이 필요합니다. 설치 또는 경로 설정 후 상태를 다시 확인하세요.</p>}
-        {busy === "render" && <p className="desktop-video-progress" role="status"><LoaderCircle size={15} className="social-spin" />프로젝트를 저장하고 장면을 MP4로 합치고 있습니다. 영상 길이에 따라 수 분이 걸릴 수 있습니다.</p>}
-        {render && <div className="desktop-video-output"><Check size={20} /><div><strong>MP4 출력 완료</strong><span>{formatLabels[render.format]} · {render.durationSec.toFixed(1)}초</span><code>{render.path}</code>{renderStale && <small>출력 이후 변경사항이 있습니다. 최신 편집 내용은 다시 출력하세요.</small>}</div><button className="social-button" disabled={!!busy} onClick={() => void openRender()}><FolderOpen size={16} />영상 열기</button></div>}
+        {busy === "render" && renderProgress && <div className="desktop-video-progress"><LoaderCircle size={15} className="social-spin" aria-hidden="true" /><VideoRenderProgress progress={renderProgress} /></div>}
+        {render && <div className="desktop-video-output"><Check size={20} /><div><strong>MP4 출력 완료</strong><span>{formatLabels[render.format]} · {render.durationSec.toFixed(1)}초</span><code>{render.path}</code>{renderStale && <small>출력 이후 변경사항이 있습니다. 최신 편집 내용은 다시 출력하세요.</small>}</div><button className="social-button primary" disabled={!!busy} onClick={() => void openRender(true)}><Play size={16} />새 창에서 미리보기</button><button className="social-button" disabled={!!busy} onClick={() => void openRender()}><FolderOpen size={16} />영상 열기</button></div>}
       </div> : <div className={`social-empty desktop-video-start ${research ? "with-research" : ""}`}><Clapperboard size={34} /><strong>{research ? "소재를 확인하면 장면 편집으로 이어집니다" : "주제에서 시작하는 내 영상"}</strong><p>{research ? "위에서 형식과 초안 생성 방식을 선택하세요. 생성된 프로젝트는 로컬에 저장되며 장면별로 수정할 수 있습니다." : "주제와 카테고리로 AI 영상 초안을 만들거나, 수집한 트렌드 자료에서 시작하세요."}</p>{!research && <div className="desktop-video-start-actions"><button className="social-button primary" disabled={!!busy} onClick={() => ideaTopicField.current?.focus()}><WandSparkles size={16} />주제로 AI 영상 만들기</button>{onOpenKeywords && <button className="social-button" disabled={!!busy || loading} onClick={onOpenKeywords}><Search size={16} />키워드로 소재 찾기</button>}<button className="social-button" disabled={!!busy || loading} onClick={() => requestProject({ kind: "new" })}><Plus size={16} />직접 새 영상 만들기</button></div>}</div>}
     </div>
 

@@ -35,7 +35,7 @@ test("opening a connection uses only the saved official plugin or conversation U
   await openConnectedChat(call);
   assert.deepEqual(opened, [{ url: "https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc" }]);
   for (const url of ["http://chatgpt.com/plugins/foo", "https://chatgpt.com.evil.test/plugins/foo", "https://name:secret@chatgpt.com/plugins/foo", "https://chatgpt.com:444/plugins/foo", "https://chatgpt.com/c/foo?token=secret", "javascript:alert(1)", "https://chatgpt.com/", "https://chatgpt.com/plugins/"]) {
-    assert.throws(() => connectedChatUrl({ ...profile, pluginUrl: url }), undefined, url);
+    assert.throws(() => connectedChatUrl({ ...profile, pluginUrl: url }), url);
   }
   assert.throws(() => connectedChatUrl({ ...profile, pluginUrl: "" }));
 });

@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Box, Copy, FolderOpen, Image as ImageIcon, SlidersHorizontal, Star, X } from "lucide-react";
 import { assetApi, assetError } from "./transport";
 import { formatBytes, SOURCE_LABELS } from "./contracts";
 import type { Asset } from "./contracts";
 import { selectedPreset } from "./presets";
+import { createDisposalScope } from "../native-lifecycle";
 const ModelPreview = lazy(() => import("./ModelPreview"));
 
 export function AssetThumbnail({ asset, large = false }: { asset: Asset; large?: boolean }) {
@@ -27,12 +28,15 @@ export function AssetInspector({ asset, onClose, onChanged, onError, onReuse, on
   const [tags,setTags]=useState(asset.tags.join(", "));
   const [busy,setBusy]=useState(false);
   const [copied,setCopied]=useState(false);
-  useEffect(()=>{setTags(asset.tags.join(", "));setCopied(false);},[asset.id]);
+  const lifetime=useRef<ReturnType<typeof createDisposalScope>|null>(null);
+  useEffect(()=>{const scope=createDisposalScope();lifetime.current=scope;setTags(asset.tags.join(", "));setCopied(false);setBusy(false);return scope.dispose;},[asset.id]);
   async function update(patch:object) {
+    const scope=lifetime.current;if(busy||!scope?.active())return;
     setBusy(true);
-    try {await assetApi("update_asset",{id:asset.id,...patch});onChanged();}
-    catch(error){onError(assetError(error));}finally{setBusy(false);}
+    try {await assetApi("update_asset",{id:asset.id,...patch});if(scope.active())onChanged();}
+    catch(error){if(scope.active())onError(assetError(error));}finally{if(scope.active())setBusy(false);}
   }
+  async function fileAction(command:string,args:Record<string,unknown>,copiedPath=false){const scope=lifetime.current;if(!scope?.active())return;try{await invoke(command,args);if(scope.active()&&copiedPath)setCopied(true);}catch(error){if(scope.active())onError(assetError(error));}}
   return <aside className="asset-inspector" aria-label="선택한 에셋 상세">
     <header><div><span>{asset.kind==="image" ? "이미지 에셋" : "3D 에셋"}</span><h2>{asset.title}</h2></div><button className="asset-icon-button" onClick={onClose} aria-label="에셋 상세 닫기"><X size={19}/></button></header>
     {asset.kind==="model3d" ? <Suspense fallback={<p className="asset-inline-note">3D 뷰어 준비 중…</p>}><ModelPreview asset={asset}/></Suspense> : <AssetThumbnail asset={asset} large/>}
@@ -43,7 +47,7 @@ export function AssetInspector({ asset, onClose, onChanged, onError, onReuse, on
       <label className="asset-field">검토 상태<select aria-label="검토 상태" value={asset.review} disabled={busy} onChange={event=>void update({review:event.target.value})}><option value="pending">검토 전</option><option value="approved">사용 승인</option><option value="rejected">보류</option></select></label>
       <form onSubmit={event=>{event.preventDefault();void update({tags:tags.split(",").map(t=>t.trim()).filter(Boolean)});}}><label className="asset-field">태그<input value={tags} onChange={event=>setTags(event.target.value)} placeholder="배경, 캐릭터, UI" maxLength={1300}/></label><button className="asset-button small" disabled={busy} type="submit">태그 저장</button></form>
       <details className="asset-details" open={Boolean(asset.prompt)}><summary>프롬프트와 파일 경로</summary><p>{asset.prompt || "프롬프트가 없는 가져온 파일입니다."}</p><small>출력 파일</small><code>{asset.outputPath}</code><small>보존된 원본</small><code>{asset.originalPath}</code></details>
-      <div className="asset-inspector-actions">{asset.kind==="image" && <button className="asset-button primary" disabled={busy} onClick={()=>onResize(asset)}><SlidersHorizontal size={16}/>크기 변경·내보내기</button>}<button className="asset-button" onClick={()=>void invoke("asset_reveal",{id:asset.id}).catch(error=>onError(assetError(error)))}><FolderOpen size={16}/>파일 위치 열기</button><button className="asset-button" onClick={()=>void invoke("copy_text",{text:asset.outputPath}).then(()=>setCopied(true)).catch(error=>onError(assetError(error)))}><Copy size={16}/>{copied ? "경로 복사됨" : "경로 복사"}</button><button className="asset-button" onClick={()=>onReuse(asset)}>설정으로 새 요청 만들기</button></div>
+      <div className="asset-inspector-actions">{asset.kind==="image" && <button className="asset-button primary" disabled={busy} onClick={()=>onResize(asset)}><SlidersHorizontal size={16}/>크기 변경·내보내기</button>}<button className="asset-button" onClick={()=>void fileAction("asset_reveal",{id:asset.id})}><FolderOpen size={16}/>파일 위치 열기</button><button className="asset-button" onClick={()=>void fileAction("copy_text",{text:asset.outputPath},true)}><Copy size={16}/>{copied ? "경로 복사됨" : "경로 복사"}</button><button className="asset-button" onClick={()=>onReuse(asset)}>설정으로 새 요청 만들기</button></div>
     </div>
   </aside>;
 }
