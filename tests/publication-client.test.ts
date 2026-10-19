@@ -3,7 +3,7 @@ import test from "node:test";
 import { PUBLISH_PLATFORMS, jobActions, kstSchedule, newPublication, newTarget, publicationApi, safePostUrl, scheduleInput, splitTags, submissionInput, targetCaption, targetContent } from "../desktop/src/publication-client";
 import type { PublicationPreflight, PublishingJob } from "../desktop/src/publication-client";
 
-test("new publishing destinations omit Naver and X; TikTok privacy and engagement require user choices", () => {
+test("legacy video destinations omit Naver and X; TikTok privacy and engagement require user choices", () => {
   assert.deepEqual(PUBLISH_PLATFORMS, ["youtube", "instagram", "facebook", "threads", "tiktok"]);
   const target = newTarget("tiktok");
   assert.equal(target.options.privacy, "");

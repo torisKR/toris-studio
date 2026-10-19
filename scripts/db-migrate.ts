@@ -13,8 +13,9 @@ try {
   await db.query("SELECT pg_advisory_xact_lock(8740291)");
   await db.query(await readFile("db/migrations/001_social.sql", "utf8"));
   await db.query(await readFile("db/migrations/007_publications.sql", "utf8"));
+  await db.query(await readFile("db/migrations/008_publication_handoffs.sql", "utf8"));
   await db.query("COMMIT");
-  console.log("Social schemas 001 and 007 are ready; existing records preserved as unapproved drafts.");
+  console.log("Social schemas 001, 007 and 008 are ready; existing records preserved and manual handoffs remain non-executable.");
 } catch {
   await db.query("ROLLBACK").catch(() => undefined);
   console.error("DB migration failed. Check local PostgreSQL and ignored .env.db.local credentials.");

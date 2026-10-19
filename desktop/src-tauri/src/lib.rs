@@ -22,6 +22,7 @@ pub mod publications;
 #[cfg(feature = "desktop")]
 static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 pub mod ops;
+pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
 mod publication_native;

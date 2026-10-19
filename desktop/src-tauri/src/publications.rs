@@ -122,6 +122,13 @@ async fn confirm_sleep_gap(client: &tokio_postgres::Client) -> Result<bool, Stri
     Ok(true)
 }
 fn state_path() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(root) = std::env::var_os("TORIS_PUBLICATIONS_TEST_STATE_ROOT") {
+        let root = PathBuf::from(root)
+            .canonicalize()
+            .map_err(|_| "격리 테스트 상태 경로 오류")?;
+        return Ok(root.join("publication-scheduler.json"));
+    }
     Ok(crate::publication_media::root_dir()?
         .parent()
         .ok_or("게시 설정 경로 오류")?
@@ -231,8 +238,38 @@ fn normalize(input: &Value) -> Result<Value, String> {
     let description = text(input, "description", 30000, false)?;
     let tags = words(input, "tags")?;
     let hashtags = words(input, "hashtags")?;
+    let content_kind = match input.get("contentKind") {
+        None | Some(Value::Null) => "video",
+        Some(Value::String(kind)) if ["video", "text", "article"].contains(&kind.as_str()) => kind,
+        _ => return Err("콘텐츠 종류를 확인하세요.".into()),
+    };
     let video = input["videoMediaId"].as_str().filter(|s| !s.is_empty());
     let thumbnail = input["thumbnailMediaId"].as_str().filter(|s| !s.is_empty());
+    if content_kind == "text" && (video.is_some() || thumbnail.is_some()) {
+        return Err("텍스트 콘텐츠에는 영상·썸네일을 첨부할 수 없습니다.".into());
+    }
+    let images = match input.get("imageMediaIds") {
+        None | Some(Value::Null) => vec![],
+        Some(Value::Array(items)) if items.len() <= 20 => {
+            let mut seen = std::collections::HashSet::new();
+            let mut ids = vec![];
+            for item in items {
+                let id = item.as_str().ok_or("첨부 이미지 식별자를 확인하세요.")?;
+                uuid(id)?;
+                if !seen.insert(id) {
+                    return Err("첨부 이미지가 중복되었습니다.".into());
+                }
+                ids.push(id.to_string());
+            }
+            ids
+        }
+        _ => return Err("첨부 이미지는 최대 20개 목록이어야 합니다.".into()),
+    };
+    if (content_kind != "article" && !images.is_empty())
+        || (content_kind == "article" && (video.is_some() || thumbnail.is_some()))
+    {
+        return Err("블로그 첨부 이미지와 영상·썸네일을 구분하세요.".into());
+    }
     for raw in video.into_iter().chain(thumbnail) {
         uuid(raw)?;
     }
@@ -253,16 +290,37 @@ fn normalize(input: &Value) -> Result<Value, String> {
         }
         let platform = target["platform"]
             .as_str()
-            .filter(|s| ["youtube", "instagram", "facebook", "threads", "tiktok"].contains(s))
+            .filter(|s| {
+                [
+                    "youtube",
+                    "instagram",
+                    "facebook",
+                    "threads",
+                    "tiktok",
+                    "naver_blog",
+                ]
+                .contains(s)
+            })
             .ok_or("일괄 게시 플랫폼을 확인하세요.")?;
+        if (content_kind == "text" && !["facebook", "threads", "naver_blog"].contains(&platform))
+            || (content_kind == "article" && platform != "naver_blog")
+            || (content_kind == "video" && platform == "naver_blog")
+        {
+            return Err("콘텐츠 종류와 게시 플랫폼이 일치하지 않습니다.".into());
+        }
         let mode = target["mode"]
             .as_str()
-            .filter(|s| ["manual", "scheduled", "tiktok_inbox"].contains(s))
+            .filter(|s| ["manual", "scheduled", "tiktok_inbox", "manual_handoff"].contains(s))
             .ok_or("즉시·예약·TikTok 초안 전송 방식을 확인하세요.")?;
         if mode == "tiktok_inbox" && platform != "tiktok" {
             return Err("초안 전송은 TikTok에서만 지원합니다.".into());
         }
         let scheduled = target["scheduledAt"].as_str().filter(|s| !s.is_empty());
+        if (platform == "naver_blog") != (mode == "manual_handoff")
+            || (mode == "manual_handoff" && scheduled.is_some())
+        {
+            return Err("네이버 블로그는 자동 예약 대신 수동 게시 인계만 지원합니다.".into());
+        }
         if mode == "scheduled" {
             DateTime::parse_from_rfc3339(scheduled.ok_or("예약 시간을 선택하세요.")?)
                 .map_err(|_| "예약 시간은 시간대가 포함된 날짜여야 합니다.")?;
@@ -298,14 +356,14 @@ fn normalize(input: &Value) -> Result<Value, String> {
         normalized.push(json!({"id":target_id,"platform":platform,"accountId":account,"accountTitle":account_title,"mode":mode,"scheduledAt":scheduled,"overrides":overrides,"options":options}));
     }
     Ok(
-        json!({"title":title,"description":description,"tags":tags,"hashtags":hashtags,"videoMediaId":video,"thumbnailMediaId":thumbnail,"targets":normalized}),
+        json!({"contentKind":content_kind,"title":title,"description":description,"tags":tags,"hashtags":hashtags,"videoMediaId":video,"thumbnailMediaId":thumbnail,"imageMediaIds":images,"targets":normalized}),
     )
 }
 fn job(row: &Row) -> Value {
     let result: Option<Value> = row.get("result");
     let result = result.unwrap_or(Value::Null);
     let snapshot: Value = row.get("snapshot");
-    json!({"id":row.get::<_,Uuid>("id").to_string(),"targetId":row.get::<_,Uuid>("target_id").to_string(),"platform":snapshot["platform"],"accountId":snapshot["accountId"],"accountTitle":snapshot["accountTitle"],"revision":row.get::<_,i32>("revision"),"status":row.get::<_,String>("status"),"mode":row.get::<_,String>("mode"),"scheduledAt":row.get::<_,Option<DateTime<Utc>>>("scheduled_at").map(|v|v.to_rfc3339()),"externalId":result["externalId"],"url":result["url"],"error":row.get::<_,Option<String>>("error"),"warnings":result.get("warnings").cloned().unwrap_or_else(||json!([])),"thumbnailStatus":result["thumbnailStatus"],"retryable":row.get::<_,bool>("retryable"),"updatedAt":row.get::<_,DateTime<Utc>>("updated_at").to_rfc3339()})
+    json!({"id":row.get::<_,Uuid>("id").to_string(),"targetId":row.get::<_,Uuid>("target_id").to_string(),"platform":snapshot["platform"],"contentKind":snapshot["contentKind"],"accountId":snapshot["accountId"],"accountTitle":snapshot["accountTitle"],"revision":row.get::<_,i32>("revision"),"status":row.get::<_,String>("status"),"mode":row.get::<_,String>("mode"),"scheduledAt":row.get::<_,Option<DateTime<Utc>>>("scheduled_at").map(|v|v.to_rfc3339()),"externalId":result["externalId"],"url":result["url"],"verification":result["verification"],"error":row.get::<_,Option<String>>("error"),"warnings":result.get("warnings").cloned().unwrap_or_else(||json!([])),"thumbnailStatus":result["thumbnailStatus"],"retryable":row.get::<_,bool>("retryable"),"updatedAt":row.get::<_,DateTime<Utc>>("updated_at").to_rfc3339()})
 }
 fn publication(row: &Row, jobs: Vec<Value>) -> Value {
     let mut value: Value = row.get("payload");
@@ -404,7 +462,7 @@ pub async fn save(config: &AppConfig, input: Value) -> Result<Value, String> {
                 &[&id, &payload, &revision],
             )
             .await)?;
-        db(tx.execute("UPDATE publication_jobs SET status='cancelled',error='초안 수정으로 기존 승인이 취소되었습니다.',updated_at=now() WHERE publication_id=$1 AND status IN ('queued','scheduled','needs_confirmation','failed')",&[&id]).await)?;
+        db(tx.execute("UPDATE publication_jobs SET status='cancelled',error='초안 수정으로 기존 승인이 취소되었습니다.',updated_at=now() WHERE publication_id=$1 AND status IN ('queued','scheduled','needs_confirmation','needs_human_publish','failed')",&[&id]).await)?;
     } else {
         if expected != 0 {
             return Err("게시 초안이 없습니다. 다시 불러오세요.".into());
@@ -449,6 +507,14 @@ fn selection(publication: &Value, input: &Value) -> Result<Vec<String>, String> 
 }
 fn merged(publication: &Value, target: &Value) -> Value {
     let mut plan = json!({"platform":target["platform"],"accountId":target["accountId"],"accountTitle":target["accountTitle"],"mode":target["mode"],"scheduledAt":target["scheduledAt"],"options":target["options"],"title":publication["title"],"description":publication["description"],"tags":publication["tags"],"hashtags":publication["hashtags"],"videoMediaId":publication["videoMediaId"],"thumbnailMediaId":publication["thumbnailMediaId"]});
+    plan["contentKind"] = publication
+        .get("contentKind")
+        .cloned()
+        .unwrap_or(json!("video"));
+    plan["imageMediaIds"] = publication
+        .get("imageMediaIds")
+        .cloned()
+        .unwrap_or(json!([]));
     for field in ["title", "description", "tags", "hashtags"] {
         if let Some(value) = target["overrides"].get(field) {
             plan[field] = value.clone();
@@ -457,6 +523,12 @@ fn merged(publication: &Value, target: &Value) -> Value {
     plan
 }
 fn media_for(publication: &Value) -> Result<(Value, Option<Value>), String> {
+    if matches!(
+        publication["contentKind"].as_str(),
+        Some("text" | "article")
+    ) {
+        return Ok((Value::Null, None));
+    }
     let raw = publication["videoMediaId"]
         .as_str()
         .ok_or("MP4 영상을 먼저 가져오세요.")?;
@@ -477,6 +549,24 @@ fn media_for(publication: &Value) -> Result<(Value, Option<Value>), String> {
         })
         .transpose()?;
     Ok((video, thumbnail))
+}
+fn images_for(publication: &Value) -> Result<Vec<Value>, String> {
+    let mut images = vec![];
+    if let Some(ids) = publication["imageMediaIds"].as_array() {
+        if ids.len() > 20 {
+            return Err("첨부 이미지는 최대 20개입니다.".into());
+        }
+        for id in ids {
+            let id = id.as_str().ok_or("첨부 이미지 식별자 오류")?;
+            crate::publication_media::private_path(id)?;
+            let meta = crate::publication_media::metadata(id)?;
+            if meta["kind"] != "thumbnail" {
+                return Err("블로그 첨부 이미지를 선택하세요.".into());
+            }
+            images.push(meta);
+        }
+    }
+    Ok(images)
 }
 fn hash_approval(
     publication: &Value,
@@ -510,6 +600,9 @@ pub async fn preflight(config: &AppConfig, input: Value) -> Result<Value, String
     }
     let selected = selection(&publication, &input)?;
     let (video, thumbnail) = media_for(&publication)?;
+    let images = images_for(&publication)?;
+    let mut bound = approval_publication(&publication);
+    bound["imageMetadata"] = json!(images);
     let mut checks = Vec::new();
     for target in publication["targets"]
         .as_array()
@@ -526,6 +619,7 @@ pub async fn preflight(config: &AppConfig, input: Value) -> Result<Value, String
                     && [
                         "published",
                         "draft_sent",
+                        "needs_human_publish",
                         "sending",
                         "processing",
                         "uncertain",
@@ -546,7 +640,11 @@ pub async fn preflight(config: &AppConfig, input: Value) -> Result<Value, String
         let mut plan = merged(&publication, target);
         plan["video"] = video.clone();
         plan["thumbnail"] = thumbnail.clone().unwrap_or(Value::Null);
-        let checked = crate::publishing_adapters::preflight(&plan).await;
+        let checked = if target["platform"] == "naver_blog" {
+            crate::publication_handoff::validate_plan(&plan).map(|_| json!({"ready":true,"message":"수동 게시 인계 자료 준비됨. 계정 실재·게시 권한을 API로 검증한 결과가 아닙니다.","warnings":["내보내기만으로 게시되지 않습니다. 네이버 편집기에서 직접 게시한 뒤 실제 URL을 기록하세요."]}))
+        } else {
+            crate::publishing_adapters::preflight(&plan).await
+        };
         match checked {
             Ok(value) => {
                 let ready = value["ready"].as_bool().unwrap_or(false);
@@ -557,7 +655,7 @@ pub async fn preflight(config: &AppConfig, input: Value) -> Result<Value, String
         }
     }
     Ok(
-        json!({"publicationId":publication["id"],"revision":publication["revision"],"approvalHash":hash_approval(&approval_publication(&publication),&selected,&video,&thumbnail),"ready":checks.iter().all(|v|v["ready"]==true),"checks":checks,"media":{"video":video,"thumbnail":thumbnail}}),
+        json!({"publicationId":publication["id"],"revision":publication["revision"],"approvalHash":hash_approval(&bound,&selected,&video,&thumbnail),"ready":checks.iter().all(|v|v["ready"]==true),"checks":checks,"media":{"video":video,"thumbnail":thumbnail,"images":images}}),
     )
 }
 pub async fn submit(config: &AppConfig, input: Value) -> Result<Value, String> {
@@ -601,6 +699,9 @@ pub async fn submit(config: &AppConfig, input: Value) -> Result<Value, String> {
         let mut snapshot = merged(&publication, target);
         snapshot["video"] = checked["media"]["video"].clone();
         snapshot["thumbnail"] = checked["media"]["thumbnail"].clone();
+        snapshot["images"] = checked["media"]["images"].clone();
+        snapshot["publicationId"] = publication["id"].clone();
+        snapshot["revision"] = publication["revision"].clone();
         let mode = target["mode"].as_str().unwrap();
         let scheduled = if mode == "scheduled" {
             Some(
@@ -611,7 +712,9 @@ pub async fn submit(config: &AppConfig, input: Value) -> Result<Value, String> {
         } else {
             None
         };
-        let status = if mode == "scheduled" {
+        let status = if mode == "manual_handoff" {
+            "needs_human_publish"
+        } else if mode == "scheduled" {
             "scheduled"
         } else {
             "queued"
@@ -650,10 +753,59 @@ async fn target_job(
         row.get("publication_id"),
     ))
 }
+async fn approved_handoff(
+    config: &AppConfig,
+    input: &Value,
+) -> Result<(Uuid, Uuid, Value), String> {
+    let id = uuid(input["jobId"].as_str().ok_or("인계 작업을 선택하세요.")?)?;
+    let dbs = crate::social::database(config).await?;
+    let row = db(dbs.client.query_opt("SELECT j.* FROM publication_jobs j JOIN publications p ON p.id=j.publication_id AND p.revision=j.revision WHERE j.id=$1 AND j.mode='manual_handoff' AND j.status='needs_human_publish'", &[&id]).await)?.ok_or("현재 버전의 수동 게시 대기 작업이 아닙니다. 다시 승인하세요.")?;
+    let plan: Value = row.get("snapshot");
+    crate::publication_handoff::validate_plan(&plan)?;
+    Ok((id, row.get("publication_id"), plan))
+}
+pub async fn export_handoff(
+    config: &AppConfig,
+    input: Value,
+    parent: PathBuf,
+) -> Result<Value, String> {
+    let _guard = lock_for_update()?;
+    let (_, _, plan) = approved_handoff(config, &input).await?;
+    let mut images = vec![];
+    for meta in plan["images"].as_array().into_iter().flatten() {
+        let path = crate::publication_media::private_path(
+            meta["id"].as_str().ok_or("첨부 이미지 식별자 오류")?,
+        )?;
+        images.push((meta.clone(), path));
+    }
+    tokio::task::spawn_blocking(move || {
+        crate::publication_handoff::write_package(&plan, &images, &parent)
+    })
+    .await
+    .map_err(|_| "수동 게시 패키지 내보내기 실패".to_string())?
+}
+pub async fn confirm_handoff(config: &AppConfig, input: Value) -> Result<Value, String> {
+    let _guard = lock_for_update()?;
+    if input["confirmed"] != true {
+        return Err(
+            "네이버에서 실제 게시를 확인한 뒤 동의하세요. 예약 설정만으로 완료 처리하지 않습니다."
+                .into(),
+        );
+    }
+    let (id, publication, plan) = approved_handoff(config, &input).await?;
+    let url = crate::publication_handoff::post_url(
+        plan["accountId"].as_str().unwrap(),
+        input["url"].as_str().ok_or("실제 게시 URL을 입력하세요.")?,
+    )?;
+    let result = json!({"status":"published","url":url,"verification":"user_confirmed","warnings":["사용자가 외부 네이버 블로그에서 게시를 확인했습니다. API 검증 결과가 아닙니다."]});
+    let dbs = crate::social::database(config).await?;
+    if db(dbs.client.execute("UPDATE publication_jobs j SET status='published',result=$2,retryable=false,error=NULL,updated_at=now() FROM publications p WHERE j.id=$1 AND p.id=j.publication_id AND p.revision=j.revision AND j.status='needs_human_publish' AND j.mode='manual_handoff'", &[&id, &result]).await)? != 1 { return Err("인계 작업이 변경되었습니다. 다시 확인하세요.".into()); }
+    get(config, &publication.to_string()).await
+}
 pub async fn cancel(config: &AppConfig, input: Value) -> Result<Value, String> {
     let (id, _, _, publication) = target_job(config, &input).await?;
     let dbs = crate::social::database(config).await?;
-    if db(dbs.client.execute("UPDATE publication_jobs SET status='cancelled',updated_at=now() WHERE id=$1 AND status IN ('queued','scheduled','needs_confirmation','failed')",&[&id]).await)?==0{return Err("이미 전송 중이거나 완료된 작업은 취소할 수 없습니다.".into());}
+    if db(dbs.client.execute("UPDATE publication_jobs SET status='cancelled',updated_at=now() WHERE id=$1 AND status IN ('queued','scheduled','needs_confirmation','needs_human_publish','failed')",&[&id]).await)?==0{return Err("이미 전송 중이거나 완료된 작업은 취소할 수 없습니다.".into());}
     get(config, &publication.to_string()).await
 }
 pub async fn retry(config: &AppConfig, input: Value) -> Result<Value, String> {
@@ -856,6 +1008,22 @@ async fn execute(
         uncertain: false,
         remote: None,
     };
+    if plan["platform"] == "naver_blog" || plan["mode"] == "manual_handoff" {
+        return Err(local_error(
+            "수동 게시 인계는 자동 실행할 수 없습니다.".into(),
+        ));
+    }
+    if plan["contentKind"] == "text" {
+        return crate::publishing_adapters::publish_with_checkpoint(
+            plan,
+            std::path::Path::new(""),
+            None,
+            None,
+            None,
+            checkpoint(config, id),
+        )
+        .await;
+    }
     let video_id = plan["videoMediaId"]
         .as_str()
         .ok_or_else(|| local_error("승인 영상 식별자가 없습니다.".into()))?;
@@ -937,6 +1105,61 @@ mod tests {
         assert!(normalize(&bad).is_err());
     }
     #[test]
+    fn content_kinds_preserve_video_compatibility_and_reject_incompatible_targets() {
+        let mut input = json!({"contentKind":"text","title":"텍스트 제목","description":"실제 본문","tags":[],"hashtags":[],"targets":[{"id":Uuid::new_v4().to_string(),"platform":"threads","accountId":"fixture","mode":"manual","options":{}}]});
+        assert_eq!(normalize(&input).unwrap()["contentKind"], "text");
+        input["targets"][0]["platform"] = json!("instagram");
+        assert!(
+            normalize(&input).is_err(),
+            "text cannot enter a video-only adapter"
+        );
+        input["contentKind"] = json!("video");
+        assert_eq!(normalize(&input).unwrap()["contentKind"], "video");
+        input.as_object_mut().unwrap().remove("contentKind");
+        assert_eq!(normalize(&input).unwrap()["contentKind"], "video");
+        input["contentKind"] = json!("unknown");
+        assert!(normalize(&input).is_err());
+        input["contentKind"] = json!("text");
+        input["targets"][0]["platform"] = json!("facebook");
+        input["videoMediaId"] = json!(Uuid::new_v4().to_string());
+        assert!(
+            normalize(&input).is_err(),
+            "text never silently ignores attached media"
+        );
+    }
+    #[test]
+    fn articles_and_naver_are_manual_handoffs_and_text_needs_no_video() {
+        let mut input = json!({"contentKind":"article","title":"블로그 제목","description":"긴 본문","imageMediaIds":[],"targets":[{"id":Uuid::new_v4().to_string(),"platform":"naver_blog","accountId":"my_blog","mode":"manual_handoff","options":{}}]});
+        let parsed = normalize(&input).unwrap();
+        assert_eq!(parsed["contentKind"], "article");
+        assert_eq!(
+            merged(&parsed, &parsed["targets"][0])["contentKind"],
+            "article"
+        );
+        input["targets"][0]["mode"] = json!("scheduled");
+        input["targets"][0]["scheduledAt"] = json!("2030-12-31T00:00:00Z");
+        assert!(
+            normalize(&input).is_err(),
+            "Naver is never an executable API job"
+        );
+        input["targets"][0]["mode"] = json!("manual_handoff");
+        input["targets"][0]["scheduledAt"] = Value::Null;
+        input["targets"][0]["platform"] = json!("threads");
+        assert!(normalize(&input).is_err());
+        input["contentKind"] = json!("text");
+        input["targets"][0]["mode"] = json!("manual");
+        let text = normalize(&input).unwrap();
+        assert_eq!(media_for(&text).unwrap(), (Value::Null, None));
+        input["imageMediaIds"] = json!([Uuid::new_v4().to_string()]);
+        assert!(normalize(&input).is_err());
+        input["contentKind"] = json!("article");
+        input["targets"][0]["platform"] = json!("naver_blog");
+        input["targets"][0]["mode"] = json!("manual_handoff");
+        assert!(normalize(&input).is_ok());
+        input["imageMediaIds"] = json!(["../../secret"]);
+        assert!(normalize(&input).is_err());
+    }
+    #[test]
     fn target_selection_rejects_duplicates() {
         let id = Uuid::new_v4().to_string();
         let value = json!({"targets":[{"id":id}]});
@@ -994,6 +1217,97 @@ mod tests {
         changed = p;
         changed["targets"][0]["accountId"] = json!("other");
         assert_ne!(first, hash_approval(&changed, &selected, &v, &None));
+    }
+    #[tokio::test]
+    #[ignore = "Requires isolated PostgreSQL and TORIS_PUBLICATIONS_TEST_STATE_ROOT"]
+    async fn manual_handoff_is_never_claimed_and_completion_is_explicit_user_verification() {
+        let raw = std::env::var("TORIS_PUBLICATIONS_TEST_DB").unwrap();
+        let url = url::Url::parse(&raw).unwrap();
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert!(url.path().starts_with("/toris_publications_test_"));
+        assert!(std::env::var_os("TORIS_PUBLICATIONS_TEST_STATE_ROOT").is_some());
+        let config = AppConfig {
+            database_url: Some(raw),
+            ..AppConfig::default()
+        };
+        let target = Uuid::new_v4().to_string();
+        let input = json!({"contentKind":"article","title":"수동 게시 원고","description":"실제 발송 없음","targets":[{"id":target,"platform":"naver_blog","accountId":"my_blog","mode":"manual_handoff","options":{"confirmHandoff":true}}]});
+        let draft = save(&config, input.clone()).await.unwrap();
+        let mut approval = json!({"publicationId":draft["id"],"revision":draft["revision"],"targetIds":[target],"confirmed":true});
+        let check = preflight(&config, approval.clone()).await.unwrap();
+        assert_eq!(check["ready"], true);
+        assert!(check["media"]["video"].is_null());
+        approval["approvalHash"] = check["approvalHash"].clone();
+        let submitted = submit(&config, approval.clone()).await.unwrap();
+        assert_eq!(submitted["jobs"][0]["status"], "needs_human_publish");
+        assert!(submit(&config, approval).await.is_err());
+        let job = submitted["jobs"][0]["id"].clone();
+        let mut dbs = crate::social::database(&config).await.unwrap();
+        let tx = dbs.client.transaction().await.unwrap();
+        assert!(claim(&tx, false).await.unwrap().is_none());
+        tx.rollback().await.unwrap();
+        let export_dir = tempfile::tempdir().unwrap();
+        let output = export_handoff(
+            &config,
+            json!({"jobId":job}),
+            export_dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        assert!(std::path::Path::new(output["path"].as_str().unwrap())
+            .join("body.txt")
+            .is_file());
+        assert_eq!(
+            get(&config, draft["id"].as_str().unwrap()).await.unwrap()["jobs"][0]["status"],
+            "needs_human_publish"
+        );
+        assert!(confirm_handoff(
+            &config,
+            json!({"jobId":job,"url":"https://blog.naver.com/my_blog/123"})
+        )
+        .await
+        .is_err());
+        assert!(confirm_handoff(
+            &config,
+            json!({"jobId":job,"confirmed":true,"url":"https://blog.naver.com/other/123"})
+        )
+        .await
+        .is_err());
+        let completed = confirm_handoff(
+            &config,
+            json!({"jobId":job,"confirmed":true,"url":"https://blog.naver.com/my_blog/123"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(completed["jobs"][0]["status"], "published");
+        assert_eq!(completed["jobs"][0]["verification"], "user_confirmed");
+        let another = save(&config, input).await.unwrap();
+        let mut approval = json!({"publicationId":another["id"],"revision":another["revision"],"targetIds":[target],"confirmed":true});
+        approval["approvalHash"] =
+            preflight(&config, approval.clone()).await.unwrap()["approvalHash"].clone();
+        let pending = submit(&config, approval).await.unwrap();
+        let old_job = pending["jobs"][0]["id"].clone();
+        let mut edited = pending;
+        edited["description"] = json!("수정된 원고");
+        let edited = save(&config, edited).await.unwrap();
+        assert_eq!(edited["jobs"][0]["status"], "cancelled");
+        assert!(export_handoff(
+            &config,
+            json!({"jobId":old_job}),
+            export_dir.path().to_path_buf()
+        )
+        .await
+        .is_err());
+        dbs.client
+            .execute(
+                "DELETE FROM publications WHERE id IN ($1,$2)",
+                &[
+                    &uuid(draft["id"].as_str().unwrap()).unwrap(),
+                    &uuid(another["id"].as_str().unwrap()).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
     }
     #[tokio::test]
     #[ignore = "Requires TORIS_PUBLICATIONS_TEST_DB pointing to an isolated toris_publications_test_* database"]

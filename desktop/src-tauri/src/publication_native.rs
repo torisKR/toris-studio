@@ -95,6 +95,45 @@ pub async fn publication_reconcile(
     crate::publications::reconcile(&state.config_snapshot().await, input).await
 }
 #[tauri::command]
+pub async fn publication_export_handoff(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<crate::AppState>>,
+    updates: State<'_, Arc<crate::updater::UpdateController>>,
+    input: Value,
+) -> Result<Value, String> {
+    check(&window, &updates)?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("네이버 수동 게시 자료를 저장할 폴더")
+        .pick_folder(move |folder| {
+            let _ = sender.send(folder);
+        });
+    let Some(folder) = receiver
+        .await
+        .map_err(|_| "폴더 선택을 완료하지 못했습니다.")?
+    else {
+        return Ok(json!({"cancelled":true}));
+    };
+    check(&window, &updates)?;
+    let parent = folder
+        .into_path()
+        .map_err(|_| "로컬 저장 폴더를 선택하세요.")?;
+    crate::publications::export_handoff(&state.config_snapshot().await, input, parent).await
+}
+#[tauri::command]
+pub async fn publication_confirm_handoff(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<crate::AppState>>,
+    updates: State<'_, Arc<crate::updater::UpdateController>>,
+    input: Value,
+) -> Result<Value, String> {
+    check(&window, &updates)?;
+    crate::publications::confirm_handoff(&state.config_snapshot().await, input).await
+}
+#[tauri::command]
 pub async fn publication_accounts(
     window: tauri::WebviewWindow,
     platform: Option<String>,

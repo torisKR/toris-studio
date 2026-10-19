@@ -20,6 +20,8 @@ macro_rules! app_command_registry {
             [crate::publication_native] publication_cancel,
             [crate::publication_native] publication_retry,
             [crate::publication_native] publication_reconcile,
+            [crate::publication_native] publication_export_handoff,
+            [crate::publication_native] publication_confirm_handoff,
             [crate::publication_native] publication_accounts,
             [crate::publication_native] publication_begin_login,
             [crate::publication_native] publication_scheduler_status,

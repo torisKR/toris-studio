@@ -373,7 +373,7 @@ fn graph_id(raw: &str) -> bool {
     !raw.is_empty() && raw.len() <= 64 && raw.bytes().all(|b| b.is_ascii_digit())
 }
 fn capabilities(platform: &str) -> Value {
-    json!({"video":true,"title":matches!(platform,"youtube"|"facebook"),"description":true,"tags":platform=="youtube","hashtags":true,"thumbnail":matches!(platform,"youtube"|"instagram"|"facebook"),"thumbnailFrame":matches!(platform,"instagram"|"tiktok"),"draft":platform=="tiktok","direct":true,"directPublicSupported":platform!="tiktok"})
+    json!({"video":true,"text":matches!(platform,"facebook"|"threads"),"title":matches!(platform,"youtube"|"facebook"),"description":true,"tags":platform=="youtube","hashtags":true,"thumbnail":matches!(platform,"youtube"|"instagram"|"facebook"),"thumbnailFrame":matches!(platform,"instagram"|"tiktok"),"draft":platform=="tiktok","direct":true,"directPublicSupported":platform!="tiktok"})
 }
 // Facebook Page access tokens live only in native memory and never enter account JSON.
 struct Account {
@@ -606,6 +606,22 @@ fn validate_plan(plan: &Value) -> Result<(&str, &str), AdapterError> {
         .as_str()
         .filter(|p| PLATFORMS.contains(p))
         .ok_or_else(|| AdapterError::invalid("게시 플랫폼을 선택하세요."))?;
+    match plan.get("contentKind") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(kind)) if kind == "video" => {}
+        Some(Value::String(kind)) if kind == "text" => {
+            if !matches!(platform, "facebook" | "threads") {
+                return Err(AdapterError::invalid(
+                    "이 플랫폼은 텍스트 단독 게시를 지원하지 않습니다.",
+                ));
+            }
+        }
+        _ => {
+            return Err(AdapterError::invalid(
+                "지원하지 않는 게시 콘텐츠 종류입니다.",
+            ))
+        }
+    }
     let id = plan["accountId"]
         .as_str()
         .filter(|id| {
@@ -636,6 +652,27 @@ fn validate_plan(plan: &Value) -> Result<(&str, &str), AdapterError> {
                 })
         }) {
             return Err(AdapterError::invalid("태그와 해시태그 형식을 확인하세요."));
+        }
+    }
+    if plan["contentKind"] == "text" {
+        if ["video", "thumbnail", "videoMediaId", "thumbnailMediaId"]
+            .iter()
+            .any(|key| !plan[key].is_null())
+        {
+            return Err(AdapterError::invalid(
+                "텍스트 게시에는 영상이나 썸네일을 첨부할 수 없습니다.",
+            ));
+        }
+        let text = caption(plan);
+        if text.trim().is_empty() {
+            return Err(AdapterError::invalid("게시할 텍스트 본문을 입력하세요."));
+        }
+        // Keep the application's existing 10,000-byte body budget for Page text,
+        // including the title and hashtags actually sent in the message.
+        if platform == "facebook" && text.len() > 10_000 {
+            return Err(AdapterError::invalid(
+                "Facebook 텍스트 본문과 해시태그는 총 10,000바이트 이하로 입력하세요.",
+            ));
         }
     }
     let mode = posting_mode(plan);
@@ -894,6 +931,25 @@ async fn authenticated_account(
     access: &crate::oauth::PublishingAccess,
 ) -> Result<Account, AdapterError> {
     let (platform, id) = validate_plan(plan)?;
+    if plan["contentKind"] == "text" {
+        let required: &[&str] = if platform == "facebook" {
+            &[
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_posts",
+            ]
+        } else {
+            &["threads_basic", "threads_content_publish"]
+        };
+        if !required
+            .iter()
+            .all(|required| access.scopes.iter().any(|scope| scope == required))
+        {
+            return Err(AdapterError::invalid(
+                "이 계정의 텍스트 게시 권한을 별도로 승인하세요.",
+            ));
+        }
+    }
     let selected = accounts_with(transport, platform, access)
         .await?
         .into_iter()
@@ -959,7 +1015,7 @@ fn field_warnings(plan: &Value) -> Vec<String> {
             "이 플랫폼은 별도 태그 필드를 지원하지 않습니다. 해시태그는 본문에 적용됩니다.".into(),
         );
     }
-    if platform == "threads" {
+    if platform == "threads" && plan["contentKind"] != "text" {
         warnings.push("Threads 영상에는 별도 썸네일을 적용하지 않습니다.".into());
     }
     if platform == "tiktok" && posting_mode(plan) == "draft" {
@@ -981,6 +1037,13 @@ async fn checkpoint(checkpoint: &Checkpoint, remote: &Value) -> Result<(), Adapt
     checkpoint(remote.clone())
         .await
         .map_err(|_| AdapterError::uncertain(Some(remote.clone())))
+}
+async fn approved_media_length(plan: &Value, path: &Path) -> Result<u64, AdapterError> {
+    let (platform, _) = validate_plan(plan)?;
+    if plan["contentKind"] == "text" {
+        return Ok(0);
+    }
+    media_length(path, platform).await
 }
 async fn media_length(path: &Path, platform: &str) -> Result<u64, AdapterError> {
     let meta = tokio::fs::symlink_metadata(path)
@@ -1038,7 +1101,7 @@ pub async fn publish_with_checkpoint(
     checkpoint_fn: Checkpoint,
 ) -> Result<Value, AdapterError> {
     let (platform, _) = validate_plan(&plan)?;
-    let length = media_length(media_path, platform).await?;
+    let length = approved_media_length(&plan, media_path).await?;
     let access = crate::oauth::publishing_access(platform)
         .await
         .map_err(AdapterError::before)?;
@@ -1127,6 +1190,26 @@ async fn publish_with(
             checkpoint(persist, &remote).await?;
             reconcile_with(transport, plan, account, &remote, persist).await
         }
+        "facebook" if plan["contentKind"] == "text" => {
+            let mut remote = json!({"platform":platform,"accountId":id,"contentKind":"text","stage":"commit_started","thumbnailStatus":"not_applicable"});
+            checkpoint(persist, &remote).await?;
+            let created = post(
+                transport,
+                format!("{META}/{id}/feed"),
+                token,
+                Body::Form(vec![
+                    ("message".into(), caption(plan)),
+                    ("published".into(), "true".into()),
+                ]),
+            )
+            .await
+            .map_err(|error| error.with_remote(&remote))?;
+            let post_id = remote_id(&created, "id").map_err(|error| error.with_remote(&remote))?;
+            remote["postId"] = json!(post_id);
+            remote["stage"] = json!("commit_accepted");
+            checkpoint(persist, &remote).await?;
+            reconcile_with(transport, plan, account, &remote, persist).await
+        }
         "facebook" => {
             let init = post(
                 transport,
@@ -1209,23 +1292,35 @@ async fn publish_with(
             ))
         }
         "threads" => {
-            let url = media_url.ok_or_else(|| {
-                AdapterError::before("Threads 영상 전송을 위한 임시 미디어 주소를 준비하세요.")
-            })?;
-            validate_public_url(url)?;
+            let text = plan["contentKind"] == "text";
+            let form = if text {
+                vec![
+                    ("media_type".into(), "TEXT".into()),
+                    ("text".into(), caption(plan)),
+                ]
+            } else {
+                let url = media_url.ok_or_else(|| {
+                    AdapterError::before("Threads 영상 전송을 위한 임시 미디어 주소를 준비하세요.")
+                })?;
+                validate_public_url(url)?;
+                vec![
+                    ("media_type".into(), "VIDEO".into()),
+                    ("video_url".into(), url.into()),
+                    ("text".into(), caption(plan)),
+                ]
+            };
             let init = post(
                 transport,
                 format!("{THREADS}/{id}/threads"),
                 token,
-                Body::Form(vec![
-                    ("media_type".into(), "VIDEO".into()),
-                    ("video_url".into(), url.into()),
-                    ("text".into(), caption(plan)),
-                ]),
+                Body::Form(form),
             )
             .await?;
             let container = remote_id(&init, "id")?;
-            let remote = json!({"platform":platform,"accountId":id,"containerId":container,"stage":"uploaded","thumbnailStatus":"unsupported"});
+            let mut remote = json!({"platform":platform,"accountId":id,"containerId":container,"stage":"uploaded","thumbnailStatus":if text { "not_applicable" } else { "unsupported" }});
+            if text {
+                remote["contentKind"] = json!("text");
+            }
             checkpoint(persist, &remote).await?;
             reconcile_with(transport, plan, account, &remote, persist).await
         }
@@ -1537,13 +1632,26 @@ async fn reconcile_with(
             "게시 결과와 승인한 계정이 일치하지 않습니다.",
         ));
     }
+    let remote_text = remote["contentKind"] == "text";
+    if (plan["contentKind"] == "text") != remote_text
+        || (!remote_text
+            && !matches!(remote.get("contentKind"), None | Some(Value::Null))
+            && remote["contentKind"] != "video")
+    {
+        return Err(
+            AdapterError::invalid("게시 결과와 승인한 콘텐츠 종류가 일치하지 않습니다.")
+                .with_remote(remote),
+        );
+    }
     let thumb = remote["thumbnailStatus"].as_str().unwrap_or("video_frame");
     match platform {
         "instagram" | "threads" => {
             let base = if platform == "instagram" { IG } else { THREADS };
-            let id = remote_id(remote, "containerId")?;
-            if let Some(published) = remote["externalId"].as_str() {
-                return published_meta(transport, plan, token, base, published, remote, thumb)
+            let id = remote_id(remote, "containerId").map_err(|error| error.with_remote(remote))?;
+            if !remote["externalId"].is_null() {
+                let published =
+                    remote_id(remote, "externalId").map_err(|error| error.with_remote(remote))?;
+                return published_meta(transport, plan, token, base, &published, remote, thumb)
                     .await;
             }
             let fields = if platform == "instagram" {
@@ -1560,6 +1668,14 @@ async fn reconcile_with(
                 value["status"].as_str()
             }
             .unwrap_or("");
+            if plan["contentKind"] == "text"
+                && (!matches!(
+                    status,
+                    "ERROR" | "EXPIRED" | "FINISHED" | "IN_PROGRESS" | "PUBLISHED"
+                ) || (value.get("id").is_some() && value["id"] != id))
+            {
+                return Err(AdapterError::uncertain(Some(remote.clone())));
+            }
             if matches!(status, "ERROR" | "EXPIRED") {
                 return Err(
                     AdapterError::invalid("SNS 영상 처리가 실패하거나 만료되었습니다.")
@@ -1596,6 +1712,36 @@ async fn reconcile_with(
             updated["stage"] = json!("published");
             checkpoint(persist, &updated).await?;
             published_meta(transport, plan, token, base, &published_id, &updated, thumb).await
+        }
+        "facebook" if plan["contentKind"] == "text" => {
+            let id = remote_id(remote, "postId").map_err(|error| error.with_remote(remote))?;
+            let value = get(
+                transport,
+                endpoint(META, &id, &[("fields", "id,is_published,permalink_url")]),
+                token,
+            )
+            .await
+            .map_err(|_| AdapterError::uncertain(Some(remote.clone())))?;
+            if value["id"] != id || value["is_published"].as_bool().is_none() {
+                return Err(AdapterError::uncertain(Some(remote.clone())));
+            }
+            let published = value["is_published"] == true;
+            let url = value["permalink_url"]
+                .as_str()
+                .and_then(|url| crate::social::validate_platform_url(platform, url).ok());
+            let mut updated = remote.clone();
+            if published {
+                updated["stage"] = json!("published");
+                checkpoint(persist, &updated).await?;
+            }
+            Ok(result(
+                plan,
+                &id,
+                if published { "published" } else { "processing" },
+                url,
+                &updated,
+                "not_applicable",
+            ))
         }
         "facebook" => {
             let id = remote_id(remote, "videoId")?;
@@ -1750,6 +1896,25 @@ async fn published_meta(
     remote: &Value,
     thumb: &str,
 ) -> Result<Value, AdapterError> {
+    if plan["contentKind"] == "text" {
+        let value = get(
+            transport,
+            endpoint(base, id, &[("fields", "id,media_type,owner,permalink")]),
+            token,
+        )
+        .await
+        .map_err(|_| AdapterError::uncertain(Some(remote.clone())))?;
+        if value["id"] != id
+            || (value.get("owner").is_some() && value["owner"]["id"] != plan["accountId"])
+            || (value.get("media_type").is_some() && value["media_type"] != "TEXT_POST")
+        {
+            return Err(AdapterError::uncertain(Some(remote.clone())));
+        }
+        let url = value["permalink"]
+            .as_str()
+            .and_then(|url| crate::social::validate_platform_url("threads", url).ok());
+        return Ok(result(plan, id, "published", url, remote, "not_applicable"));
+    }
     let url = get(
         transport,
         endpoint(base, id, &[("fields", "permalink")]),

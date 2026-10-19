@@ -9,6 +9,8 @@
 .publication-scheduler > span.paused { color:#e0c49b; }
 .publication-scheduler > span.paused i { background:#d3ab79; }
 .publication-studio .publication-scheduler-note { color:var(--social-muted); font-size:12px; line-height:1.6; margin:14px 0 22px; }
+.publication-batch { margin:0 0 20px; border:1px solid var(--social-line); border-radius:10px; background:var(--social-panel); padding:20px; }
+.publication-batch .social-button { margin-top:14px; }
 .publication-layout { display:grid; grid-template-columns:minmax(320px, .95fr) minmax(340px, 1.05fr); gap:20px; align-items:start; }
 .publication-common,.publication-destinations,.publication-history-item,.publication-approval,.publication-action-confirm { min-width:0; border:1px solid var(--social-line); border-radius:10px; background:var(--social-panel); padding:22px; }
 .publication-common > header,.publication-destinations > header { align-items:start; margin-bottom:18px; }

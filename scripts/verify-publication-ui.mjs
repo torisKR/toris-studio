@@ -38,12 +38,21 @@ try {
     if (command === "publication_save") { saved = { ...args.input, id: "qa-publication", revision: (saved?.revision || 0) + 1, jobs: saved?.jobs || [], createdAt: now, updatedAt: now }; return saved; }
     if (command === "publication_preflight") {
       const targets = saved.targets.filter(target => args.input.targetIds.includes(target.id));
-      const checks = targets.map(target => ({ targetId: target.id, ready: target.platform !== "instagram" || target.options.confirmPublic === true, message: target.platform === "instagram" && target.options.confirmPublic !== true ? "Instagram 공개 게시 동의가 필요합니다." : "실제 게시가 아닌 검증 fixture", details: { warnings: ["QA 필드 적용 안내"] } }));
+      const checks = targets.map(target => ({ targetId: target.id, ready: target.platform === "naver_blog" ? target.options.confirmHandoff === true : target.platform !== "instagram" || target.options.confirmPublic === true, message: target.platform === "instagram" && target.options.confirmPublic !== true ? "Instagram 공개 게시 동의가 필요합니다." : target.platform === "naver_blog" && target.options.confirmHandoff !== true ? "수동 인계 확인이 필요합니다." : "실제 게시가 아닌 검증 fixture", details: { warnings: ["QA 필드 적용 안내"] } }));
       return { publicationId: saved.id, revision: saved.revision, approvalHash: `approved-${saved.revision}`, ready: checks.every(check => check.ready), checks, media: { video: media.find(item => item.id === saved.videoMediaId), thumbnail: media.find(item => item.id === saved.thumbnailMediaId) } };
     }
     if (command === "publication_submit") {
       assert.equal(args.input.confirmed, true); assert.equal(args.input.revision, saved.revision); assert.equal(args.input.approvalHash, `approved-${saved.revision}`); submits++;
-      saved.jobs = saved.targets.map((target, index) => ({ id: `job-${index}`, targetId: target.id, revision: saved.revision, platform: target.platform, accountId: target.accountId, accountTitle: target.accountTitle, status: target.platform === "tiktok" ? "draft_sent" : target.mode === "scheduled" ? "scheduled" : "published", mode: target.mode, scheduledAt: target.scheduledAt, warnings: [], error: null, updatedAt: now, retryable: false, url: target.platform === "youtube" ? "https://www.youtube.com/watch?v=abcdefghijk" : null })); return saved;
+      saved.jobs = saved.targets.map((target, index) => ({ id: `job-${index}`, targetId: target.id, revision: saved.revision, platform: target.platform, accountId: target.accountId, accountTitle: target.accountTitle, status: target.platform === "naver_blog" ? "needs_human_publish" : target.mode === "scheduled" ? "scheduled" : target.platform === "tiktok" ? target.mode === "tiktok_inbox" ? "draft_sent" : "processing" : "published", mode: target.mode, scheduledAt: target.scheduledAt, warnings: [], error: null, updatedAt: now, retryable: false, url: target.platform === "youtube" ? "https://www.youtube.com/watch?v=abcdefghijk" : null })); return saved;
+    }
+    if (command === "publication_export_handoff") return { path: "/explicit-ipc-fixture/not-a-real-export", status: "needs_human_publish", images: 1 };
+    if (command === "publication_confirm_handoff") {
+      assert.equal(args.input.confirmed, true);
+      const job = saved.jobs.find(item => item.id === args.input.jobId);
+      assert.equal(job.status, "needs_human_publish");
+      if (args.input.url !== "https://blog.naver.com/my_blog/12345") throw new Error("대상 블로그의 개별 게시글 URL을 입력하세요.");
+      job.status = "published"; job.verification = "user_confirmed"; job.url = args.input.url;
+      return saved;
     }
     if (command === "publication_retry" || command === "publication_cancel" || command === "publication_reconcile") {
       const job = saved.jobs.find(item => item.id === args.input.jobId); assert.ok(job); assert.equal(args.input.confirmed, true);
@@ -89,6 +98,7 @@ try {
   const instagramConsent = instagram.getByLabel("선택한 계정에 콘텐츠를 공개 게시하는 것을 확인했습니다.", { exact: true });
   assert.equal(await instagramConsent.isChecked(), false);
   assert.equal(await studio.getByLabel("TikTok 공개 범위", { exact: true }).inputValue(), "");
+  await studio.getByText(/미심사 앱은 비공개 계정의 SELF_ONLY/).waitFor({ timeout: 5000 });
   assert.equal(await studio.getByLabel("댓글 허용", { exact: true }).isChecked(), false);
   assert.equal(await studio.getByLabel("Duet 허용 · 계정에서 비활성", { exact: true }).isDisabled(), true);
   await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
@@ -108,13 +118,13 @@ try {
   assert.equal(await studio.getByText("QA 필드 적용 안내", { exact: true }).count(), 3);
   assert.deepEqual(saved.tags, ["AI", "생산성"]); assert.deepEqual(saved.hashtags, ["AI", "생산성"]);
   assert.equal(saved.targets.find(target => target.platform === "tiktok").options.mode, "draft");
-  const approval = studio.getByLabel("영상·문구·권한·대상 계정과 일정을 확인했으며 실제 전송·예약에 동의합니다.", { exact: true });
+  const approval = studio.getByLabel("파일·문구·대상과 처리 방식을 확인했으며 선택한 전송 또는 수동 인계 등록에 동의합니다.", { exact: true });
   assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).isDisabled(), true);
   await approval.check();
   await studio.getByLabel("게시 공통 제목", { exact: true }).fill("수정하면 재승인");
   assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).count(), 0);
   assert.equal(submits, 0);
-  report.checks.push("Five selected destinations only; video/thumbnail import; editable tags; TikTok privacy no default and disabled duet; input edit invalidates persisted approval");
+  report.checks.push("Selected video destinations; video/thumbnail import; editable tags; TikTok privacy no default and disabled duet; input edit invalidates persisted approval");
   await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
   await approval.check();
   await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
@@ -168,6 +178,138 @@ try {
   assert.equal(saved.targets.find(target => target.platform === "youtube").scheduledAt, "2030-12-31T00:30:00.000Z");
   report.checks.push("KST reservation input persists UTC and checkbox labels remain aligned horizontally");
 
+  await studio.getByRole("button", { name: "새 초안", exact: true }).click();
+  await studio.getByLabel("게시 공통 제목", { exact: true }).fill("세 채널 일괄 예약 검증");
+  await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
+  for (const [label, platform] of [["Instagram Reels", "instagram"], ["Facebook Page", "facebook"], ["Threads", "threads"]]) {
+    await studio.getByRole("button", { name: label, exact: true }).click();
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+  }
+  const batch = studio.getByRole("region", { name: "채널 일괄 예약", exact: true });
+  await batch.waitFor({ timeout: 5000 });
+  await batch.getByLabel("일괄 예약 시작 일시 · KST", { exact: true }).fill("2030-12-31T09:30");
+  await batch.getByLabel("채널 사이 간격 · 분", { exact: true }).fill("15");
+  const savesBeforeBatch = calls.filter(item => item.command === "publication_save").length;
+  await batch.getByRole("button", { name: "예약 시간을 초안에 적용", exact: true }).click();
+  for (const [index, label] of ["Instagram Reels", "Facebook Page", "Threads"].entries()) {
+    assert.equal(await studio.getByLabel(`${label} 게시 방식`, { exact: true }).inputValue(), "scheduled");
+    assert.equal(await studio.getByLabel(`${label} 예약 일시`, { exact: true }).inputValue(), ["2030-12-31T09:30", "2030-12-31T09:45", "2030-12-31T10:00"][index]);
+  }
+  assert.equal(calls.filter(item => item.command === "publication_save").length, savesBeforeBatch);
+  assert.equal(calls.filter(item => item.command === "publication_submit").length, 1);
+  assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).count(), 0);
+  await studio.getByRole("button", { name: "초안 저장", exact: true }).click();
+  assert.deepEqual(saved.targets.map(target => target.scheduledAt), ["2030-12-31T00:30:00.000Z", "2030-12-31T00:45:00.000Z", "2030-12-31T01:00:00.000Z"]);
+  for (const consent of await studio.getByLabel("선택한 계정에 콘텐츠를 공개 게시하는 것을 확인했습니다.", { exact: true }).all()) await consent.check();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  await approval.check();
+  assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).isEnabled(), true);
+  await batch.getByLabel("채널 사이 간격 · 분", { exact: true }).fill("0");
+  await batch.getByRole("button", { name: "예약 시간을 초안에 적용", exact: true }).click();
+  assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).count(), 0);
+  assert.equal(await studio.getByLabel("Threads 예약 일시", { exact: true }).inputValue(), "2030-12-31T09:30");
+  assert.equal(calls.filter(item => item.command === "publication_submit").length, 1);
+  report.checks.push("Batch schedule applies three KST slots to drafts only, persists UTC on explicit save, and invalidates earlier preflight/consent without submitting");
+
+  await studio.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await studio.getByRole("button", { name: "새 초안", exact: true }).click();
+  await studio.getByLabel("게시 콘텐츠 종류", { exact: true }).selectOption("text", { timeout: 5000 });
+  assert.equal(await studio.getByRole("button", { name: "MP4 가져오기", exact: true }).count(), 0);
+  assert.equal(await studio.getByRole("button", { name: "Instagram Reels", exact: true }).count(), 0);
+  assert.equal(await studio.getByRole("button", { name: "TikTok", exact: true }).count(), 0);
+  await studio.getByText("TikTok은 영상 콘텐츠에서 선택할 수 있습니다. 이 릴리스는 TikTok 텍스트·사진 게시를 지원하지 않습니다.", { exact: true }).waitFor({ timeout: 5000 });
+  await studio.getByLabel("게시 공통 제목", { exact: true }).fill("텍스트 게시 검증");
+  await studio.getByLabel("게시 공통 설명", { exact: true }).fill("영상 없는 본문");
+  for (const [label, platform] of [["Facebook Page", "facebook"], ["Threads", "threads"]]) {
+    await studio.getByRole("button", { name: label, exact: true }).click();
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+  }
+  for (const consent of await studio.getByLabel("선택한 계정에 콘텐츠를 공개 게시하는 것을 확인했습니다.", { exact: true }).all()) await consent.check();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  assert.equal(saved.contentKind, "text"); assert.equal(saved.videoMediaId, null);
+  report.checks.push("Text content offers Page/Threads without video controls and persists its content kind with no MP4");
+  await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
+  await studio.getByText("요청을 저장했습니다. 종료된 ChatGPT 대화에서 시작·재개한 뒤 응답을 확인하세요.", { exact: true }).waitFor();
+  assert.equal(JSON.parse(aiRequest.context).contentKind, "text");
+  assert.deepEqual(JSON.parse(aiRequest.context).targets, ["facebook", "threads"]);
+  assert.match(calls.filter(item => item.command === "codexify_chat_send").at(-1).args.input.message, /콘텐츠 종류.*선택된 채널/);
+  assert.equal(submits, 1);
+  report.checks.push("ChatGPT draft requests carry the current content kind and selected channels without assuming video or approving publication");
+  await studio.getByRole("button", { name: "새 초안", exact: true }).click();
+  await studio.getByLabel("게시 콘텐츠 종류", { exact: true }).selectOption("article");
+  await studio.getByLabel("게시 공통 제목", { exact: true }).fill("블로그 인계 검증");
+  await studio.getByLabel("게시 공통 설명", { exact: true }).fill("직접 게시할 블로그 원고");
+  await studio.getByRole("button", { name: "네이버 블로그 · 수동 인계", exact: true }).click();
+  await studio.getByLabel("네이버 블로그 ID", { exact: true }).fill("my_blog");
+  const handoffConsent = studio.getByLabel("자동 게시가 아닌 네이버 수동 게시 인계임을 확인했습니다.", { exact: true });
+  assert.equal(await handoffConsent.isChecked(), false);
+  await studio.getByRole("button", { name: "블로그 이미지 가져오기", exact: true }).click();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  await studio.locator(".publication-checks .blocked").filter({ hasText: "수동 인계 확인이 필요합니다." }).waitFor();
+  await handoffConsent.check();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  assert.equal(saved.targets[0].mode, "manual_handoff"); assert.equal(saved.imageMediaIds.length, 1);
+  await approval.check();
+  await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
+  await studio.getByText("수동 게시 필요", { exact: true }).waitFor();
+  await studio.getByRole("button", { name: "인계 자료 내보내기", exact: true }).click();
+  await studio.getByText(/explicit-ipc-fixture\/not-a-real-export/).waitFor();
+  assert.equal(saved.jobs[0].status, "needs_human_publish");
+  await studio.getByRole("button", { name: "수동 게시 완료 기록", exact: true }).click();
+  await studio.getByLabel("직접 확인한 네이버 게시 URL", { exact: true }).fill("https://blog.naver.com/other/12345");
+  await jobConfirm.getByLabel("표시된 콘텐츠와 대상의 현재 결과를 확인했습니다.", { exact: true }).check();
+  await jobConfirm.getByRole("button", { name: "확인하고 실행", exact: true }).click();
+  await studio.getByText("대상 블로그의 개별 게시글 URL을 입력하세요.", { exact: true }).waitFor();
+  assert.equal(saved.jobs[0].status, "needs_human_publish");
+  await studio.getByLabel("직접 확인한 네이버 게시 URL", { exact: true }).fill("https://blog.naver.com/my_blog/12345");
+  await jobConfirm.getByLabel("표시된 콘텐츠와 대상의 현재 결과를 확인했습니다.", { exact: true }).check();
+  await jobConfirm.getByRole("button", { name: "확인하고 실행", exact: true }).click();
+  await studio.getByText("사용자 직접 확인 · API 검증 아님", { exact: true }).waitFor();
+  assert.equal(saved.jobs[0].verification, "user_confirmed");
+  assert.equal(calls.filter(item => item.command === "publication_begin_login" && item.args.platform === "naver_blog").length, 0);
+  report.checks.push("Naver manual consent starts false; image export stays pending; completion requires a matching URL and remains explicitly user-verified, not API-verified (IPC fixtures)");
+
+  const submitsBeforeTikTok = submits;
+  await studio.getByRole("button", { name: "콘텐츠 작성", exact: true }).click();
+  await studio.getByRole("button", { name: "새 초안", exact: true }).click();
+  await studio.getByLabel("게시 공통 제목", { exact: true }).fill("TikTok 승인형 영상 예약");
+  await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
+  for (const [label, platform] of [["YouTube", "youtube"], ["TikTok", "tiktok"]]) {
+    await studio.getByRole("button", { name: label, exact: true }).click();
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+  }
+  assert.deepEqual(await studio.getByLabel("TikTok 공개 범위", { exact: true }).locator("option").evaluateAll(options => options.map(option => option.value)), ["", "SELF_ONLY"]);
+  await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
+  await batch.getByLabel("일괄 예약 시작 일시 · KST", { exact: true }).fill("2030-12-31T09:30");
+  await batch.getByLabel("채널 사이 간격 · 분", { exact: true }).fill("15");
+  await batch.getByRole("button", { name: "예약 시간을 초안에 적용", exact: true }).click();
+  assert.equal(await studio.getByLabel("YouTube 게시 방식", { exact: true }).inputValue(), "scheduled");
+  assert.equal(await studio.getByLabel("TikTok 게시 방식", { exact: true }).inputValue(), "tiktok_inbox");
+  assert.equal(await studio.getByLabel("TikTok 예약 일시", { exact: true }).count(), 0);
+  assert.equal(submits, submitsBeforeTikTok);
+  report.checks.push("TikTok inbox remains a user-finished draft and is excluded from automatic batch scheduling");
+
+  await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("scheduled");
+  await batch.getByRole("button", { name: "예약 시간을 초안에 적용", exact: true }).click();
+  assert.equal(await studio.getByLabel("TikTok 예약 일시", { exact: true }).inputValue(), "2030-12-31T09:45");
+  await studio.getByLabel("TikTok 공개 범위", { exact: true }).selectOption("SELF_ONLY");
+  await studio.getByLabel("TikTok 음악 사용 확인", { exact: false }).check();
+  await studio.getByLabel("표시된 계정·캡션·공개 범위와 TikTok 전송에 동의합니다.", { exact: true }).check();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  const tiktokTarget = saved.targets.find(target => target.platform === "tiktok");
+  assert.equal(tiktokTarget.options.mode, "direct");
+  assert.equal(tiktokTarget.options.privacy, "SELF_ONLY");
+  assert.equal(tiktokTarget.scheduledAt, "2030-12-31T00:45:00.000Z");
+  assert.equal(submits, submitsBeforeTikTok);
+  await approval.check();
+  await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
+  const tiktokJob = saved.jobs.find(job => job.platform === "tiktok");
+  assert.equal(tiktokJob.status, "scheduled");
+  assert.equal(tiktokJob.mode, "scheduled");
+  assert.equal(submits, submitsBeforeTikTok + 1);
+  report.checks.push("TikTok Direct keeps explicitly selected SELF_ONLY privacy and KST-to-UTC slot; only reviewed approval creates a scheduled job (IPC fixture, not an API post)");
+
+  await studio.getByRole("button", { name: "콘텐츠 작성", exact: true }).click();
   await page.screenshot({ path: resolve(out, "publication-compose.png"), fullPage: true });
   await page.setViewportSize({ width: 820, height: 800 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);

@@ -473,7 +473,7 @@ export function App() {
 
   const viewTitle = { publications: "SNS 일괄 게시", overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", video: "영상 제작", coding: "코딩", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
   const viewDescription = {
-    publications: "영상과 썸네일, 문구를 확인하고 선택한 채널에 즉시 또는 승인한 일정으로 게시하세요.",
+    publications: "영상·텍스트·블로그 원고를 준비하고 자동 게시 예약과 네이버 수동 인계를 구분해 관리하세요.",
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
     trends: "실제 출처가 있는 콘텐츠와 키워드에서 다음 아이디어를 찾으세요.",
