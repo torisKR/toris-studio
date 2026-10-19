@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', 'scripts/publication-release-contract.test.mjs', 'scripts/verify-publication-*.mjs', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', '.github/workflows/publication-checks.yml', 'compose.yaml']
   pull_request:
-    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', 'compose.yaml']
+    paths: ['desktop/**', 'skills/toris-video-motion/**', 'db/**', 'infrastructure/oauth-callback/**', 'tests/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'scripts/release*', 'scripts/release-verify/**', 'scripts/prepare-codexify*', 'scripts/publication-release-contract.test.mjs', 'scripts/verify-publication-*.mjs', '.github/workflows/desktop.yml', '.github/workflows/desktop-release.yml', '.github/workflows/release-downloads.yml', '.github/workflows/publication-checks.yml', 'compose.yaml']
 
 permissions:
   contents: read
@@ -45,11 +45,18 @@ jobs:
       - name: Check local API, AI handoff and OAuth callback contracts
         run: |
           pnpm test
+          node --test scripts/publication-release-contract.test.mjs
           node --import tsx --test infrastructure/oauth-callback/callback.test.mjs
       - name: Check pinned runtime packaging contracts without downloads
         run: node --test scripts/prepare-codexify.test.mjs
-  native:
+  publication-safety:
     needs: [security, contracts]
+    uses: ./.github/workflows/publication-checks.yml
+    permissions:
+      contents: read
+
+  native:
+    needs: [security, contracts, publication-safety]
     timeout-minutes: 60
     strategy:
       fail-fast: false

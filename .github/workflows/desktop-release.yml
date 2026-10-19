@@ -43,8 +43,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: node scripts/release-assets.mjs preflight
 
-  native:
+  publication-safety:
     needs: prepare
+    uses: ./.github/workflows/publication-checks.yml
+    permissions:
+      contents: read
+
+  native:
+    needs: [prepare, publication-safety]
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -97,7 +103,7 @@ jobs:
           pnpm desktop:check
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs
+          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/publication-release-contract.test.mjs
       - name: Prepare pinned Codexify and Cloudflare runtimes
         run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles

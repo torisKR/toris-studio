@@ -1,0 +1,61 @@
+name: Publication safety checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TORIS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+    steps:
+      - name: Prepare isolated test paths
+        run: |
+          {
+            printf 'TMPDIR=%s\n' "$RUNNER_TEMP"
+            printf 'TORIS_TEST_SCRATCH=%s/studio-publications\n' "$RUNNER_TEMP"
+            printf 'TORIS_PUBLICATION_UI_ARTIFACTS=%s/studio-publication-ui\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.96.0'
+          components: rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: desktop/src-tauri -> target
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Check isolated PostgreSQL binaries
+        run: |
+          test -x "$TORIS_TEST_PG_BIN/initdb"
+          test -x "$TORIS_TEST_PG_BIN/pg_ctl"
+          "$TORIS_TEST_PG_BIN/postgres" --version
+      - name: Validate adapter contracts and warm the test binary
+        run: |
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
+          cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib publishing_adapters
+      - name: Verify real isolated queue and handoff state
+        run: node scripts/verify-publication-db.mjs
+      - name: Verify publication UI with explicit IPC fixtures
+        run: node scripts/verify-publication-ui.mjs
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: publication-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.TORIS_PUBLICATION_UI_ARTIFACTS }}
+          if-no-files-found: warn
+          retention-days: 7
