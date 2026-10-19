@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { assertCompleteDraft, assertReleaseIdentity, collect, findRelease, hashResponse, PLATFORMS, preflight, publish, quarantine, version } from './release-assets.mjs';
 
@@ -160,3 +161,23 @@ test('publisher refuses public releases and incomplete drafts before registry mu
   assert.throws(() => assertCompleteDraft(draft, 'v0.1.10', source, 417, assetNames), /incomplete/);
   assert.throws(() => assertCompleteDraft({ ...draft, draft: false }, 'v0.1.10', source, 417, assetNames), /already public/);
 })));
+
+test('repository desktop versions agree with the requested release', async () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const config = JSON.parse(await readFile(path.join(root, 'desktop/src-tauri/tauri.conf.json'), 'utf8'));
+  const desktop = JSON.parse(await readFile(path.join(root, 'desktop/package.json'), 'utf8'));
+  const cargo = await readFile(path.join(root, 'desktop/src-tauri/Cargo.toml'), 'utf8');
+  const lock = await readFile(path.join(root, 'desktop/src-tauri/Cargo.lock'), 'utf8');
+  const manifestVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  const lockVersion = lock.match(/\[\[package\]\]\r?\nname = "toris-studio-desktop"\r?\nversion = "([^"]+)"/m)?.[1];
+  const expected = version(process.env.EXPECTED_DESKTOP_VERSION || config.version);
+  for (const actual of [config.version, desktop.version, manifestVersion, lockVersion]) {
+    assert.equal(actual, expected);
+  }
+  assert.equal(config.bundle.createUpdaterArtifacts, true);
+  assert.equal(config.plugins.updater.requireSignedVersion, true);
+  assert.equal(config.plugins.updater.allowDowngrades, false);
+  assert.deepEqual(config.plugins.updater.endpoints, [
+    'https://github.com/torisKR/toris-studio/releases/latest/download/latest.json',
+  ]);
+});
