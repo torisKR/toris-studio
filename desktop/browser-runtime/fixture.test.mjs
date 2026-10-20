@@ -7,6 +7,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { EventEmitter, once } from 'node:events';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.STUDIO_BROWSER_TEST_TARGET || (process.platform === 'darwin' ? `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin` : 'x86_64-pc-windows-msvc');
 const runtime = process.env.STUDIO_BROWSER_TEST_RUNTIME || path.join(root, 'desktop/src-tauri/browser-runtime', target);
@@ -16,12 +17,17 @@ const node = path.join(nativeRuntime, target.includes('windows') ? 'node.exe' : 
 const prepared = await access(node).then(() => true, () => false);
 test('real headed worker preserves profile, blocks auth initial/redirect/popup network and exits owned browser', { skip: !prepared && !process.env.STUDIO_BROWSER_TEST_RUNTIME, timeout: 90000 }, async () => {
     assert.ok(prepared, 'explicit extracted runtime must exist');
-    let authHits = 0, profileVisits = 0, heartbeats = 0;
+    let authHits = 0, profileVisits = 0, heartbeats = 0, heartbeatNotBefore = 0;
+    const heartbeatEvents = new EventEmitter();
     const requests = [];
     const server = http.createServer((req, res) => {
         requests.push(req.url);
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        if (req.url === '/heartbeat') { heartbeats++; res.end('alive'); return; }
+        if (req.url === '/heartbeat') {
+            if (Date.now() >= heartbeatNotBefore) { heartbeats++; heartbeatEvents.emit('heartbeat', heartbeats); }
+            res.end('alive');
+            return;
+        }
         if (req.url === '/safe-before-error') {
             res.end('<script>setInterval(() => fetch("/heartbeat"), 30)</script>safe');
             return;
@@ -103,7 +109,11 @@ test('real headed worker preserves profile, blocks auth initial/redirect/popup n
         assert.equal((await worker.command('open', origin + '/network-error')).ok, true, 'broken link keeps the persistent browser and its previous tabs');
         assert.equal((await worker.command('open', origin + '/safe-after-error')).ok, true, 'same browser remains usable after network failure');
         const previousTabHeartbeats = heartbeats;
-        for (let i = 0; i < 100 && heartbeats <= previousTabHeartbeats; i++) await new Promise(resolve => setTimeout(resolve, 10));
+        // Exercise a fresh heartbeat beyond the old one-second sample window.
+        // Only incoming browser requests after this gate count; a delayed
+        // response or server timer cannot make a closed tab appear alive.
+        heartbeatNotBefore = Date.now() + 1500;
+        await once(heartbeatEvents, 'heartbeat', { signal: AbortSignal.timeout(10000) });
         assert.ok(heartbeats > previousTabHeartbeats, 'the previous safe tab remains alive after the broken link');
         assert.equal(worker.events.filter(e => e.event === 'browser_started').length, 1, 'network failure never replaces the browser process');
         assert.equal(worker.events.find(e => e.event === 'browser_started').pid, pid);

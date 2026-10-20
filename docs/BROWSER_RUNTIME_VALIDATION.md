@@ -63,3 +63,11 @@ node scripts/prepare-browser-installer.mjs x86_64-pc-windows-msvc desktop/src-ta
 사용자 승인 후 `daf7fb4`를 별도 브랜치로 push하고 [데스크톱 CI](https://github.com/torisKR/toris-studio/actions/runs/39433344096)를 실행했습니다. 보안·의존성·API/OAuth·패키징 계약과 격리 PostgreSQL/게시 UI 회귀가 통과했습니다.
 
 첫 Windows 네이티브 실행에서 브라우저 테스트 3개가 실패했습니다. 테스트가 Mac의 확인 불가 종료 상태를 Windows에도 요구한 것이 원인이었습니다. Windows는 작업자 실행 전에 할당한 Job Object에서 자식 프로세스 수가 0인지 확인하므로, 이 경우 idle 복귀와 소유 기록 삭제가 올바릅니다. 테스트의 OS별 기대값을 수정하고, PID를 보고하지 않은 자식 프로세스의 실제 종료·소유 기록 삭제를 검증하는 Windows 회귀를 추가했습니다. 실행 로직과 확인 불가 시 재실행을 차단하는 조건은 변경하지 않았습니다. 수정 후 네이티브 CI 결과는 후속 기록합니다.
+
+`c33a266`의 [두 번째 CI](https://github.com/torisKR/toris-studio/actions/runs/39436196829)에서 ARM과 Windows는 네이티브 회귀·설치 빌드·재추출 headed 브라우저·artifact 업로드를 모두 통과했습니다. Windows에서는 Rust unit 265개(12 ignored)와 PID 미보고 자식 프로세스 정리 회귀가 통과했습니다. ARM의 다운로드한 DMG도 로컬에서 서명과 실제 headed fixture를 다시 통과했습니다.
+
+Intel은 회귀·설치 빌드·서명·버전·라이선스 검사를 통과했지만, 기존 탭 heartbeat를 1초만 polling하는 fixture에서 실패했습니다. fixture에 1.5초 뒤 도착하는 실제 새 heartbeat만 인정하는 조건을 넣어 기존 대기의 실패를 재현하고, 10초 제한의 서버 이벤트 대기로 보완했습니다. 기존 탭·동일 PID·후속 링크·인증 네트워크 차단 검증과 제품 코드는 유지했습니다. CI는 향후 검증 실패 때도 빌드에 성공한 프리뷰 설치 파일과 의존성 캐시를 보존합니다.
+
+이 변경은 로컬 실제 브라우저에서 기존 대기의 실패와 보완 후 5.11초 통과를 확인했고 독립 리뷰를 받았습니다. 이 과정의 일부 로컬 실행에서는 heartbeat 검증 이전의 `startup_failed`도 관찰됐습니다. 서명·소스는 유효했고 이후 고정 작업자의 별도 시작/정상 종료 및 전체 fixture가 통과했지만, 앞선 시작 실패의 원인은 확인하지 못했습니다. 자동 재시도나 건너뛰기를 추가하지 않았습니다.
+
+다운로드한 Windows 네이티브 설치 파일의 macOS 정적 검증에서는 체크아웃 소유 텍스트 10개의 CRLF/LF 차이로 기본 raw 비교가 실패했습니다. 모든 텍스트의 LF 정규화 내용은 현재 소스와 정확히 일치했고, 별도 검사에서 407개 원본 런타임 파일·Codexify/cloudflared 바이너리·원본 아카이브 라이선스 해시가 모두 정확히 일치했습니다. 앱과 런타임 18개 PE의 x64 및 Library-only 정리도 통과했습니다. Windows CI 자체의 raw 검증과 실제 실행은 통과했으며, 로컬 Windows 실행을 했다고 해석하지 않습니다.

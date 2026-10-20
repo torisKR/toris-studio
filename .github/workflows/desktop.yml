@@ -98,6 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target
+          cache-on-failure: true
       - name: Install locked packages
         run: |
           corepack enable
@@ -112,6 +113,7 @@ jobs:
           node --test scripts/release-assets.test.mjs
           cargo test --locked --manifest-path scripts/release-verify/Cargo.toml
       - name: Build unsigned preview installer (no release secrets)
+        id: preview-build
         env:
           APPLE_SIGNING_IDENTITY: '-'
         run: |
@@ -119,6 +121,7 @@ jobs:
       - name: Verify re-extracted installer runtimes and headed browser
         run: node scripts/prepare-browser-installer.mjs '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ !cancelled() && steps.preview-build.outcome == 'success' }}
         with:
           name: preview-${{ matrix.platform }}
           path: |
