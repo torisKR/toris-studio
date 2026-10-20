@@ -60,19 +60,39 @@ try {
       return { publicationId: saved.id, revision: saved.revision, approvalHash: `approved-${saved.revision}`, ready: checks.every(check => check.ready), checks, media: { video: media.find(item => item.id === saved.videoMediaId), thumbnail: media.find(item => item.id === saved.thumbnailMediaId) } };
     }
     if (command === "publication_submit") {
-      assert.equal(args.input.confirmed, true);
-      assert.equal(args.input.revision, saved.revision);
-      assert.equal(args.input.approvalHash, `approved-${saved.revision}`);
-      const selected = saved.targets.filter(target => args.input.targetIds.includes(target.id));
-      saved.jobs = selected.map(target => ({
-        id: `job-${saved.targets.findIndex(item => item.id === target.id)}`,
-        targetId: target.id, revision: saved.revision, platform: target.platform,
-        accountId: target.accountId, accountTitle: target.accountTitle,
-        status: target.platform === "naver_blog" ? "needs_human_publish" : target.mode === "scheduled" ? "scheduled" : target.platform === "tiktok" ? target.mode === "tiktok_inbox" ? "draft_sent" : "processing" : "published",
-        mode: target.mode, scheduledAt: target.scheduledAt,
-        warnings: [], error: null, updatedAt: now, retryable: false,
-        url: target.platform === "youtube" ? "https://www.youtube.com/watch?v=abcdefghijk" : null,
-      }));
+      const input = args.input;
+      assert.equal(input.confirmed, true);
+      assert.equal(input.publicationId, saved.id);
+      assert.equal(input.revision, saved.revision);
+      assert.equal(input.approvalHash, `approved-${saved.revision}`);
+      assert.ok(Array.isArray(input.targetIds) && input.targetIds.length > 0);
+      assert.equal(new Set(input.targetIds).size, input.targetIds.length);
+      const selected = saved.targets.filter(target => input.targetIds.includes(target.id));
+      assert.equal(selected.length, input.targetIds.length);
+      const inspected = calls.filter(call => call.command === "publication_preflight").at(-1)?.args.input;
+      assert.ok(inspected);
+      assert.equal(inspected.publicationId, saved.id);
+      assert.equal(inspected.revision, saved.revision);
+      assert.deepEqual(input.targetIds, inspected.targetIds);
+      const previous = saved.jobs || [];
+      for (const target of selected) {
+        const prior = previous.find(job => job.targetId === target.id && job.revision === saved.revision);
+        assert.ok(!prior || ["cancelled", "needs_confirmation"].includes(prior.status));
+      }
+      const created = selected.map(target => {
+        const prior = previous.find(job => job.targetId === target.id && job.revision === saved.revision);
+        const status = target.platform === "naver_blog" ? "needs_human_publish" : target.mode === "scheduled" ? "scheduled" : target.platform === "tiktok" ? target.mode === "tiktok_inbox" ? "draft_sent" : "processing" : "published";
+        return {
+          id: prior?.id || `job-${saved.id}-${saved.revision}-${target.id}`,
+          targetId: target.id, revision: saved.revision, platform: target.platform,
+          accountId: target.accountId, accountTitle: target.accountTitle,
+          status, mode: target.mode, scheduledAt: target.scheduledAt,
+          warnings: [], error: null, updatedAt: now, retryable: false,
+          url: target.platform === "youtube" && status === "published" ? "https://www.youtube.com/watch?v=abcdefghijk" : null,
+        };
+      });
+      const retained = previous.filter(job => !(job.revision === saved.revision && input.targetIds.includes(job.targetId)));
+      saved = { ...saved, jobs: [...retained, ...created] };
       submits++;
       return saved;
     }
@@ -163,6 +183,7 @@ try {
   assert.equal(await studio.getByText("게시 확인됨", { exact: true }).count(), 2);
   assert.equal(await studio.getByRole("button", { name: "실패 대상 재시도", exact: true }).count(), 0);
   report.checks.push("Explicit reviewed revision submitted; YouTube published and TikTok draft-sent are distinct; successes offer no retry");
+  const firstYouTubeJobId = saved.jobs.find(job => job.platform === "youtube").id;
   saved.jobs[0].status = "failed"; saved.jobs[0].retryable = true; saved.jobs[0].error = "QA 권한 만료";
   await page.getByRole("button", { name: "워크스페이스 새로고침", exact: true }).click();
   await studio.getByRole("button", { name: "실패 대상 재시도", exact: true }).click();
@@ -171,7 +192,7 @@ try {
   await jobConfirm.getByLabel("표시된 콘텐츠와 대상의 현재 결과를 확인했습니다.", { exact: true }).check();
   await jobConfirm.getByRole("button", { name: "확인하고 실행", exact: true }).click();
   const retry = calls.filter(item => item.command === "publication_retry").at(-1);
-  assert.equal(retry.args.input.jobId, "job-0"); assert.equal(saved.jobs[1].status, "draft_sent");
+  assert.equal(retry.args.input.jobId, firstYouTubeJobId); assert.equal(saved.jobs[1].status, "draft_sent");
   report.checks.push("Partial failure retry requires destination review and affects only the failed job");
   saved.jobs[0].status = "uncertain"; saved.jobs[0].retryable = false;
   await page.getByRole("button", { name: "워크스페이스 새로고침", exact: true }).click();
@@ -394,6 +415,27 @@ try {
   const preservedYouTubeJob = structuredClone(saved.jobs[0]);
   const subsetRevision = saved.revision;
   report.checks.push("Subset approval sends only inspected YouTube; selection edits invalidate consent and unchecked blocked channels never create jobs");
+  await studio.getByRole("button", { name: "콘텐츠 작성", exact: true }).click();
+  assert.equal(await chooseYouTube.isDisabled(), true);
+  assert.equal(await chooseYouTube.isChecked(), false);
+  await chooseInstagram.uncheck();
+  await chooseTikTok.check();
+  assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).count(), 0);
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  assert.deepEqual(calls.filter(call => call.command === "publication_preflight").at(-1).args.input.targetIds, [subsetTargets.tiktok]);
+  assert.equal(saved.revision, subsetRevision);
+  assert.equal(await approval.isChecked(), false);
+  await approval.check();
+  await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
+  assert.deepEqual(calls.filter(call => call.command === "publication_submit").at(-1).args.input.targetIds, [subsetTargets.tiktok]);
+  assert.equal(saved.jobs.length, 2);
+  assert.deepEqual(saved.jobs.find(job => job.targetId === subsetTargets.youtube), preservedYouTubeJob);
+  assert.equal(saved.jobs.find(job => job.targetId === subsetTargets.tiktok).status, "draft_sent");
+  assert.equal(saved.jobs.some(job => job.targetId === subsetTargets.instagram), false);
+  assert.equal(submits, subsetSubmitsBefore + 2);
+  assert.equal(new Set(saved.jobs.map(job => job.id)).size, saved.jobs.length);
+  report.checks.push("Second subset approval adds only TikTok inbox while preserving prior YouTube job identity/status and leaving Instagram untouched");
+  await page.screenshot({ path: resolve(out, "publication-partial-approval.png"), fullPage: true });
   await page.getByRole("button", { name: "AI 작업실", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "AI로 작성", exact: true }).count(), 0);
   assert.equal(await page.getByText("직접 작성에 사용할 로컬 AI 제공자", { exact: false }).count(), 0);
