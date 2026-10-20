@@ -138,6 +138,14 @@ jobs:
         env:
           TORIS_MOTION_BUNDLED_BROWSER: '1'
         run: pnpm motion:verify:ui
+      - name: Preserve native motion UI failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: motion-ui-diagnostics-${{ matrix.target }}
+          path: docs/review/motion
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Verify re-extracted media without PATH and headed browser
         run: node scripts/prepare-browser-installer.mjs '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
