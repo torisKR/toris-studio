@@ -57,3 +57,9 @@ node scripts/prepare-browser-installer.mjs x86_64-pc-windows-msvc desktop/src-ta
 ```
 
 최초 로컬 검증에서는 실제 SNS 제공자 로그인·프로덕션 DB 테스트, Intel Mac·Windows 네이티브 실행, 공증·Authenticode·서명된 업데이트 피드와 공개 릴리스를 검증/실행하지 않았습니다. 설치된 앱을 교체하지 않았습니다. 후속 원격 CI 결과는 확인 후 이 문서에 기록합니다.
+
+## 원격 CI 진행 기록
+
+사용자 승인 후 `daf7fb4`를 별도 브랜치로 push하고 [데스크톱 CI](https://github.com/torisKR/toris-studio/actions/runs/39433344096)를 실행했습니다. 보안·의존성·API/OAuth·패키징 계약과 격리 PostgreSQL/게시 UI 회귀가 통과했습니다.
+
+첫 Windows 네이티브 실행에서 브라우저 테스트 3개가 실패했습니다. 테스트가 Mac의 확인 불가 종료 상태를 Windows에도 요구한 것이 원인이었습니다. Windows는 작업자 실행 전에 할당한 Job Object에서 자식 프로세스 수가 0인지 확인하므로, 이 경우 idle 복귀와 소유 기록 삭제가 올바릅니다. 테스트의 OS별 기대값을 수정하고, PID를 보고하지 않은 자식 프로세스의 실제 종료·소유 기록 삭제를 검증하는 Windows 회귀를 추가했습니다. 실행 로직과 확인 불가 시 재실행을 차단하는 조건은 변경하지 않았습니다. 수정 후 네이티브 CI 결과는 후속 기록합니다.

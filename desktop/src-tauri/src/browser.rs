@@ -405,7 +405,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
         assert!(!temp.path().join("browser-runtime-owner.json").exists());
     }
     #[tokio::test]
-    async fn startup_timeout_without_browser_confirmation_blocks_retry() {
+    async fn startup_timeout_requires_recovery_only_when_descendant_exit_is_unconfirmed() {
         let (temp, runtime) = fixture("setInterval(()=>{},1000)");
         let manager = Supervisor::new(
             temp.path().canonicalize().unwrap(),
@@ -423,8 +423,14 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
             )
             .await
             .is_err());
-        assert_eq!(manager.phase(), "recovery_required");
-        assert!(temp.path().join("browser-runtime-owner.json").exists());
+        if cfg!(target_os = "windows") {
+            // The inherited Job Object proves that even unreported children exited.
+            assert_eq!(manager.phase(), "idle");
+            assert!(!temp.path().join("browser-runtime-owner.json").exists());
+        } else {
+            assert_eq!(manager.phase(), "recovery_required");
+            assert!(temp.path().join("browser-runtime-owner.json").exists());
+        }
     }
     #[tokio::test]
     async fn auth_events_are_native_only_deduplicated_and_non_auth_events_rejected() {
@@ -492,12 +498,19 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
         while !temp.path().join("browser-runtime-owner.json").exists() {
             tokio::task::yield_now().await;
         }
-        tokio::time::timeout(Duration::from_secs(2), manager.shutdown())
+        let shutdown = tokio::time::timeout(Duration::from_secs(2), manager.shutdown())
             .await
-            .expect("shutdown waited for startup deadline")
-            .unwrap_err();
+            .expect("shutdown waited for startup deadline");
         assert!(task.await.unwrap().is_err());
-        assert_eq!(manager.phase(), "recovery_required");
+        if cfg!(target_os = "windows") {
+            shutdown.unwrap();
+            assert_eq!(manager.phase(), "idle");
+            assert!(!temp.path().join("browser-runtime-owner.json").exists());
+        } else {
+            shutdown.unwrap_err();
+            assert_eq!(manager.phase(), "recovery_required");
+            assert!(temp.path().join("browser-runtime-owner.json").exists());
+        }
     }
     #[tokio::test]
     async fn recovery_allows_system_links_but_blocks_runtime_launch() {
@@ -545,8 +558,56 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
             let (temp,runtime)=fixture(source);
             let manager=Supervisor::new(temp.path().canonicalize().unwrap(),Budget {launch:Duration::from_secs(1),shutdown:Duration::from_millis(50)});
             assert!(manager.open("https://example.com/".into(),BrowserChoice::Playwright,Some(runtime),Arc::new(|_|panic!("unapproved system URL opened"))).await.is_err());
-            assert_eq!(manager.phase(),"recovery_required");
+            if cfg!(target_os="windows") {
+                assert_eq!(manager.phase(),"idle");
+                assert!(!temp.path().join("browser-runtime-owner.json").exists());
+            } else {
+                assert_eq!(manager.phase(),"recovery_required");
+                assert!(temp.path().join("browser-runtime-owner.json").exists());
+            }
         }
+    }
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_job_confirms_cleanup_of_child_without_browser_pid_notification() {
+        let (temp, runtime) = fixture(
+            r#"import childProcess from 'node:child_process';import fs from 'node:fs';import path from 'node:path';
+const child=childProcess.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+fs.writeFileSync(path.join(process.argv[5],'unreported-child.pid'),String(child.pid));
+setInterval(()=>{},1000);"#,
+        );
+        let manager = Supervisor::new(
+            temp.path().canonicalize().unwrap(),
+            Budget {
+                launch: Duration::from_secs(2),
+                shutdown: Duration::from_secs(1),
+            },
+        );
+        assert!(manager
+            .open(
+                "https://example.com/".into(),
+                BrowserChoice::Playwright,
+                Some(runtime),
+                Arc::new(|_| panic!("unexpected system handoff"))
+            )
+            .await
+            .is_err());
+        // No browser_started event was emitted. Only the native Job Object can
+        // prove this child and the worker are gone, permitting a safe retry.
+        let pid: u32 = std::fs::read_to_string(
+            temp.path()
+                .join("playwright-profile")
+                .join("unreported-child.pid"),
+        )
+        .expect("fixture did not start its child")
+        .parse()
+        .unwrap();
+        assert!(
+            process_absent(pid, false),
+            "unreported child survived Job cleanup"
+        );
+        assert_eq!(manager.phase(), "idle");
+        assert!(!temp.path().join("browser-runtime-owner.json").exists());
     }
     #[cfg(target_os = "macos")]
     #[tokio::test]
