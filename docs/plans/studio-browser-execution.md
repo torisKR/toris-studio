@@ -21,7 +21,7 @@ Rust worker: browser.rs only plus its tests, dependencies as needed coordinated.
 
 - Initial tracked tree clean; campaigns/ and pocket-circuit/ untracked and preserved.
 - User explicitly requests parallel lanes and independent review; delegates authorized.
-- Current main 0.1.24; use dedicated feature branch; no commit/push/release requested.
+- Initial main 0.1.24; use dedicated feature branch. The user subsequently approved feature-branch commit/push and remote CI; no main merge or public release is authorized.
 
 - Actual macOS bundle signing rejected Playwright JavaScript inside Helpers as nested code. Native/data split above is the execution ruling: only Node and the actual Google Chrome for Testing.app are Helpers code, JavaScript/package/license data plus outer Chromium ABOUT/resources/PrivacySandbox data belong in Resources. Chromium executable paths stay unchanged; prepared archives remain complete. Keep the upstream Library intact except unused installer/CLI pruning.
 
@@ -35,3 +35,10 @@ Rust worker: browser.rs only plus its tests, dependencies as needed coordinated.
 - Web: 213 passed, 1 skipped; TypeScript and Next production build passed on raw upstream Node24.16.0. Browser UI fixture passed. Runtime/contracts29 passed.
 - All three preview installers built and re-extracted. Apple Silicon executes actual headed worker successfully; Intel/Windows static checks only. Mac main minOS12/JITabsent and deep strict signatures verified. See ../BROWSER_RUNTIME_VALIDATION.md for paths, sizes, hashes and remaining acceptance gaps.
 - User approved committing/pushing the verified migration files to this feature branch and executing remote CI after local verification. No main merge, public release, installed-app replacement or user-folder cleanup is authorized. Intel/Windows real execution requires matching external runner; CI config alone is not execution proof.
+
+## Final remote evidence
+
+- Code commit `1636d0c35b23c0f7799f1099f82608b5c3a5bbf1`: [CI run 39443965473](https://github.com/torisKR/toris-studio/actions/runs/39443965473) completed successfully. Security, contracts, publication safety and all three native jobs passed.
+- Native Apple Silicon, Intel Mac and Windows runners built installers, re-extracted them, verified pinned runtimes and executed the actual headed browser fixture successfully (16.55s / 23.90s / 7.81s). Intel unit tests: 279 passed, 12 ignored; Windows: 265 passed, 12 ignored. Independent review completed with no remaining blockers in the reviewed changes.
+- Downloaded all three preview installers locally; sizes 244.93 / 261.89 / 192.93 MiB, all below 512 MiB. Both downloaded DMGs passed local static signature/runtime verification. Windows archive-derived bytes, licenses and PE architecture passed independent verification; its native Windows raw-source check passed, while local macOS raw comparison differs only for ten checkout-owned CRLF/LF text files. Full hashes, paths and limitations are in ../BROWSER_RUNTIME_VALIDATION.md.
+- Preview signing remains ad-hoc on Mac and unsigned on Windows. No actual provider-account login, public release, main merge or installed-app replacement occurred. Existing user folders and data remain preserved.
