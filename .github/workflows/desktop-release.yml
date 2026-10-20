@@ -91,12 +91,18 @@ jobs:
           go-version: '1.26.9'
           cache: false
       - name: Install native media build toolchain on Windows
+        id: media-msys
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: MINGW64
           path-type: inherit
           install: mingw-w64-x86_64-gcc make diffutils
+      - name: Select the installed MSYS2 for native media builds
+        if: runner.os == 'Windows'
+        env:
+          TORIS_MSYS2_ROOT: ${{ steps.media-msys.outputs.msys2-location }}
+        run: printf 'TORIS_MSYS2_ROOT=%s\n' "$TORIS_MSYS2_ROOT" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target

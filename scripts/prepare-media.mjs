@@ -7,10 +7,20 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 export const sources=JSON.parse(await readFile(path.join(root,'desktop/src-tauri/resources/media/sources.json'),'utf8'));
 const hash=b=>createHash('sha256').update(b).digest('hex');
 export function mediaOverlay(target){return {resources:{[`media-runtime/${target}/`]:'media-runtime/'}};}
+export function mediaBuildCommand(target,platform=process.platform,environment=process.env){
+ const env={...environment};
+ if(platform==='win32'){
+  Object.assign(env,{MSYSTEM:'MINGW64',CHERE_INVOKING:'1',MSYS2_PATH_TYPE:'inherit'});
+  delete env.MSYS_NO_PATHCONV;delete env.MSYS2_ARG_CONV_EXCL;
+  return {command:path.win32.join(env.TORIS_MSYS2_ROOT||'C:/msys64','usr','bin','bash.exe'),args:['-lc','exec /usr/bin/bash scripts/build-media-runtime.sh "$1"','media-build',target],env};
+ }
+ return {command:'bash',args:[path.join(root,'scripts/build-media-runtime.sh'),target],env};
+}
 export async function prepareMedia(target) {
  const folder=path.join(root,'desktop/src-tauri/media-runtime',target);
  try {await verifyMedia(folder);return;}catch{}
- const result=process.platform==='win32' ? spawnSync('C:/msys64/usr/bin/bash.exe',['-lc','bash scripts/build-media-runtime.sh "$1"','media-build',target],{cwd:root,env:{...process.env,MSYSTEM:'MINGW64',CHERE_INVOKING:'1',MSYS2_PATH_TYPE:'inherit'},stdio:'inherit',shell:false}) : spawnSync('bash',[path.join(root,'scripts/build-media-runtime.sh'),target],{stdio:'inherit',shell:false});
+ const build=mediaBuildCommand(target);
+ const result=spawnSync(build.command,build.args,{cwd:root,env:build.env,stdio:'inherit',shell:false});
  if(result.status!==0) throw new Error('Pinned media runtime build failed.');
  await verifyMedia(folder);
 }
