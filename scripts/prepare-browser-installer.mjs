@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyBrowserStaged, MANIFEST } from './prepare-browser.mjs';
+import { verifyMedia } from './prepare-media.mjs';
 import { verifyStaged } from './prepare-codexify.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fail = message => { throw new Error(message); };
@@ -88,6 +89,8 @@ export async function verifyBrowserInstaller(target, bundleDirectory, { execute 
             stage = path.dirname(runtime);
         }
         await verifyStaged(target, stage);
+        await verifyMedia(path.join(stage,target.includes("darwin")?"Contents/Resources/media-runtime":"media-runtime"));
+        if(execute) await run(path.join(stage,target.includes("darwin")?"Contents/MacOS/toris-studio-desktop":"toris-studio-desktop.exe"),["--motion-smoke"],{env:{...process.env,PATH:""},timeout:180000});
         await verifyBrowserStaged(target, stage);
         if (execute)
             await run(process.execPath, ['--test', path.join(ROOT, 'desktop/browser-runtime/fixture.test.mjs')], { env: { ...process.env, STUDIO_BROWSER_TEST_RUNTIME: runtime, STUDIO_BROWSER_TEST_TARGET: target } });

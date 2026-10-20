@@ -90,6 +90,13 @@ jobs:
         with:
           go-version: '1.26.9'
           cache: false
+      - name: Install native media build toolchain on Windows
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: mingw-w64-x86_64-gcc make diffutils
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target
@@ -133,7 +140,11 @@ jobs:
           else
             node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
           fi
-      - name: Verify re-extracted installer runtimes and headed browser
+      - name: Verify motion editor with real Rust compositor and fixture ChatGPT drafts
+        env:
+          TORIS_MOTION_BUNDLED_BROWSER: '1'
+        run: pnpm motion:verify:ui
+      - name: Verify re-extracted media without PATH and headed browser
         run: node scripts/prepare-browser-installer.mjs '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle'
       - name: Collect only public release assets
         env:

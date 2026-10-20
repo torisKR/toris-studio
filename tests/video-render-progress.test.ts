@@ -89,7 +89,7 @@ test("native video menu and persistent panel render in the desktop app", async (
     const { App } = await tsImport("../desktop/src/App.tsx", { parentURL: import.meta.url, tsconfig: new URL("../desktop/tsconfig.json", import.meta.url).pathname });
     const markup = renderToStaticMarkup(createElement(App));
     assert.match(markup, /영상 제작/);
-    assert.match(markup, /<div hidden=""><section class="desktop-video" aria-label="영상 스튜디오"/);
+    assert.match(markup, /<div hidden=""><nav class="video-mode-tabs" aria-label="영상 제작 모드"/);
     assert.match(markup, /ChatGPT에 영상 초안 요청/);
     const source = readFileSync(new URL("../desktop/src/App.tsx", import.meta.url), "utf8");
     assert.match(source, /id: "video", label: "영상 제작", icon: Clapperboard, group: "제작"/);

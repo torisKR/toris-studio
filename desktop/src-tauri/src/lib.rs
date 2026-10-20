@@ -7,6 +7,9 @@ pub mod codexify_proxy;
 pub mod codexify_runtime;
 pub mod config;
 pub mod credentials;
+pub mod graphics;
+pub mod graphics_export;
+pub mod graphics_render;
 #[cfg(feature = "desktop")]
 mod integration_native;
 pub mod ipc_commands;
@@ -14,8 +17,12 @@ pub mod keyword;
 pub mod legacy_cleanup;
 pub mod mcp_bridge;
 pub mod media;
+pub mod media_runtime;
 pub mod models;
 pub mod motion;
+pub mod motion_drafts;
+#[cfg(feature = "desktop")]
+mod motion_native;
 #[cfg(any(feature = "desktop", test))]
 pub mod native_windows;
 pub mod oauth;
@@ -896,6 +903,17 @@ mod state_tests {
 
 pub fn run() {
     let action = std::env::args().nth(1);
+    if action.as_deref() == Some("--motion-smoke") {
+        let runtime = tokio::runtime::Runtime::new().expect("Rust runtime unavailable");
+        match runtime.block_on(graphics_export::smoke()) {
+            Ok(result) => println!("{result}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if action.as_deref() == Some("--studio-mcp") {
         mcp_bridge::run();
         return;

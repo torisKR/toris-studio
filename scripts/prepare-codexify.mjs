@@ -1,3 +1,4 @@
+import { mediaOverlay, prepareMedia, verifyMedia } from './prepare-media.mjs';
 import { browserOverlay, prepareBrowser, verifyBrowserStaged, verifyInstallerSizes } from './prepare-browser.mjs';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -362,7 +363,8 @@ export function buildInvocation(args, { root = ROOT, host = hostTarget, preview 
   const target = targetArguments.length ? targetArguments[0] : host();
   targetSpec(target);
   const browser = browserOverlay(target);
-  const config = JSON.stringify({ ...RUNTIME_OVERLAY, bundle: { ...RUNTIME_OVERLAY.bundle, ...browser, resources: { ...RUNTIME_OVERLAY.bundle.resources, ...(browser.resources || {}) }, ...(preview ? { createUpdaterArtifacts: false } : {}) } });
+  const media = mediaOverlay(target);
+  const config = JSON.stringify({ ...RUNTIME_OVERLAY, bundle: { ...RUNTIME_OVERLAY.bundle, ...browser, resources: { ...RUNTIME_OVERLAY.bundle.resources, ...(browser.resources || {}), ...media.resources }, ...(preview ? { createUpdaterArtifacts: false } : {}) } });
   return { target, cwd: path.join(root, 'desktop'), args: ['build', '--config', config, ...args] };
 }
 export async function verifyStaged(target, directory, { root = ROOT } = {}) {
@@ -388,10 +390,10 @@ export async function verifyStaged(target, directory, { root = ROOT } = {}) {
     console.log(`Verified bundled ${runtime} ${spec.version}: ${target} executable, architecture, license, and pinned metadata.`);
   }
 }
-async function prepareBundled(target) { for (const runtime of ['codexify', 'cloudflared']) await prepareTarget(target, { runtime }); await prepareBrowser(target); }
+async function prepareBundled(target) { for (const runtime of ['codexify', 'cloudflared']) await prepareTarget(target, { runtime }); await prepareBrowser(target); await prepareMedia(target); }
 async function main([command = 'prepare', ...args]) {
   if (command === 'prepare') { if (args.length > 1) fail('Usage: prepare-codexify.mjs prepare [target]'); await prepareBundled(args[0] || hostTarget()); }
-  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-codexify.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); await verifyBrowserStaged(args[0], path.resolve(args[1])); }
+  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-codexify.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); await verifyBrowserStaged(args[0], path.resolve(args[1])); await verifyMedia(path.join(path.resolve(args[1]), args[0].includes("darwin") ? "Contents/Resources/media-runtime" : "media-runtime")); }
   else if (command === 'build' || command === 'preview') {
     const invocation = buildInvocation(args, { preview: command === 'preview' });
     await prepareBundled(invocation.target);

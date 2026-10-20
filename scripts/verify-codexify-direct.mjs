@@ -43,7 +43,7 @@ try{
  const denied=await fetch(`http://127.0.0.1:${port}/mcp`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(denied.status,401);
  const initialized=await rpc('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'toris-direct-qa',version:'1'}});report.server=initialized.serverInfo;
  const list=await rpc('tools/list');const tools=list.tools.filter(t=>t.name.startsWith('studio__'));
- assert.equal(tools.length,10);const receive=tools.find(t=>t.name==='studio__studio_asset_receive');assert.deepEqual(receive._meta['openai/fileParams'],['file']);assert.deepEqual(receive.inputSchema.properties.file.required,['download_url','file_id']);assert.equal(receive.annotations.destructiveHint,false);assert.equal(receive.annotations.idempotentHint,true);
+ assert.equal(tools.length,12);const receive=tools.find(t=>t.name==='studio__studio_asset_receive');assert.deepEqual(receive._meta['openai/fileParams'],['file']);assert.deepEqual(receive.inputSchema.properties.file.required,['download_url','file_id']);assert.equal(receive.annotations.destructiveHint,false);assert.equal(receive.annotations.idempotentHint,true);
  report.checks.push('Native tool names, file schema, _meta and safety annotations survive real direct aggregation');
  const tool=(name,args={})=>rpc('tools/call',{name:`studio__${name}`,arguments:args}).then(unpack);
  const draftRequestId=randomUUID();await writeFile(join(drafts,'inbox.json'),JSON.stringify([{id:draftRequestId,status:'waiting',topic:'Synthetic QA',createdAt:new Date().toISOString()}]),{mode:0o600});

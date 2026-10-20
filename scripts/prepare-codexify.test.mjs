@@ -73,11 +73,11 @@ test('official preview preserves both runtimes and licenses while disabling only
   const invocation = buildInvocation(['--ci', '--target', 'aarch64-apple-darwin'], { preview: true });
   const overlay = JSON.parse(invocation.args[2]);
   assert.deepEqual(overlay.bundle.externalBin, ['binaries/codexify', 'binaries/cloudflared']);
-  assert.equal(Object.keys(overlay.bundle.resources).length, 17);
+  assert.equal(Object.keys(overlay.bundle.resources).length, 18);
   const binaries = new Set(overlay.bundle.externalBin.map(file => path.basename(file)));
   for (const [source, destination] of Object.entries(overlay.bundle.resources)) {
     const runtime = source.split('/')[1];
-    assert.ok(destination.startsWith(source.startsWith('browser-runtime/') ? 'studio-browser/' : `${runtime}-notices/`));
+    assert.ok(destination.startsWith(source.startsWith('media-runtime/') ? 'media-runtime/' : source.startsWith('browser-runtime/') ? 'studio-browser/' : `${runtime}-notices/`));
     assert.equal(binaries.has(destination.split('/')[0]), false, 'Resource directories must not collide with Unix sidecar executables in Tauri staging');
   }
   assert.equal(overlay.bundle.createUpdaterArtifacts, false);

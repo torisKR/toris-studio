@@ -31,14 +31,14 @@ pub(crate) fn lock_for_video_activity() -> Result<tokio::sync::MutexGuard<'stati
         .map_err(|_| "다른 영상 작업을 마친 뒤 다시 실행하세요.".into())
 }
 
-fn data_dir() -> Result<PathBuf, String> {
+pub(crate) fn data_dir() -> Result<PathBuf, String> {
     crate::config::config_path()
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "프로젝트 저장 경로를 확인하세요.".into())
 }
 
-fn public_dir() -> Result<PathBuf, String> {
+pub(crate) fn public_dir() -> Result<PathBuf, String> {
     Ok(data_dir()?.join("media"))
 }
 
@@ -157,7 +157,7 @@ fn relative_asset(reference: &str) -> Result<&Path, String> {
     Ok(relative)
 }
 
-fn resolve_asset_at(base: &Path, reference: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_asset_at(base: &Path, reference: &str) -> Result<PathBuf, String> {
     let relative = relative_asset(reference)?;
     let base = base
         .canonicalize()
@@ -242,6 +242,7 @@ pub(crate) fn validate_project(project: &Value) -> Result<(), String> {
             enum_field(scene, "mediaType", &["none", "image", "video", "screen"])?;
         }
     }
+    crate::graphics::validate(project)?;
     if total > 7200.0 {
         return Err("프로젝트 전체 길이는 2시간 이하여야 합니다.".into());
     }
@@ -289,6 +290,7 @@ fn save_project_at(path: &Path, mut project: Value) -> Result<Value, String> {
     } else {
         projects.push(project.clone());
     }
+    validate_project(&project)?;
     let bytes = serde_json::to_vec_pretty(&store).map_err(|_| "프로젝트 직렬화 오류")?;
     if bytes.len() as u64 > STORE_LIMIT {
         return Err("프로젝트 저장소가 16MB를 초과했습니다.".into());
@@ -305,6 +307,12 @@ pub fn save_project(input: Value) -> Result<Value, String> {
 }
 
 fn font_path() -> Option<PathBuf> {
+    if let Ok(path) = crate::media_runtime::resource("NotoSansCJKkr-Regular.otf") {
+        return Some(path);
+    }
+    if !cfg!(debug_assertions) {
+        return None;
+    }
     #[cfg(target_os = "macos")]
     let candidates = ["/System/Library/Fonts/AppleSDGothicNeo.ttc"];
     #[cfg(target_os = "windows")]
@@ -321,7 +329,11 @@ fn font_path() -> Option<PathBuf> {
 }
 
 fn load_font() -> Result<Font, String> {
-    let path = font_path().ok_or("OS 글꼴이 없습니다. 한국어 시스템 글꼴을 설치하세요.")?;
+    let path = if cfg!(debug_assertions) {
+        font_path().ok_or("동봉 Noto CJK 또는 개발용 OS 글꼴이 없습니다.")?
+    } else {
+        crate::media_runtime::resource("NotoSansCJKkr-Regular.otf")?
+    };
     Font::from_bytes(
         fs::read(path).map_err(|_| "OS 글꼴을 읽을 수 없습니다.")?,
         FontSettings::default(),
@@ -876,13 +888,13 @@ fn motion_assets(
     Ok(assets)
 }
 
-async fn run_command(
+pub(crate) async fn run_command(
     program: &str,
     arguments: &[String],
     directory: Option<&Path>,
     seconds: u64,
 ) -> Result<Vec<u8>, String> {
-    let mut command = Command::new(tool_path(program));
+    let mut command = Command::new(tool_path(program)?);
     command
         .args(arguments)
         .stdin(Stdio::null())
@@ -950,16 +962,22 @@ fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
 
-fn tool_path(program: &str) -> PathBuf {
+fn tool_path(program: &str) -> Result<PathBuf, String> {
+    if let Ok(path) = crate::media_runtime::resource(program) {
+        return Ok(path);
+    }
+    if !cfg!(debug_assertions) {
+        return crate::media_runtime::resource(program);
+    }
     // Finder launches do not usually inherit Homebrew's PATH.
     #[cfg(target_os = "macos")]
     for base in ["/opt/homebrew/bin", "/usr/local/bin"] {
         let path = Path::new(base).join(program);
         if path.is_file() {
-            return path;
+            return Ok(path);
         }
     }
-    PathBuf::from(program)
+    Ok(PathBuf::from(program))
 }
 
 async fn probe(path: &Path) -> Result<Value, String> {
@@ -1015,7 +1033,7 @@ pub struct RenderProgress {
 
 pub type RenderObserver = Box<dyn Fn(RenderProgress) + Send + Sync>;
 
-fn report_render_progress(
+pub(crate) fn report_render_progress(
     observer: Option<&(dyn Fn(RenderProgress) + Send + Sync)>,
     stage: RenderStage,
     completed_scenes: usize,
@@ -1070,6 +1088,16 @@ async fn render_project_at_with_progress(
     observer: Option<&(dyn Fn(RenderProgress) + Send + Sync)>,
 ) -> Result<Value, String> {
     validate_project(&project)?;
+    if project.get("motionGraphics").is_some() {
+        return crate::graphics_export::render_at(
+            project.clone(),
+            render_dir,
+            &data_dir()?.join("motion-images"),
+            crate::graphics::dimensions(&project).0,
+            observer,
+        )
+        .await;
+    }
     let scenes = project["scenes"].as_array().ok_or("장면 목록 오류")?;
     report_render_progress(observer, RenderStage::Preparing, 0, scenes.len());
     let format = project["format"].as_str().ok_or("영상 비율 오류")?;
@@ -2083,5 +2111,34 @@ mod tests {
         }
         fs::write(destination.join("motion-evidence.json"), serde_json::to_vec_pretty(&json!({"synthetic":true,"userProjectWrites":false,"fps":24,"observations":observations})).unwrap()).unwrap();
         println!("motion_probe_directory={}", destination.display());
+    }
+}
+
+#[cfg(test)]
+mod graphics_persistence_tests {
+    use super::*;
+    #[test]
+    fn graphics_roundtrip_preserves_legacy_and_rejects_invalid_merged_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let legacy = json!({"title":"기존","format":"shorts","template":"reference-briefing","language":"ko","scenes":[{"id":"legacy","headline":"원문","body":"","narration":"","durationSec":5}]});
+        let old = save_project_at(&path, legacy).unwrap();
+        let mut motion = json!({"title":"모션","format":"shorts","template":"reference-briefing","language":"ko","motionGraphics":{"version":1,"description":"원본","tables":[],"images":[]},"scenes":[{"id":"s","headline":"제목","body":"","narration":"","durationSec":9,"graphics":{"version":1,"background":"#101820","elements":[]}}]});
+        motion = save_project_at(&path, motion).unwrap();
+        let reread = read_store_at(&path).unwrap();
+        assert!(reread["projects"].as_array().unwrap().contains(&motion));
+        assert!(reread["projects"].as_array().unwrap().contains(&old));
+        let before = std::fs::read(&path).unwrap();
+        let mut invalid = motion.clone();
+        invalid.as_object_mut().unwrap().remove("motionGraphics");
+        invalid["scenes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("graphics");
+        assert!(
+            save_project_at(&path, invalid).is_err(),
+            "validate the final merged document before persisting"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), before);
     }
 }
