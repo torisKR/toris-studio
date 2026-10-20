@@ -1,3 +1,4 @@
+import { MotionStudio } from "./motion/MotionStudio";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { openRenderPreview } from "./native-windows";
 import {
@@ -108,7 +109,7 @@ function MotionPreview({ scene, format, active, disabled }: { scene: StudioVideo
   </div>;
 }
 
-export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenKeywords, onOpenSettings }: Props) {
+function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenKeywords, onOpenSettings }: Props) {
   const [projects, setProjects] = useState<StudioVideoProject[]>([]);
   const [project, setProject] = useState<StudioVideoProject | null>(null);
   const [baseline, setBaseline] = useState("");
@@ -265,7 +266,7 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     const version = selectionVersion.current;
     setLoading(true); setListError("");
     try {
-      const saved = await invoke<StudioVideoProject[]>("video_list_projects");
+      const saved = (await invoke<StudioVideoProject[]>("video_list_projects")).filter(item => !(item as unknown as {motionGraphics?:unknown}).motionGraphics);
       setProjects((current) => version === selectionVersion.current ? saved : [...current, ...saved.filter((item) => !current.some((existing) => existing.id === item.id))]);
       if (version === selectionVersion.current && !selectedProject.current && !activeResearch.current && saved.length) {
         selectedProject.current = saved[0];
@@ -679,4 +680,11 @@ export function VideoPanel({ active, researchSeed, onResearchSeedHandled, onOpen
     <dialog ref={importDialog} className="social-dialog" aria-labelledby="desktop-video-import-title" onCancel={(event) => { if (busy) event.preventDefault(); else setImportOpen(false); }} onClose={() => setImportOpen(false)}><div className="social-dialog-header"><div><h2 id="desktop-video-import-title">영상 프로젝트 JSON 가져오기</h2><p>프로젝트 한 개를 입력하세요. 새 프로젝트로 저장됩니다.</p></div><button className="social-dismiss" disabled={!!busy} aria-label="JSON 가져오기 닫기" onClick={() => setImportOpen(false)}><X size={20} /></button></div><label htmlFor="desktop-video-import-json">VideoProject JSON</label><textarea id="desktop-video-import-json" rows={14} spellCheck={false} value={importJson} disabled={!!busy} onChange={(event) => setImportJson(event.target.value)} placeholder={'{"title":"내 영상","format":"youtube-landscape",...}'} />{importError && <p className="social-form-error" role="alert">{importError}</p>}<div className="social-dialog-actions"><button className="social-button" disabled={!!busy} onClick={() => setImportOpen(false)}>취소</button><button className="social-button primary" disabled={!!busy || !importJson.trim()} onClick={() => void importProject()}>{busy === "import" ? <LoaderCircle size={16} className="social-spin" /> : <FileJson size={16} />}가져와 저장</button></div></dialog>
     <dialog ref={changesDialog} className="social-dialog small" aria-labelledby="desktop-video-changes-title" onCancel={(event) => { if (busy) event.preventDefault(); else setPending(null); }} onClose={() => setPending(null)}><div className="social-dialog-header"><div><h2 id="desktop-video-changes-title">편집 내용을 저장할까요?</h2><p>현재 영상에 저장하지 않은 변경사항이 있습니다.</p></div></div>{notice?.tone === "error" && <p className="social-form-error" role="alert">{notice.text}</p>}<div className="social-dialog-actions desktop-video-changes-actions"><button className="social-button" disabled={!!busy} onClick={() => setPending(null)}>계속 편집</button><button className="social-button" disabled={!!busy} onClick={() => pending && applyPending(pending)}>변경사항 버리기</button><button className="social-button primary" disabled={!!busy} onClick={() => void saveAndContinue()}>{busy === "save" ? <LoaderCircle size={16} className="social-spin" /> : <Save size={16} />}저장 후 이동</button></div></dialog>
   </section>;
+}
+
+export function VideoPanel(props: Props) {
+ const [mode,setMode]=useState<"legacy"|"graphics">("legacy");
+ const [motionOpened,setMotionOpened]=useState(false);
+ useEffect(()=>{if(props.researchSeed)setMode("legacy");},[props.researchSeed]);
+ return <><nav className="video-mode-tabs" aria-label="영상 제작 모드"><button aria-pressed={mode==="legacy"} onClick={()=>setMode("legacy")}>영상·프리셋</button><button aria-pressed={mode==="graphics"} onClick={()=>{setMotionOpened(true);setMode("graphics");}}>모션 그래픽</button></nav><div hidden={mode!=="legacy"}><LegacyVideoPanel {...props} active={props.active&&mode==="legacy"}/></div><div hidden={mode!=="graphics"}>{motionOpened&&<MotionStudio active={props.active&&mode==="graphics"}/> }</div></>;
 }

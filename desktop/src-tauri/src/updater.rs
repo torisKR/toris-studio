@@ -131,6 +131,11 @@ fn local_main_window(label: &str, url: &Url, development: bool) -> bool {
         && url.password().is_none()
 }
 
+const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+fn download_too_large(downloaded: u64, declared: Option<u64>) -> bool {
+    downloaded > MAX_DOWNLOAD_BYTES || declared.is_some_and(|length| length > MAX_DOWNLOAD_BYTES)
+}
+
 #[cfg(feature = "desktop")]
 mod native {
     use super::*;
@@ -140,8 +145,6 @@ mod native {
     use tauri::{AppHandle, Emitter};
     use tauri_plugin_updater::{Update, UpdaterExt};
     use tokio::sync::watch;
-
-    const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 
     pub struct UpdateController {
         status: Mutex<UpdateStatus>,
@@ -450,9 +453,7 @@ mod native {
                         status.revision = status.revision.saturating_add(1);
                         (status.downloaded_bytes, should_emit.then(|| status.clone()))
                     };
-                    if downloaded > MAX_DOWNLOAD_BYTES
-                        || length.is_some_and(|length| length > MAX_DOWNLOAD_BYTES)
-                    {
+                    if download_too_large(downloaded, length) {
                         oversized.store(true, Ordering::SeqCst);
                         if let Some(sender) = &stop_download {
                             let _ = sender.send(true);
@@ -518,12 +519,17 @@ mod native {
             ) {
                 return Ok(self.phase(app, UpdatePhase::Error, "로컬 설정과 콘텐츠를 보존하지 못해 설치를 중단했습니다. 폴더 권한을 확인하고 다시 시도하세요."));
             }
+            // Stop only our owned browser and prevent new launches while replacing the bundle.
+            if let Err(error) = crate::browser::shutdown().await {
+                return Ok(self.phase(app, UpdatePhase::Error, &error));
+            }
             self.phase(
                 app,
                 UpdatePhase::Installing,
                 "업데이트를 설치하고 앱을 다시 시작합니다. 잠시 기다려 주세요.",
             );
             if update.install(bytes).is_err() {
+                let _ = crate::browser::resume();
                 return Ok(self.phase(app, UpdatePhase::Error, "업데이트를 설치하지 못했습니다. 앱을 다시 열거나 공식 다운로드로 설치하세요. 저장 데이터는 삭제하지 않았습니다."));
             }
             self.phase(
@@ -622,6 +628,17 @@ pub use native::{authorize, shared, UpdateController};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_bundles_fit_the_same_512mib_download_limit_as_release_verification() {
+        assert!(!download_too_large(
+            300 * 1024 * 1024,
+            Some(512 * 1024 * 1024)
+        ));
+        assert!(!download_too_large(512 * 1024 * 1024, None));
+        assert!(download_too_large(512 * 1024 * 1024 + 1, None));
+        assert!(download_too_large(1, Some(512 * 1024 * 1024 + 1)));
+    }
 
     #[test]
     fn update_artifacts_are_pinned_to_the_public_repository() {

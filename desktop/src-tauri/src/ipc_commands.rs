@@ -4,6 +4,16 @@
 macro_rules! app_command_registry {
     ($callback:ident) => {
         $callback! {
+            [crate::motion_native] motion_request_create,
+            [crate::motion_native] motion_request_list,
+            [crate::motion_native] motion_draft_apply,
+            [crate::motion_native] motion_draft_preview,
+            [crate::motion_native] motion_request_cancel,
+            [crate::motion_native] motion_preview,
+            [crate::motion_native] motion_preview_video,
+            [crate::motion_native] motion_import_image,
+            [crate::motion_native] motion_save_video,
+
             [crate::native_windows] set_main_activity,
             [crate::native_windows] native_open_render_preview,
             [crate::integration_native] codexify_connection_get,
@@ -70,6 +80,8 @@ macro_rules! app_command_registry {
             [crate::desktop] get_scheduler_status,
             [crate::desktop] set_scheduler,
             [crate::desktop] open_external,
+            [crate::desktop] browser_runtime_status,
+            [crate::desktop] save_browser_preferences,
             [crate::desktop] copy_text,
             [crate::desktop] start_database,
             [crate::desktop] backup_database,

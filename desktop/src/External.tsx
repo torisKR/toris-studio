@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes } from "react";
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & { url?: string };
 
-/** The Rust command validates the URL and opens the system browser. */
+/** Rust validates the URL and routes it through the saved browser preference. */
 export function External({ url, className = "", children, ...props }: Props) {
   const [error, setError] = useState("");
   return <span className="social-external-wrap">

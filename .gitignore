@@ -1,5 +1,5 @@
 # Dependencies / framework build
-node_modules/
+node_modules
 .next/
 coverage/
 *.tsbuildinfo
@@ -45,3 +45,8 @@ desktop/.env*
 *.dmg
 *.msi
 *.exe
+
+# Verified, generated Studio browser runtimes and download cache
+/desktop/src-tauri/browser-runtime/
+
+/desktop/src-tauri/media-runtime/

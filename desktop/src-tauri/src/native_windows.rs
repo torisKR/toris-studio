@@ -273,6 +273,10 @@ pub async fn native_open_render_preview(
             .parent()
             .ok_or("렌더 폴더 오류")?
             .join("renders"),
+        crate::config::config_path()
+            .parent()
+            .ok_or("미리보기 경로 오류")?
+            .join("motion-previews"),
     ];
     let file = open_render(Path::new(&path), &roots)?;
     let info = PreviewInfo {

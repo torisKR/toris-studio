@@ -107,14 +107,14 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
     setForm(blankClient(status.platform, status));
     setSetupOpen((current) => !current);
   }
-  async function startLogin(browser: "system" | "aside" = "system") {
+  async function startLogin() {
     setInputError("");
     if (!status.clientConfigured) {
       setSetupOpen(true);
       setInputError(`${info.label} 로그인을 시작하려면 아래 OAuth 앱 설정을 먼저 저장하세요.${status.platform === "youtube" ? " 수집용 API 키는 계정 로그인에 사용할 수 없습니다." : status.platform === "naver_blog" ? " 네이버 검색 API 설정과 계정 로그인 앱 설정은 별개입니다." : ""}`);
       return;
     }
-    if (await onAction(status.platform, "login", { browser })) setCallbackUrl("");
+    if (await onAction(status.platform, "login")) setCallbackUrl("");
   }
   async function openSetupGuide() {
     const url = setupGuides[status.platform];
@@ -195,7 +195,6 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
 
     <div className="desktop-oauth-actions">
       <button type="button" className="social-button primary compact" disabled={disabled} onClick={() => void startLogin()}>{currentBusy === "login" ? <LoaderCircle size={15} className="social-spin" /> : <LogIn size={15} />}{!status.clientConfigured ? "로그인 설정 시작" : status.pending ? "로그인 다시 시작" : status.connected || status.needsReconnect ? "다시 로그인" : "브라우저에서 로그인"}<ArrowUpRight size={13} aria-hidden="true" /></button>
-      <button type="button" className="social-button compact" disabled={disabled} onClick={() => void startLogin("aside")}><ArrowUpRight size={14} aria-hidden="true" />Aside로 로그인</button>
       <button type="button" className="social-button compact" disabled={disabled || !status.refreshable || status.needsReconnect} onClick={() => void onAction(status.platform, "refresh")}>{currentBusy === "refresh" ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}연결 갱신</button>
       {(status.connected || status.needsReconnect || status.pending || status.expiresAt) && <button type="button" className="social-button subtle compact desktop-oauth-disconnect" disabled={disabled} onClick={() => void onAction(status.platform, "disconnect")}>{currentBusy === "disconnect" ? <LoaderCircle size={14} className="social-spin" /> : <Unplug size={14} />}저장된 연결 해제</button>}
     </div>
@@ -260,9 +259,8 @@ export function OAuthPanel({ active }: { active: boolean }) {
     try {
       if (kind === "login") {
         // Rust opens the validated official login URL. Authorization URLs and tokens are not kept in UI state.
-        const browser = input?.browser === "aside" ? "aside" : "system";
-        await invoke("oauth_begin_login", { platform, browser });
-        setNotice({ platform, tone: "info", text: `${browser === "aside" ? "Aside" : "기본 브라우저"}에서 로그인을 완료하세요. 연결 상태는 자동으로 확인합니다.` });
+        await invoke("oauth_begin_login", { platform });
+        setNotice({ platform, tone: "info", text: "시스템 기본 브라우저에서 로그인을 완료하세요. 연결 상태는 자동으로 확인합니다." });
       } else {
         const command = { save: "oauth_save_client", complete: "oauth_complete_login", refresh: "oauth_refresh_session", disconnect: "oauth_disconnect" }[kind];
         setStatus(await invoke<OAuthStatus>(command, { platform, ...(input ? { input } : {}) }));

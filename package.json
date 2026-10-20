@@ -1,6 +1,6 @@
 {
   "name": "toris-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -56,7 +56,13 @@
     "desktop:prepare": "node scripts/prepare-codexify.mjs prepare",
     "desktop:check": "tsc --project desktop/tsconfig.json --noEmit && cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features",
     "desktop:ui": "vite build --config desktop/vite.config.ts",
-    "desktop:smoke": "cargo run --manifest-path desktop/src-tauri/Cargo.toml -- --self-check"
+    "desktop:smoke": "cargo run --manifest-path desktop/src-tauri/Cargo.toml -- --self-check",
+    "browser:test": "node --test desktop/browser-runtime/*.test.mjs scripts/prepare-browser.test.mjs",
+    "browser:verify:ui": "node scripts/verify-browser-ui.mjs",
+    "motion:test": "node --import tsx --test tests/motion-editor.test.ts && cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test graphics_contract --test graphics_render_contract --test motion_inbox_contract",
+    "motion:verify:ui": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --example motion_qa_bridge && node scripts/verify-motion-ui.mjs",
+    "motion:verify:media": "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test graphics_media_contract -- --ignored",
+    "motion:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop --example motion_qa_bridge && node scripts/verify-motion-mcp.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "2.0.1",

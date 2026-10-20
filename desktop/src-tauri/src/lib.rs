@@ -1,11 +1,15 @@
 pub mod ai;
 pub mod assets;
+pub mod browser;
 pub mod chatgpt_drafts;
 pub mod codexify_connection;
 pub mod codexify_proxy;
 pub mod codexify_runtime;
 pub mod config;
 pub mod credentials;
+pub mod graphics;
+pub mod graphics_export;
+pub mod graphics_render;
 #[cfg(feature = "desktop")]
 mod integration_native;
 pub mod ipc_commands;
@@ -13,8 +17,12 @@ pub mod keyword;
 pub mod legacy_cleanup;
 pub mod mcp_bridge;
 pub mod media;
+pub mod media_runtime;
 pub mod models;
 pub mod motion;
+pub mod motion_drafts;
+#[cfg(feature = "desktop")]
+mod motion_native;
 #[cfg(any(feature = "desktop", test))]
 pub mod native_windows;
 pub mod oauth;
@@ -86,7 +94,10 @@ fn merge_bootstrapped_database(
 #[cfg(feature = "desktop")]
 mod desktop {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::{Manager, State};
+    static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    static EXIT_READY: AtomicBool = AtomicBool::new(false);
     #[tauri::command]
     pub fn get_update_status(
         window: tauri::WebviewWindow,
@@ -241,21 +252,39 @@ mod desktop {
         Ok(status.clone())
     }
     #[tauri::command]
-    pub fn open_external(
+    pub async fn open_external(
+        window: tauri::WebviewWindow,
         app: tauri::AppHandle,
+        updates: State<'_, Arc<updater::UpdateController>>,
         url: String,
-        browser: Option<oauth::LoginBrowser>,
+        browser: Option<browser::BrowserChoice>,
     ) -> Result<(), String> {
+        updater::authorize(&window)?;
+        if updates.installing() {
+            return Err("업데이트 설치가 끝난 뒤 링크를 여세요.".into());
+        }
         use tauri_plugin_opener::OpenerExt;
-        let url = oauth::canonical_browser_url(&url)?;
-        let program = browser.unwrap_or(oauth::LoginBrowser::System).program();
-        app.opener().open_url(url, program).map_err(|_| {
-            if program.is_some() {
-                "Aside에서 링크를 열 수 없습니다. Aside 앱 설치 상태를 확인하세요.".into()
-            } else {
-                "기본 브라우저에서 링크를 열 수 없습니다.".into()
-            }
+        browser::open(url, browser, move |url| {
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|_| "시스템 기본 브라우저를 열지 못했습니다.".into())
         })
+        .await
+    }
+    #[tauri::command]
+    pub fn browser_runtime_status(
+        window: tauri::WebviewWindow,
+    ) -> Result<browser::BrowserStatus, String> {
+        updater::authorize(&window)?;
+        browser::status()
+    }
+    #[tauri::command]
+    pub fn save_browser_preferences(
+        window: tauri::WebviewWindow,
+        input: browser::PreferencesInput,
+    ) -> Result<browser::BrowserStatus, String> {
+        updater::authorize(&window)?;
+        browser::save_preferences(input)
     }
     #[tauri::command]
     pub fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
@@ -550,23 +579,17 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn oauth_begin_login(
+        window: tauri::WebviewWindow,
         app: tauri::AppHandle,
         platform: String,
-        browser: Option<oauth::LoginBrowser>,
     ) -> Result<Value, String> {
-        let result = oauth::begin_login(platform).await?;
-        let url = result
-            .get("authorizationUrl")
-            .and_then(Value::as_str)
-            .ok_or("로그인 주소를 준비하지 못했습니다.")?;
-        open_external(app, url.to_owned(), browser)?;
-        // Authorization URLs contain state/PKCE data; they need not enter renderer state.
-        let mut public = result;
-        public
-            .as_object_mut()
-            .ok_or("로그인 응답 오류")?
-            .remove("authorizationUrl");
-        Ok(public)
+        updater::authorize(&window)?;
+        use tauri_plugin_opener::OpenerExt;
+        oauth::finish_system_login(oauth::begin_login(platform).await?, |url| {
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|_| "시스템 기본 브라우저를 열지 못했습니다.".into())
+        })
     }
     #[tauri::command]
     pub async fn oauth_complete_login(platform: String, input: Value) -> Result<Value, String> {
@@ -748,6 +771,9 @@ mod desktop {
                     {
                         return;
                     }
+                    if EXIT_READY.load(Ordering::SeqCst) {
+                        return;
+                    }
                     if app.state::<Arc<updater::UpdateController>>().installing() {
                         // Never interrupt replacement of the signed application bundle.
                         api.prevent_exit();
@@ -763,6 +789,28 @@ mod desktop {
                             "publication-runtime-error",
                             "게시 처리 중입니다. 전송 결과가 확인된 뒤 종료하세요.",
                         );
+                    } else {
+                        api.prevent_exit();
+                        if !EXIT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+                            let handle = app.clone();
+                            let exit_code = code.unwrap_or(0);
+                            tauri::async_runtime::spawn(async move {
+                                match crate::browser::shutdown().await {
+                                    Ok(()) => {
+                                        EXIT_READY.store(true, Ordering::SeqCst);
+                                        handle.exit(exit_code);
+                                    }
+                                    Err(error) => {
+                                        crate::publications::cancel_shutdown();
+                                        EXIT_IN_PROGRESS.store(false, Ordering::SeqCst);
+                                        crate::tray::show(&handle);
+                                        use tauri::Emitter;
+                                        let _ =
+                                            handle.emit_to("main", "browser-runtime-error", error);
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
                 #[cfg(target_os = "macos")]
@@ -855,6 +903,17 @@ mod state_tests {
 
 pub fn run() {
     let action = std::env::args().nth(1);
+    if action.as_deref() == Some("--motion-smoke") {
+        let runtime = tokio::runtime::Runtime::new().expect("Rust runtime unavailable");
+        match runtime.block_on(graphics_export::smoke()) {
+            Ok(result) => println!("{result}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if action.as_deref() == Some("--studio-mcp") {
         mcp_bridge::run();
         return;

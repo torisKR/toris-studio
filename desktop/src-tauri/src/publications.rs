@@ -73,6 +73,11 @@ pub fn begin_shutdown() -> bool {
     SHUTTING_DOWN.store(true, Ordering::SeqCst);
     true
 }
+/// Roll back an exit request whose browser shutdown could not be confirmed.
+/// No publication can have started while the shutdown latch was held.
+pub fn cancel_shutdown() {
+    SHUTTING_DOWN.store(false, Ordering::SeqCst);
+}
 struct Active;
 impl Active {
     fn new() -> Self {

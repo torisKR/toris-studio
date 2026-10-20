@@ -1,0 +1,16 @@
+Toris Studio dedicated browser runtime
+
+Node.js 24.16.0: https://nodejs.org/ (MIT and third-party licenses).
+The exact upstream Node LICENSE is distributed as NODE-LICENSE.
+Playwright Core 1.63.0: https://github.com/microsoft/playwright (Apache-2.0).
+The exact upstream LICENSE and NOTICE are distributed as PLAYWRIGHT-LICENSE
+and PLAYWRIGHT-NOTICE. Only the Library package is included, without the
+Playwright test runner, npm, pnpm, Firefox, WebKit, or headless shell.
+Chrome for Testing 153.0.8010.12 (Playwright revision 1243):
+https://developer.chrome.com/blog/chrome-for-testing/
+Google Chrome terms are available inside the bundled browser at chrome://terms.
+Chromium and third-party open-source credits are available at chrome://credits.
+Upstream ABOUT and bundled third-party licenses remain in the browser tree.
+
+The dedicated Studio profile is isolated from personal browser profiles.
+No Aside or personal Chrome cookies are imported.

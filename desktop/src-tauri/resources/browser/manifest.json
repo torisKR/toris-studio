@@ -1,0 +1,85 @@
+{
+  "nodeVersion": "24.16.0",
+  "playwrightVersion": "1.63.0",
+  "chromiumRevision": "1243",
+  "chromiumVersion": "153.0.8010.12",
+  "sources": {
+    "nodeChecksums": "https://nodejs.org/dist/v24.16.0/SHASUMS256.txt",
+    "playwrightMetadata": "https://registry.npmjs.org/playwright-core/1.63.0",
+    "chromiumMetadata": "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+  },
+  "playwright": {
+    "archive": "playwright-core-1.63.0.tgz",
+    "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0.tgz",
+    "sha256": "208593d4e1bcd8f8fe5f869cad1cc332dc7f1d70dc1d58c102dc3ac36e30f26c",
+    "bytes": 3123044,
+    "license": "Apache-2.0; LICENSE and NOTICE shipped",
+    "licenseSha256": "45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+    "noticeSha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d"
+  },
+  "targets": {
+    "aarch64-apple-darwin": {
+      "architecture": "arm64",
+      "platform": "mac-arm64",
+      "node": {
+        "archive": "node-v24.16.0-darwin-arm64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-darwin-arm64.tar.gz",
+        "sha256": "39189dab4eeb15706c424af0ac08a3044c9e48f7db12a7d77f6b7aafc7dd5df6",
+        "bytes": 51873536,
+        "license": "MIT and bundled dependencies; upstream LICENSE shipped"
+      },
+      "browser": {
+        "archive": "chrome-mac-arm64.zip",
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.12/mac-arm64/chrome-mac-arm64.zip",
+        "sha256": "930e2a2c15addbaca1fe9b07bfa520667bced556d7988707186819cb4279ef3b",
+        "bytes": 190970181,
+        "license": "Google Chrome for Testing terms (chrome://terms), Chromium and third-party credits (chrome://credits); upstream ABOUT and Widevine LICENSE shipped where present"
+      },
+      "browserExecutable": "chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "nodeLicenseSha256": "4573185d56580da2b890ba34a85a409257640f1c5632eade4300137266194d18",
+      "browserAboutSha256": "34d078ce3003087a8374e7c6156fda374769b8047d6ddaf419d66414aa48edfb"
+    },
+    "x86_64-apple-darwin": {
+      "architecture": "x86_64",
+      "platform": "mac-x64",
+      "node": {
+        "archive": "node-v24.16.0-darwin-x64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-darwin-x64.tar.gz",
+        "sha256": "298b4c7b3cb80765c8703e42b90324a4ece3b6634947b89e769c3c980ab55185",
+        "bytes": 53063476,
+        "license": "MIT and bundled dependencies; upstream LICENSE shipped"
+      },
+      "browser": {
+        "archive": "chrome-mac-x64.zip",
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.12/mac-x64/chrome-mac-x64.zip",
+        "sha256": "4e12e2b8a297a2eb79c16258e46961c73f8aa2fa6be6b1d3cdbb553fb5d4ef1c",
+        "bytes": 201663099,
+        "license": "Google Chrome for Testing terms (chrome://terms), Chromium and third-party credits (chrome://credits); upstream ABOUT and Widevine LICENSE shipped where present"
+      },
+      "browserExecutable": "chromium/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+      "nodeLicenseSha256": "4573185d56580da2b890ba34a85a409257640f1c5632eade4300137266194d18",
+      "browserAboutSha256": "34d078ce3003087a8374e7c6156fda374769b8047d6ddaf419d66414aa48edfb"
+    },
+    "x86_64-pc-windows-msvc": {
+      "architecture": "x86_64",
+      "platform": "win64",
+      "node": {
+        "archive": "node-v24.16.0-win-x64.zip",
+        "url": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-win-x64.zip",
+        "sha256": "edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111cd56",
+        "bytes": 36946639,
+        "license": "MIT and bundled dependencies; upstream LICENSE shipped"
+      },
+      "browser": {
+        "archive": "chrome-win64.zip",
+        "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.12/win64/chrome-win64.zip",
+        "sha256": "415968b02065d4a9e2c10b85f0ae9f489b8fba500e94d9d0a7b7c4852a7234c1",
+        "bytes": 205123748,
+        "license": "Google Chrome for Testing terms (chrome://terms), Chromium and third-party credits (chrome://credits); upstream ABOUT and Widevine LICENSE shipped where present"
+      },
+      "browserExecutable": "chromium/chrome-win64/chrome.exe",
+      "nodeLicenseSha256": "8efdacdc1cfa3460aeb7fe98e3c54337b971d5da70e6eee292b73b981acb220c",
+      "browserAboutSha256": "122b32f3ee3f1e8d65c774f5257fc6cc2127b666148ced0ce2efa3ea57e1d93c"
+    }
+  }
+}

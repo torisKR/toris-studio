@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { SettingsPanel } from "./SettingsPanel";
 import { IntegrationPanel } from "./IntegrationPanel";
 import { CodingPanel } from "./CodingPanel";
@@ -295,6 +296,15 @@ export function App() {
     void loadDashboard(); void checkAi();
     return () => { alive.current = false; lifecycle.current += 1; dashboardRequest.current += 1; aiRequest.current += 1; };
   }, [loadDashboard, checkAi]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen("browser-runtime-error", () => {
+      if (active) setNotice({ tone: "error", text: "브라우저 종료를 확인하지 못했습니다. 연결 설정에서 브라우저 상태를 확인하세요. 전용 브라우저 재실행이 차단됩니다." });
+    }, { target: { kind: "WebviewWindow", label: "main" } }).then(stop => { if (active) unlisten = stop; else stop(); }).catch(() => {});
+    return () => { active = false; unlisten?.(); };
+  }, []);
 
   const nativeActivity = saving || refreshingTrends || aiBusy || loading || aiChecking;
   const nativeActivityLabel = saving ? "로컬 DB에 저장 중" : refreshingTrends ? "콘텐츠 수집 중" : aiBusy ? "ChatGPT 요청 처리 중" : loading ? "워크스페이스 불러오는 중" : aiChecking ? "ChatGPT 연결 확인 중" : "";

@@ -1,3 +1,4 @@
+import type { Graphics, MotionSources } from "./graphics";
 export type VideoFormat = "youtube-landscape" | "vertical" | "shorts";
 export type EditingPresetId = "project-explainer" | "project-explainer-still";
 
@@ -7,6 +8,7 @@ export type SceneRole = "hook" | "point" | "proof" | "reaction" | "cost" | "acti
 export type SceneLayout = "hero" | "split" | "media-focus" | "reaction-grid" | "action-card" | "social-hook" | "social-point" | "social-cta";
 
 export type VideoScene = {
+  graphics?: Graphics;
   id: string;
   eyebrow?: string;
   headline: string;
@@ -31,6 +33,7 @@ export type VideoScene = {
 };
 
 export type VideoProject = {
+  motionGraphics?: MotionSources;
   id: string;
   title: string;
   subtitle?: string;

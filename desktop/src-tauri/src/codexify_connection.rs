@@ -14,13 +14,15 @@ use url::Url;
 const MAX_PROFILE: u64 = 16_384;
 const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const OWNER_META: &str = "io.github.devnoname120/codexify/markdown-chat";
-const STUDIO_TOOLS: [&str; 10] = [
+const STUDIO_TOOLS: [&str; 12] = [
     "studio_connection_check",
     "studio_asset_presets",
     "studio_asset_list",
     "studio_asset_request",
     "studio_asset_receive",
     "studio_publication_draft_receive",
+    "studio_motion_request_get",
+    "studio_motion_draft_receive",
     "studio_asset_resize",
     "studio_asset_create_3d",
     "studio_asset_review",

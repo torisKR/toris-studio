@@ -49,22 +49,23 @@ fn has_upload_scope(scopes: &[String]) -> bool {
     })
 }
 
-/// The renderer can choose a known browser, never an executable or arguments.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum LoginBrowser {
-    System,
-    Aside,
-}
-
-impl LoginBrowser {
-    pub fn program(self) -> Option<&'static str> {
-        match self {
-            Self::System => None,
-            Self::Aside if cfg!(target_os = "windows") => Some("Aside.exe"),
-            Self::Aside => Some("Aside"),
-        }
+/// Complete a native OAuth launch without exposing state or PKCE to the renderer.
+/// The caller supplies only the system opener; user browser preferences never apply.
+pub fn finish_system_login(
+    mut result: Value,
+    open_system: impl FnOnce(String) -> Result<(), String>,
+) -> Result<Value, String> {
+    let url = result
+        .as_object_mut()
+        .and_then(|object| object.remove("authorizationUrl"))
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or("로그인 주소를 준비하지 못했습니다.")?;
+    let url = canonical_browser_url(&url)?;
+    if !url.starts_with("https://") {
+        return Err("공식 HTTPS 로그인 주소를 확인하세요.".into());
     }
+    open_system(url).map_err(|_| "시스템 기본 브라우저를 열지 못했습니다.".to_owned())?;
+    Ok(result)
 }
 
 pub fn canonical_browser_url(raw: &str) -> Result<String, String> {
@@ -1771,25 +1772,44 @@ mod live_tests;
 mod tests {
     use super::*;
     #[test]
-    fn browser_choice_rejects_executables_and_arguments() {
-        assert_eq!(
-            serde_json::from_str::<LoginBrowser>("\"system\"")
-                .unwrap()
-                .program(),
-            None
-        );
-        assert!(serde_json::from_str::<LoginBrowser>("\"aside\"")
-            .unwrap()
-            .program()
-            .is_some());
-        for input in [
-            "\"/tmp/aside\"",
-            "\"Aside --profile other\"",
-            "\"sh\"",
-            "{}",
+    fn system_login_handoff_opens_only_native_url_and_redacts_response() {
+        let url = "https://accounts.google.com/o/oauth2/v2/auth?state=private-state&code_challenge=private-pkce";
+        let mut opened = Vec::new();
+        let public = finish_system_login(
+            json!({"authorizationUrl":url,"pending":true,"manualCallback":false}),
+            |native_url| {
+                opened.push(native_url);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(opened, [url]);
+        assert_eq!(public, json!({"pending":true,"manualCallback":false}));
+        assert!(!public.to_string().contains("private"));
+    }
+    #[test]
+    fn system_login_handoff_rejects_unsafe_urls_without_opening_and_redacts_errors() {
+        for url in [
+            "file:///tmp/private",
+            "https://user:secret@example.com/",
+            "http://example.com/",
+            "javascript:alert(1)",
         ] {
-            assert!(serde_json::from_str::<LoginBrowser>(input).is_err());
+            let error = finish_system_login(json!({"authorizationUrl":url}), |_| {
+                panic!("invalid login opened")
+            })
+            .unwrap_err();
+            assert!(!error.contains(url));
         }
+        let error = finish_system_login(
+            json!({"authorizationUrl":"https://example.com/oauth?state=private"}),
+            |_| Err("raw secret private".into()),
+        )
+        .unwrap_err();
+        assert!(!error.contains("private"));
+        assert!(
+            finish_system_login(json!({"pending":true}), |_| panic!("missing URL opened")).is_err()
+        );
     }
     #[test]
     fn browser_url_encodes_arguments_and_rejects_unsafe_destinations() {

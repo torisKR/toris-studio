@@ -2,7 +2,11 @@
 
 Toris Studio는 macOS·Windows용 Tauri 앱입니다. `desktop/src-tauri`의 Rust가 DB, SNS OAuth, API 요청, AI 연결, 로컬 파일 저장과 영상 처리를 담당합니다. `desktop/src`의 React 화면은 검증된 Tauri 명령을 호출합니다. 데스크톱 앱 실행에 Next.js 서버는 필요하지 않습니다.
 
-시스템 WebView를 사용해 Chromium을 함께 배포하지 않는 Tauri를 선택했습니다. macOS와 Windows의 WebView 차이는 각 OS에서 확인해야 합니다. UI·Rust 검증과 Windows 설치 파일의 실제 실행 검증은 별개의 단계입니다.
+일반 링크는 Studio 전용 Playwright 브라우저로 엽니다. **연결 설정 → 링크 브라우저**에서 시스템 기본 브라우저로 바꿀 수 있습니다. OAuth 로그인과 게시·업로드 권한 승인은 항상 시스템 기본 브라우저로 엽니다. Node·Playwright·Chrome은 설치 파일에 포함되며 별도 설치가 필요하지 않습니다. Playwright는 macOS 14 이상 또는 Windows 11 이상에서 사용하고, 이전 OS에서는 Node를 실행하지 않고 시스템 브라우저를 사용합니다. Studio의 기존 macOS 12 지원은 유지합니다.
+
+브라우저 선택은 기존 `settings.json`과 별개인 `browser-settings.json`에 저장합니다. Studio 전용 프로필은 개인 Chrome이나 Aside 쿠키를 가져오지 않습니다. 브라우저 종료를 확인하지 못하면 새 실행과 업데이트를 막고 설정 화면에 복구 상태를 표시합니다. 설정·계정·토큰·기존 Opal 이력은 유지합니다.
+
+앱 화면은 시스템 WebView를 사용하고, 외부 링크를 여는 전용 Chrome은 별도 작업자로 번들합니다. macOS와 Windows의 WebView 차이는 각 OS에서 확인해야 합니다. UI·Rust 검증과 Windows 설치 파일의 실제 실행 검증은 별개의 단계입니다.
 
 실행 결과와 아직 검증하지 않은 범위는 [로컬 검증 기록](DESKTOP_VALIDATION.md)에 정리했습니다.
 

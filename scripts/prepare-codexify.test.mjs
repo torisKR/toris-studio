@@ -61,7 +61,8 @@ test('release targets are exact and desktop builds always include the runtime ov
   const root = path.resolve('fixture-root');
   const invocation = buildInvocation(['--ci', '--target', 'x86_64-apple-darwin', '--bundles', 'app,dmg'], { root, host: () => assert.fail('Explicit target must win') });
   assert.equal(invocation.target, 'x86_64-apple-darwin');
-  assert.deepEqual(invocation.args.slice(1, 3), ['--config', path.join(root, 'desktop/src-tauri/tauri.codexify.conf.json')]);
+  assert.equal(invocation.args[1], '--config');
+  assert.deepEqual(JSON.parse(invocation.args[2]).bundle.macOS.files, {'Helpers/studio-browser/node': 'browser-runtime/x86_64-apple-darwin/node', 'Helpers/studio-browser/chromium/chrome-mac-x64/Google Chrome for Testing.app': 'browser-runtime/x86_64-apple-darwin/chromium/chrome-mac-x64/Google Chrome for Testing.app'});
   const forwarded = buildInvocation(['--', '--release'], { root, host: () => 'aarch64-apple-darwin' });
   assert.ok(forwarded.args.indexOf('--config') < forwarded.args.indexOf('--'), 'Cargo passthrough must not swallow the runtime overlay');
   assert.equal(buildInvocation([], { root, host: () => 'aarch64-apple-darwin' }).target, 'aarch64-apple-darwin');
@@ -72,16 +73,16 @@ test('official preview preserves both runtimes and licenses while disabling only
   const invocation = buildInvocation(['--ci', '--target', 'aarch64-apple-darwin'], { preview: true });
   const overlay = JSON.parse(invocation.args[2]);
   assert.deepEqual(overlay.bundle.externalBin, ['binaries/codexify', 'binaries/cloudflared']);
-  assert.equal(Object.keys(overlay.bundle.resources).length, 6);
+  assert.equal(Object.keys(overlay.bundle.resources).length, 18);
   const binaries = new Set(overlay.bundle.externalBin.map(file => path.basename(file)));
   for (const [source, destination] of Object.entries(overlay.bundle.resources)) {
     const runtime = source.split('/')[1];
-    assert.ok(destination.startsWith(`${runtime}-notices/`));
+    assert.ok(destination.startsWith(source.startsWith('media-runtime/') ? 'media-runtime/' : source.startsWith('browser-runtime/') ? 'studio-browser/' : `${runtime}-notices/`));
     assert.equal(binaries.has(destination.split('/')[0]), false, 'Resource directories must not collide with Unix sidecar executables in Tauri staging');
   }
   assert.equal(overlay.bundle.createUpdaterArtifacts, false);
   assert.deepEqual(Object.keys(overlay).sort(), ['$schema', 'bundle']);
-  assert.deepEqual(Object.keys(overlay.bundle).sort(), ['createUpdaterArtifacts', 'externalBin', 'resources']);
+  assert.deepEqual(Object.keys(overlay.bundle).sort(), ['createUpdaterArtifacts', 'externalBin', 'macOS', 'resources']);
   for (const option of [['--config', 'unsafe.json'], ['--config={}']]) assert.throws(() => buildInvocation(option, { preview: true }));
 });
 

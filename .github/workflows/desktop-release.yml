@@ -60,7 +60,7 @@ jobs:
             target: aarch64-apple-darwin
             platform: darwin-aarch64
             bundles: app,dmg
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             platform: darwin-x86_64
             bundles: app,dmg
@@ -90,6 +90,19 @@ jobs:
         with:
           go-version: '1.26.9'
           cache: false
+      - name: Install native media build toolchain on Windows
+        id: media-msys
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: mingw-w64-x86_64-gcc make diffutils
+      - name: Select the installed MSYS2 for native media builds
+        if: runner.os == 'Windows'
+        env:
+          TORIS_MSYS2_ROOT: ${{ steps.media-msys.outputs.msys2-location }}
+        run: printf 'TORIS_MSYS2_ROOT=%s\n' "$TORIS_MSYS2_ROOT" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: desktop/src-tauri -> target
@@ -101,9 +114,10 @@ jobs:
         run: |
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
           pnpm desktop:check
+          pnpm motion:verify:mcp
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/publication-release-contract.test.mjs
+          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs scripts/prepare-media.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
       - name: Prepare pinned Codexify and Cloudflare runtimes
         run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles
@@ -133,6 +147,12 @@ jobs:
           else
             node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
           fi
+      - name: Verify motion editor with real Rust compositor and fixture ChatGPT drafts
+        env:
+          TORIS_MOTION_BUNDLED_BROWSER: '1'
+        run: pnpm motion:verify:ui
+      - name: Verify re-extracted media without PATH and headed browser
+        run: node scripts/prepare-browser-installer.mjs '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle'
       - name: Collect only public release assets
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}

@@ -5,6 +5,7 @@ import type { FormEvent } from "react";
 import { Check, CircleAlert, Database, Download, ExternalLink, Eye, EyeOff, KeyRound, LoaderCircle, Play, RefreshCw, ShieldCheck, Sparkles, Timer } from "lucide-react";
 import { External } from "./External";
 import { UpdatePanel } from "./UpdatePanel";
+import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
 
 export type PublicSettings = {
   databaseConfigured: boolean;
@@ -147,6 +148,8 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
   const [keychainBlocked, setKeychainBlocked] = useState(false);
   const [keychainRetryBusy, setKeychainRetryBusy] = useState(false);
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [browserDirty, setBrowserDirty] = useState(false);
+  const [browserBusy, setBrowserBusy] = useState(false);
   const keychainRetryRequest = useRef(false);
   const dirtyFields = useRef(new Set<keyof SettingsForm>());
   const feedback = useRef<HTMLDivElement>(null);
@@ -282,7 +285,8 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
       setKeychainRetryBusy(false);
     }
   }
-  const settingsOperationBusy = busy || schedulerBusy || databaseBusy !== null || keychainRetryBusy;
+  const coreSettingsOperationBusy = busy || schedulerBusy || databaseBusy !== null || keychainRetryBusy;
+  const settingsOperationBusy = coreSettingsOperationBusy || browserBusy;
   const operationBusy = settingsOperationBusy || updateInstalling;
   const locked = operationBusy || keychainBlocked;
   const storageNotice = (keychainBlocked || keychainRetryBusy) && <div className="social-notice error" role="alert" style={{ flexWrap: "wrap" }}>
@@ -294,7 +298,8 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
   if (!form || !settings) return <div>{storageNotice}<div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{error || "설정을 불러오지 못했습니다."}</span><button type="button" className="social-button compact" disabled={operationBusy} onClick={() => void load()}>다시 시도</button></div></div>;
 
   return <div className="desktop-settings">
-    <UpdatePanel hasUnsavedChanges={dirtyFields.current.size > 0} otherOperationBusy={settingsOperationBusy} onInstallBusyChange={setUpdateInstalling} />
+    <UpdatePanel hasUnsavedChanges={dirtyFields.current.size > 0 || browserDirty} otherOperationBusy={settingsOperationBusy} onInstallBusyChange={setUpdateInstalling} />
+    <BrowserSettingsPanel disabled={updateInstalling || coreSettingsOperationBusy} onDirtyChange={setBrowserDirty} onBusyChange={setBrowserBusy} />
     <div className="desktop-settings-intro"><ShieldCheck size={21} /><div><strong>연결 정보는 내 기기에 보관됩니다</strong><p>API 키와 DB 비밀번호는 macOS 키체인·Windows 자격 증명에 보관합니다. 저장소 권한은 Toris Studio가 보관한 연결 정보를 읽고 저장할 때 사용합니다. 빈 비밀키 입력란은 기존 값을 유지합니다.</p><p>일반 설정 파일</p><code>{settings.configPath}</code></div></div>
     {storageNotice}
     {(error || notice || followupNotice) && <div ref={feedback} tabIndex={-1}>
