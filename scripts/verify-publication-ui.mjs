@@ -60,8 +60,21 @@ try {
       return { publicationId: saved.id, revision: saved.revision, approvalHash: `approved-${saved.revision}`, ready: checks.every(check => check.ready), checks, media: { video: media.find(item => item.id === saved.videoMediaId), thumbnail: media.find(item => item.id === saved.thumbnailMediaId) } };
     }
     if (command === "publication_submit") {
-      assert.equal(args.input.confirmed, true); assert.equal(args.input.revision, saved.revision); assert.equal(args.input.approvalHash, `approved-${saved.revision}`); submits++;
-      saved.jobs = saved.targets.map((target, index) => ({ id: `job-${index}`, targetId: target.id, revision: saved.revision, platform: target.platform, accountId: target.accountId, accountTitle: target.accountTitle, status: target.platform === "naver_blog" ? "needs_human_publish" : target.mode === "scheduled" ? "scheduled" : target.platform === "tiktok" ? target.mode === "tiktok_inbox" ? "draft_sent" : "processing" : "published", mode: target.mode, scheduledAt: target.scheduledAt, warnings: [], error: null, updatedAt: now, retryable: false, url: target.platform === "youtube" ? "https://www.youtube.com/watch?v=abcdefghijk" : null })); return saved;
+      assert.equal(args.input.confirmed, true);
+      assert.equal(args.input.revision, saved.revision);
+      assert.equal(args.input.approvalHash, `approved-${saved.revision}`);
+      const selected = saved.targets.filter(target => args.input.targetIds.includes(target.id));
+      saved.jobs = selected.map(target => ({
+        id: `job-${saved.targets.findIndex(item => item.id === target.id)}`,
+        targetId: target.id, revision: saved.revision, platform: target.platform,
+        accountId: target.accountId, accountTitle: target.accountTitle,
+        status: target.platform === "naver_blog" ? "needs_human_publish" : target.mode === "scheduled" ? "scheduled" : target.platform === "tiktok" ? target.mode === "tiktok_inbox" ? "draft_sent" : "processing" : "published",
+        mode: target.mode, scheduledAt: target.scheduledAt,
+        warnings: [], error: null, updatedAt: now, retryable: false,
+        url: target.platform === "youtube" ? "https://www.youtube.com/watch?v=abcdefghijk" : null,
+      }));
+      submits++;
+      return saved;
     }
     if (command === "publication_export_handoff") return { path: "/explicit-ipc-fixture/not-a-real-export", status: "needs_human_publish", images: 1 };
     if (command === "publication_confirm_handoff") {
@@ -350,6 +363,37 @@ try {
   assert.equal(saved.revision, 1);
   assert.deepEqual(saved.jobs, []);
   report.checks.push("Fresh draft fixture gets a new identity/revision and never inherits another publication's jobs");
+  const subset = studio.getByRole("group", { name: "이번에 검사·승인할 대상", exact: true });
+  const chooseYouTube = subset.getByRole("checkbox", { name: /^YouTube ·/ });
+  const chooseInstagram = subset.getByRole("checkbox", { name: /^Instagram Reels ·/ });
+  const chooseTikTok = subset.getByRole("checkbox", { name: /^TikTok ·/ });
+  await chooseInstagram.uncheck();
+  await chooseTikTok.uncheck();
+  const subsetTargets = Object.fromEntries(saved.targets.map(target => [target.platform, target.id]));
+  const subsetSubmitsBefore = submits;
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  await studio.locator(".publication-checks > p > strong").first().waitFor();
+  assert.deepEqual(calls.filter(call => call.command === "publication_preflight").at(-1).args.input.targetIds, [subsetTargets.youtube]);
+  assert.deepEqual(await studio.locator(".publication-checks > p > strong").allTextContents(), ["YouTube"]);
+  assert.equal(await studio.locator(".publication-checks .blocked").count(), 0);
+  await approval.check();
+  await chooseTikTok.check();
+  assert.equal(await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).count(), 0);
+  assert.equal(submits, subsetSubmitsBefore);
+  await chooseTikTok.uncheck();
+  await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
+  assert.equal(await approval.isChecked(), false);
+  await approval.check();
+  await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
+  const firstSubsetInput = calls.filter(call => call.command === "publication_submit").at(-1).args.input;
+  assert.deepEqual(firstSubsetInput.targetIds, [subsetTargets.youtube]);
+  assert.equal(saved.jobs.length, 1);
+  assert.equal(saved.jobs[0].targetId, subsetTargets.youtube);
+  assert.equal(saved.jobs[0].status, "published");
+  assert.equal(submits, subsetSubmitsBefore + 1);
+  const preservedYouTubeJob = structuredClone(saved.jobs[0]);
+  const subsetRevision = saved.revision;
+  report.checks.push("Subset approval sends only inspected YouTube; selection edits invalidate consent and unchecked blocked channels never create jobs");
   await page.getByRole("button", { name: "AI 작업실", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "AI로 작성", exact: true }).count(), 0);
   assert.equal(await page.getByText("직접 작성에 사용할 로컬 AI 제공자", { exact: false }).count(), 0);
