@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Corresponding source build for separately executed FFmpeg/libx264 GPL CLI.
 set -euo pipefail
-repo=$(cd "$(dirname "$0")/.." && pwd)
+repo=$(cd "$(dirname "$0")/.." && pwd -P)
 target=${1:?pass Rust target triple}
 case "$target" in aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc) ;; *) echo 'Unsupported media target' >&2; exit 1;; esac
+if [[ "$target" == *windows* ]]; then repo=$(cygpath -u "$repo"); fi
 out="$repo/desktop/src-tauri/media-runtime/$target"
 cache=${TORIS_MEDIA_SOURCE_CACHE:-"$repo/desktop/src-tauri/media-runtime/sources"}
+if [[ "$target" == *windows* ]]; then cache=$(cygpath -u "$cache"); fi
 mkdir -p "$cache" "$out"
 # The fetcher checks every source hash before configure or compilation.
 node "$repo/scripts/prepare-media.mjs" sources "$cache"

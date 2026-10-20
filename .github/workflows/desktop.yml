@@ -110,6 +110,8 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Build and verify pinned media before compiling the application
+        run: node scripts/prepare-media.mjs prepare '${{ matrix.target }}'
       - name: Check Rust, desktop UI, and release tooling
         run: |
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
