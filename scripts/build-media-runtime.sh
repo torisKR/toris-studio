@@ -12,7 +12,7 @@ node "$repo/scripts/prepare-media.mjs" sources "$cache"
 work=$(mktemp -d)
 trap 'rc=$?; if [[ $rc != 0 && -f "$work/ffmpeg/ffbuild/config.log" ]]; then cp "$work/ffmpeg/ffbuild/config.log" "$out/config-failure.log"; fi; rm -rf "$work"' EXIT
 mkdir -p "$work/zlib" "$work/x264" "$work/ffmpeg" "$work/prefix"
-tar -xf "$cache/zlib-1.3.1.tar.gz" -C "$work/zlib" --strip-components=1
+tar -xf "$cache/zlib-1.3.2.tar.gz" -C "$work/zlib" --strip-components=1
 tar -xf "$cache/x264.tar.gz" -C "$work/x264" --strip-components=1
 tar -xf "$cache/ffmpeg-9.0.2.tar.xz" -C "$work/ffmpeg" --strip-components=1
 export PKG_CONFIG_PATH="$work/prefix/lib/pkgconfig"
@@ -51,7 +51,8 @@ cp "$work/x264/COPYING" "$out/notices/x264-GPL-2.0.txt"
 cp "$work/zlib/LICENSE" "$out/notices/zlib.txt"
 cp ffbuild/config.mak "$out/notices/ffmpeg-config.mak"
 { "$CC" --version; make --version; if [[ "$target" == *apple* ]]; then xcrun --show-sdk-version; fi; } > "$out/notices/toolchain.txt"
-cp "$cache/ffmpeg-9.0.2.tar.xz" "$cache/x264.tar.gz" "$cache/zlib-1.3.1.tar.gz" "$out/sources/archives/"
+rm -f "$out/sources/archives/zlib-1.3.1.tar.gz"
+cp "$cache/ffmpeg-9.0.2.tar.xz" "$cache/x264.tar.gz" "$cache/zlib-1.3.2.tar.gz" "$out/sources/archives/"
 cp "$cache/pkgconf-2.5.1.tar.xz" "$out/sources/archives/"
 cp "$repo/scripts/build-media-runtime.sh" "$repo/scripts/prepare-media.mjs" "$out/sources/scripts/"
 cp "$repo/desktop/src-tauri/resources/media/sources.json" "$repo/desktop/src-tauri/resources/media/OFL.txt" "$out/sources/desktop/src-tauri/resources/media/"

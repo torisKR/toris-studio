@@ -19,7 +19,20 @@ export type MotionRequest = {
         operations: Array<Record<string, unknown>>;
     };
     createdAt: string;
+    mcpExecutable?: string;
 };
+export function remoteDesktopPrompt(request: Pick<MotionRequest, 'id' | 'mcpExecutable'>): string {
+    if (!request.mcpExecutable) throw new Error('현재 앱의 실행 파일 경로를 확인하지 못했습니다. 요청을 다시 만드세요.');
+    return [
+        'Remote Desktop Commander로 이 기기의 Toris Studio 모션 요청을 처리해줘. Codexify나 새 API 키는 사용하지 마.',
+        `실행 파일: ${JSON.stringify(request.mcpExecutable)}. 인자: --studio-mcp. 이 앱을 설치하거나 교체하지 말고 별도 표준입출력 프로세스로 실행해.`,
+        '표준입력에 한 줄씩 JSON-RPC 2.0 메시지를 보내고 표준출력 응답을 읽어. initialize(protocolVersion="2025-11-25",capabilities={},clientInfo={name:"remote-desktop-commander",version:"1"}), notifications/initialized, tools/list 순서로 연결해.',
+        `tools/call의 name=studio_motion_request_get, arguments=${JSON.stringify({requestId: request.id})}로 실제 요청과 안정 ID, baseHash, 선택 범위, allowDataEdits를 읽어.`,
+        '지시를 충족하는 최소 변경만 draft.operations로 제안해. 지원 연산은 replace-element(sceneId,element), add-element(sceneId,element), delete-element(sceneId,elementId), set-duration(sceneId,durationSec), move-scene(sceneId,index), add-scene(scene,index), delete-scene(sceneId), set-table-value(tableId,row,label,expectedValue,value)야. element 필드는 읽은 장면 구조를 유지해. 수치는 allowDataEdits=true일 때만 set-table-value로 변경하고, 다른 요소는 보존해.',
+        `tools/call의 name=studio_motion_draft_receive, arguments={requestId:${JSON.stringify(request.id)},projectId:읽은 값,baseHash:읽은 값,draft:{operations:[...]}}로 변경 초안을 반환해.`,
+        '코드·HTML·셸·FFmpeg 필터를 초안 데이터로 반환하지 마. 이미지 원본 경로와 사용자 설정·계정 파일을 읽지 마. 초안 수신은 완성이 아니며 Studio에서 전후 검토 후 적용해야 해. 프로젝트를 직접 저장하거나 적용하지 마. 응답 후 이 표준입출력 프로세스만 종료해.',
+    ].join('\n\n');
+}
 const uid = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 export function element(kind: ElementKind, duration = 9): GraphicElement {
     return { id: uid('el'), kind, x: 100, y: 450, width: 800, height: kind === 'text' ? 200 : 600, z: 1, color: '#8ae3bb', start: 0, duration, animation: kind === 'text' ? 'rise' : 'draw', ...(kind === 'text' ? { text: '새 텍스트', fontSize: 72 } : {}) };

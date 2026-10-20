@@ -14,6 +14,26 @@ export async function prepareMedia(target) {
  if(result.status!==0) throw new Error('Pinned media runtime build failed.');
  await verifyMedia(folder);
 }
+export function verifyMediaBinary(bytes,target) {
+ if(target.includes('darwin')) {
+  if(bytes.length<32||bytes.readUInt32LE(0)!==0xfeedfacf||bytes.readUInt32LE(4)!==(target.startsWith('aarch64')?0x100000c:0x1000007))throw new Error('Media Mach-O architecture mismatch');
+  const count=bytes.readUInt32LE(16),commandBytes=bytes.readUInt32LE(20);let offset=32,minimum=null;
+  if(count>1024||32+commandBytes>bytes.length)throw new Error('Invalid media load commands');
+  for(let i=0;i<count;i++) {
+   if(offset+8>32+commandBytes)throw new Error('Invalid media load command');
+   const command=bytes.readUInt32LE(offset),size=bytes.readUInt32LE(offset+4);
+   if(size<8||offset+size>32+commandBytes)throw new Error('Invalid media load command size');
+   if(command===0x32){if(size<24)throw new Error('Invalid media build version');minimum=Math.max(minimum??0,bytes.readUInt32LE(offset+12));}
+   if(command===0x24){if(size<16)throw new Error('Invalid media minimum version');minimum=Math.max(minimum??0,bytes.readUInt32LE(offset+8));}
+   offset+=size;
+  }
+  if(minimum===null||minimum>0x000c0000)throw new Error('Media runtime must support macOS 12.0 or earlier');
+ } else {
+  if(bytes.length<64||bytes.toString('ascii',0,2)!=='MZ')throw new Error('Invalid media PE');
+  const pe=bytes.readUInt32LE(0x3c);
+  if(pe+6>bytes.length||bytes.readUInt32LE(pe)!==0x4550||bytes.readUInt16LE(pe+4)!==0x8664)throw new Error('Media PE architecture mismatch');
+ }
+}
 export async function verifyMedia(folder){
  const m=JSON.parse(await readFile(path.join(folder,'manifest.json'),'utf8'));
  if(JSON.stringify(m.sources)!==JSON.stringify(sources)||m.distributionFiles?.['sources/scripts/build-media-runtime.sh']!==hash(await readFile(path.join(root,'scripts/build-media-runtime.sh'))))throw new Error('Media build inputs have changed');
@@ -21,7 +41,7 @@ export async function verifyMedia(folder){
  for(const [name,digest] of Object.entries(m.files)) {
   if(!/^[a-zA-Z0-9_.-]+$/.test(name) || hash(await readFile(path.join(folder,name)))!==digest) throw new Error(`Bundled media is missing or damaged: ${name}`);
  }
- for(const name of [m.target.includes('windows')?'ffmpeg.exe':'ffmpeg',m.target.includes('windows')?'ffprobe.exe':'ffprobe']){const bytes=await readFile(path.join(folder,name));if(m.target.includes('darwin')){if(bytes.readUInt32LE(0)!==0xfeedfacf||bytes.readUInt32LE(4)!==(m.target.startsWith('aarch64')?0x100000c:0x1000007))throw new Error('Media Mach-O architecture mismatch');const signed=spawnSync('codesign',['--verify','--strict',path.join(folder,name)],{encoding:'utf8',shell:false});if(signed.status!==0)throw new Error('Invalid media signature');}else{if(bytes.toString('ascii',0,2)!=='MZ'||bytes.readUInt16LE(bytes.readUInt32LE(0x3c)+4)!==0x8664)throw new Error('Media PE architecture mismatch');}}
+ for(const name of [m.target.includes('windows')?'ffmpeg.exe':'ffmpeg',m.target.includes('windows')?'ffprobe.exe':'ffprobe']){const bytes=await readFile(path.join(folder,name));verifyMediaBinary(bytes,m.target);if(m.target.includes('darwin')){const signed=spawnSync('codesign',['--verify','--strict',path.join(folder,name)],{encoding:'utf8',shell:false});if(signed.status!==0)throw new Error('Invalid media signature');}}
  if(m.ffmpeg!=='9.0.2' || !m.files['NotoSansCJKkr-Regular.otf'] || !m.files[process.platform==='win32'?'ffmpeg.exe':'ffmpeg']) throw new Error('Incomplete media manifest');
  for(const [relative,digest] of Object.entries(m.distributionFiles||{})){if(relative.split('/').some(p=>!p||p==='.'||p==='..')||!/^[-a-zA-Z0-9_./]+$/.test(relative)||hash(await readFile(path.join(folder,relative)))!==digest)throw new Error('Media corresponding source or notice damaged');}
  if(!m.distributionFiles?.['notices/Noto-OFL.txt']||!m.distributionFiles?.['sources/archives/ffmpeg-9.0.2.tar.xz'])throw new Error('Missing media redistribution sources');
@@ -37,7 +57,11 @@ if(process.argv[1]===fileURLToPath(import.meta.url)) {
   await mkdir(arg,{recursive:true});
   for(const item of Object.values(sources).filter(i=>typeof i==='object')) {
    const dest=path.join(arg,item.file);let bytes;try{bytes=await readFile(dest);}catch{}
-   if(!bytes || hash(bytes)!==item.sha256) {const response=await fetch(item.url,{signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error(`Source download ${response.status}`);bytes=Buffer.from(await response.arrayBuffer());if(hash(bytes)!==item.sha256)throw new Error('Source SHA256 mismatch');await writeFile(dest,bytes);}
+   if(!bytes || hash(bytes)!==item.sha256) {
+    try {const response=await fetch(item.url,{signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error(`HTTP ${response.status}`);bytes=Buffer.from(await response.arrayBuffer());}
+    catch {const downloaded=spawnSync('curl',['--fail','--location','--proto','=https','--tlsv1.2','--max-time','180','--silent','--show-error','--url',item.url],{shell:false,maxBuffer:64*1024*1024});if(downloaded.status!==0)throw new Error(`Pinned source download failed: ${item.file}`);bytes=downloaded.stdout;}
+    if(hash(bytes)!==item.sha256)throw new Error(`Source SHA256 mismatch: ${item.file}`);await writeFile(dest,bytes);
+   }
   }
  } else if(action==='manifest') {
   const folder=path.join(root,'desktop/src-tauri/media-runtime',arg), suffix=arg.includes('windows')?'.exe':'';

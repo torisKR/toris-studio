@@ -3,15 +3,28 @@ use tauri_plugin_dialog::DialogExt;
 fn check(window: &tauri::WebviewWindow) -> Result<(), String> {
     crate::updater::authorize(window)
 }
+fn with_bridge(mut request: Value) -> Result<Value, String> {
+    request["mcpExecutable"] = json!(std::env::current_exe()
+        .map_err(|_| "현재 앱의 실행 파일 경로를 확인하지 못했습니다.")?
+        .to_string_lossy());
+    Ok(request)
+}
 #[tauri::command]
 pub fn motion_request_create(window: tauri::WebviewWindow, input: Value) -> Result<Value, String> {
     check(&window)?;
-    crate::motion_drafts::request(input)
+    with_bridge(crate::motion_drafts::request(input)?)
 }
 #[tauri::command]
 pub fn motion_request_list(window: tauri::WebviewWindow) -> Result<Value, String> {
     check(&window)?;
-    crate::motion_drafts::list()
+    let list = crate::motion_drafts::list()?;
+    list.as_array()
+        .ok_or("모션 요청 목록 오류")?
+        .iter()
+        .cloned()
+        .map(with_bridge)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|v| json!(v))
 }
 #[tauri::command]
 pub fn motion_draft_apply(

@@ -111,7 +111,7 @@ jobs:
           pnpm motion:verify:mcp
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
+          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs scripts/prepare-media.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
       - name: Prepare pinned Codexify and Cloudflare runtimes
         run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles

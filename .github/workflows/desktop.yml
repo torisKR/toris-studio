@@ -48,7 +48,7 @@ jobs:
           node --test scripts/publication-release-contract.test.mjs
           node --import tsx --test infrastructure/oauth-callback/callback.test.mjs
       - name: Check pinned runtime packaging contracts without downloads
-        run: node --test scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs
+        run: node --test scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs scripts/prepare-media.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs
   publication-safety:
     needs: [security, contracts]
     uses: ./.github/workflows/publication-checks.yml

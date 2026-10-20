@@ -45,3 +45,13 @@ test('editing identity is canonical across native JSON field reordering', () => 
     function sort(v: unknown): unknown { return Array.isArray(v) ? v.map(sort) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, sort(v)])) : v; }
     assert.equal(motion.editingKey(p), motion.editingKey(sort(p) as typeof p));
 });
+test('Remote Desktop Commander handoff identifies the current native bridge without embedding project data', () => {
+    const prompt = motion.remoteDesktopPrompt({ id: 'request-123', mcpExecutable: '/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop' });
+    assert.match(prompt, /Remote Desktop Commander/);
+    assert.match(prompt, /--studio-mcp/);
+    assert.match(prompt, /studio_motion_request_get/);
+    assert.match(prompt, /studio_motion_draft_receive/);
+    assert.match(prompt, /request-123/);
+    assert.match(prompt, /검토/);
+    assert.throws(() => motion.remoteDesktopPrompt({ id: 'request-123' }), /실행 파일/);
+});
