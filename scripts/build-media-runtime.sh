@@ -43,8 +43,8 @@ cd "$work/x264"
 make -j 4 && make install
 cd "$work/ffmpeg"
 ./configure --prefix="$work/prefix" --pkg-config="$work/prefix/bin/pkgconf" --pkg-config-flags=--static --extra-cflags="-I$work/prefix/include ${CFLAGS}" --extra-ldflags="-L$work/prefix/lib" --disable-autodetect --enable-gpl --enable-libx264 --enable-zlib --disable-shared --enable-static --disable-doc --disable-debug --disable-ffplay --disable-network --enable-avdevice --enable-indev=lavfi --disable-x86asm --disable-iconv --disable-bzlib --disable-lzma "${extra[@]}"
-make -j 4 ffmpeg ffprobe
 suffix=''; [[ "$target" != *windows* ]] || suffix='.exe'
+make -j 4 "ffmpeg$suffix" "ffprobe$suffix"
 cp "ffmpeg$suffix" "ffprobe$suffix" "$out/"
 cp "$cache/NotoSansCJKkr-Regular.otf" "$out/"
 mkdir -p "$out/notices" "$out/sources/archives" "$out/sources/scripts" "$out/sources/desktop/src-tauri/resources/media"
