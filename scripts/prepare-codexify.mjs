@@ -1,3 +1,4 @@
+import { browserOverlay, prepareBrowser, verifyBrowserStaged, verifyInstallerSizes } from './prepare-browser.mjs';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -360,7 +361,8 @@ export function buildInvocation(args, { root = ROOT, host = hostTarget, preview 
   if (targetArguments.length > 1) fail('Only one Codexify target may be built at a time.');
   const target = targetArguments.length ? targetArguments[0] : host();
   targetSpec(target);
-  const config = preview ? JSON.stringify({ ...RUNTIME_OVERLAY, bundle: { ...RUNTIME_OVERLAY.bundle, createUpdaterArtifacts: false } }) : path.join(root, 'desktop/src-tauri/tauri.codexify.conf.json');
+  const browser = browserOverlay(target);
+  const config = JSON.stringify({ ...RUNTIME_OVERLAY, bundle: { ...RUNTIME_OVERLAY.bundle, ...browser, resources: { ...RUNTIME_OVERLAY.bundle.resources, ...(browser.resources || {}) }, ...(preview ? { createUpdaterArtifacts: false } : {}) } });
   return { target, cwd: path.join(root, 'desktop'), args: ['build', '--config', config, ...args] };
 }
 export async function verifyStaged(target, directory, { root = ROOT } = {}) {
@@ -386,16 +388,20 @@ export async function verifyStaged(target, directory, { root = ROOT } = {}) {
     console.log(`Verified bundled ${runtime} ${spec.version}: ${target} executable, architecture, license, and pinned metadata.`);
   }
 }
-async function prepareBundled(target) { for (const runtime of ['codexify', 'cloudflared']) await prepareTarget(target, { runtime }); }
+async function prepareBundled(target) { for (const runtime of ['codexify', 'cloudflared']) await prepareTarget(target, { runtime }); await prepareBrowser(target); }
 async function main([command = 'prepare', ...args]) {
   if (command === 'prepare') { if (args.length > 1) fail('Usage: prepare-codexify.mjs prepare [target]'); await prepareBundled(args[0] || hostTarget()); }
-  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-codexify.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); }
+  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-codexify.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); await verifyBrowserStaged(args[0], path.resolve(args[1])); }
   else if (command === 'build' || command === 'preview') {
     const invocation = buildInvocation(args, { preview: command === 'preview' });
     await prepareBundled(invocation.target);
     const require = createRequire(import.meta.url);
     const child = spawn(process.execPath, [require.resolve('@tauri-apps/cli/tauri.js'), ...invocation.args], { cwd: invocation.cwd, stdio: 'inherit', shell: false });
     process.exitCode = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve(signal ? 1 : code ?? 1)); });
+    if (process.exitCode === 0) {
+      const explicitTarget = args.some(arg => arg === '--target' || arg.startsWith('--target='));
+      await verifyInstallerSizes(path.join(ROOT, 'desktop/src-tauri/target', ...(explicitTarget ? [invocation.target] : []), 'release/bundle'));
+    }
   } else fail('Expected prepare, verify, build, or preview command.');
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

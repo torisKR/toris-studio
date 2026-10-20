@@ -35,7 +35,7 @@ try {
   if(command==='codexify_connection_get')return {...connectionProfile};
   if(command==='codexify_connection_save'){connectionProfile={...args.input};return {...connectionProfile};}
   if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
-  if(command==='codexify_connection_check')return {reachable:true,fileReceiverReady:true,ownerReady:true,toolCount:64,message:'QA bridge fixture'};
+  if(command==='codexify_connection_check')return {reachable:true,serverName:'QA fixture',protocolVersion:'2025-11-25',fileReceiverReady:true,ownerReady:true,toolCount:64,studioTools:['toris_studio_receive_file'],missingStudioTools:[],checkedAt:'2026-10-20T00:00:00Z',message:'QA bridge fixture'};
   if(command==='open_external')return null;
   if(command==='codexify_chat_read')return {messages:[{role:'agent',markdown:'실제 생성물이 아닌 ChatGPT QA 응답'}],server_time_ms:1000};
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'0.1.14'};
@@ -68,7 +68,7 @@ try {
  assert.equal(await page.locator('.ai-trend-summary li').count(),6);
  await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:resolve(out,'ai-workspace-desktop.png'),fullPage:true});
  await page.getByRole('button',{name:'ChatGPT 최근 응답 가져오기',exact:true}).click();
- await page.getByLabel('ChatGPT 결과 붙여넣기·편집',{exact:true}).waitFor();
+ await page.waitForFunction(()=>document.querySelector('#social-ai-manual-output')?.value === '실제 생성물이 아닌 ChatGPT QA 응답');
  assert.equal(await page.getByLabel('ChatGPT 결과 붙여넣기·편집',{exact:true}).inputValue(),'실제 생성물이 아닌 ChatGPT QA 응답');
  assert.equal(await page.getByRole('button',{name:'AI로 작성',exact:true}).count(),0);
  report.checks.push('ChatGPT actual owner-chat reply import stays editable; direct AI provider generation button removed');

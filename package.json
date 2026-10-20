@@ -56,7 +56,9 @@
     "desktop:prepare": "node scripts/prepare-codexify.mjs prepare",
     "desktop:check": "tsc --project desktop/tsconfig.json --noEmit && cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features",
     "desktop:ui": "vite build --config desktop/vite.config.ts",
-    "desktop:smoke": "cargo run --manifest-path desktop/src-tauri/Cargo.toml -- --self-check"
+    "desktop:smoke": "cargo run --manifest-path desktop/src-tauri/Cargo.toml -- --self-check",
+    "browser:test": "node --test desktop/browser-runtime/*.test.mjs scripts/prepare-browser.test.mjs",
+    "browser:verify:ui": "node scripts/verify-browser-ui.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "2.0.1",

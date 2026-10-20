@@ -45,3 +45,6 @@ desktop/.env*
 *.dmg
 *.msi
 *.exe
+
+# Verified, generated Studio browser runtimes and download cache
+/desktop/src-tauri/browser-runtime/

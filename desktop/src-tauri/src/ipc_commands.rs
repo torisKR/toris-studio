@@ -70,6 +70,8 @@ macro_rules! app_command_registry {
             [crate::desktop] get_scheduler_status,
             [crate::desktop] set_scheduler,
             [crate::desktop] open_external,
+            [crate::desktop] browser_runtime_status,
+            [crate::desktop] save_browser_preferences,
             [crate::desktop] copy_text,
             [crate::desktop] start_database,
             [crate::desktop] backup_database,

@@ -149,22 +149,11 @@ pub async fn publication_begin_login(
 ) -> Result<Value, String> {
     use tauri_plugin_opener::OpenerExt;
     crate::updater::authorize(&window)?;
-    let mut result = crate::oauth::begin_publish_login(platform).await?;
-    let url = result["authorizationUrl"]
-        .as_str()
-        .ok_or("게시 권한 승인 주소를 확인하지 못했습니다.")?;
-    let parsed = url::Url::parse(url).map_err(|_| "게시 권한 승인 주소 오류")?;
-    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err("게시 권한 승인 주소 오류".into());
-    }
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|_| "브라우저를 열지 못했습니다.")?;
-    result
-        .as_object_mut()
-        .ok_or("OAuth 응답 형식 오류")?
-        .remove("authorizationUrl");
-    Ok(result)
+    crate::oauth::finish_system_login(crate::oauth::begin_publish_login(platform).await?, |url| {
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|_| "시스템 기본 브라우저를 열지 못했습니다.".into())
+    })
 }
 #[tauri::command]
 pub fn publication_scheduler_status(window: tauri::WebviewWindow) -> Result<Value, String> {

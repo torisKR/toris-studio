@@ -148,18 +148,11 @@ pub async fn integration_upload_login(
     app: tauri::AppHandle,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    let mut result = crate::oauth::begin_youtube_upload_login().await?;
-    let url = result["authorizationUrl"]
-        .as_str()
-        .ok_or("YouTube 인증 주소를 만들지 못했습니다.")?;
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|_| "시스템 브라우저를 열지 못했습니다.")?;
-    result
-        .as_object_mut()
-        .ok_or("YouTube 로그인 응답 오류")?
-        .remove("authorizationUrl");
-    Ok(result)
+    crate::oauth::finish_system_login(crate::oauth::begin_youtube_upload_login().await?, |url| {
+        app.opener()
+            .open_url(url, None::<&str>)
+            .map_err(|_| "시스템 기본 브라우저를 열지 못했습니다.".into())
+    })
 }
 #[tauri::command]
 pub async fn integration_channels(window: tauri::WebviewWindow) -> Result<Value, String> {

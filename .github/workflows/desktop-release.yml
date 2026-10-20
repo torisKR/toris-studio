@@ -60,7 +60,7 @@ jobs:
             target: aarch64-apple-darwin
             platform: darwin-aarch64
             bundles: app,dmg
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             platform: darwin-x86_64
             bundles: app,dmg
@@ -103,7 +103,7 @@ jobs:
           pnpm desktop:check
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/publication-release-contract.test.mjs
+          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
       - name: Prepare pinned Codexify and Cloudflare runtimes
         run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles
@@ -133,6 +133,8 @@ jobs:
           else
             node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
           fi
+      - name: Verify re-extracted installer runtimes and headed browser
+        run: node scripts/prepare-browser-installer.mjs '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle'
       - name: Collect only public release assets
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}

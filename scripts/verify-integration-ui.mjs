@@ -17,7 +17,7 @@ await page.exposeFunction('__qaInvoke',async(command,args={})=>{
  if(command==='codexify_proxy_status')return {provider:args.input?.provider??'cloudflare',available:true,running:false,managed:false,mcpUrl:null,message:'QA idle proxy fixture'};
  if(command==='codexify_connection_get')return {mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'',conversationUrl:'',projectRoot:'',conversationId:''};
  if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
- if(command==='codexify_connection_check')return {reachable:false,fileReceiverReady:false,ownerReady:false,toolCount:0,message:'QA disconnected fixture'};
+ if(command==='codexify_connection_check')return {reachable:false,serverName:null,protocolVersion:null,fileReceiverReady:false,ownerReady:false,toolCount:0,studioTools:[],missingStudioTools:[],checkedAt:'2026-10-20T00:00:00Z',message:'QA disconnected fixture'};
  if(command==='integration_status')return {oauth:{providers:[{platform:'youtube',clientConfigured:true,connected:true,uploadAuthorized:granted,pending:false}]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload,version:'test'};
  if(command==='integration_upload_login'){granted=true;return {pending:true};}
  if(command==='integration_channels')return {channels:[channel]};
