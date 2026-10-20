@@ -495,8 +495,29 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
                 )
                 .await
         });
-        while !temp.path().join("browser-runtime-owner.json").exists() {
-            tokio::task::yield_now().await;
+        let readiness = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if temp.path().join("browser-runtime-owner.json").exists() {
+                    return true;
+                }
+                if task.is_finished() {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        match readiness {
+            Ok(true) => {}
+            Ok(false) => panic!(
+                "browser startup finished before creating its owner marker: {:?}",
+                task.await
+            ),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                panic!("browser startup did not create its owner marker within 5 seconds");
+            }
         }
         let shutdown = tokio::time::timeout(Duration::from_secs(2), manager.shutdown())
             .await
