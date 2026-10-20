@@ -1,0 +1,38 @@
+name: Isolated Intel motion UI diagnostic
+on:
+  push:
+    branches: [diagnostic/motion-ui-intel]
+permissions:
+  contents: read
+jobs:
+  intel-ui:
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.96.0'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: desktop/src-tauri -> target
+      - run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/prepare-media.mjs prepare x86_64-apple-darwin
+          node scripts/prepare-browser.mjs prepare x86_64-apple-darwin
+      - name: Trace native IPC and inspect all UI assertions
+        env:
+          TORIS_MOTION_BUNDLED_BROWSER: '1'
+        run: pnpm motion:verify:ui
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: intel-motion-ui-diagnostic
+          path: docs/review/motion
+          if-no-files-found: ignore
