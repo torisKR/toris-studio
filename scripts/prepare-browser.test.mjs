@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32 } from 'node:zlib';
+import path from 'node:path';
 function zip(entries) {
     const locals = [], centrals = [];
     let offset = 0;
@@ -104,8 +105,8 @@ test('Mac deployment separates signed native helpers from JavaScript data resour
     assert.equal(Object.values(overlay.resources).includes('studio-browser/node_modules/'), true);
     assert.equal(typeof browserStagePaths, 'function');
     const paths = browserStagePaths('aarch64-apple-darwin', '/tmp/Test.app');
-    assert.equal(paths.nativeBase, '/tmp/Test.app/Contents/Helpers/studio-browser');
-    assert.equal(paths.dataBase, '/tmp/Test.app/Contents/Resources/studio-browser');
+    assert.equal(paths.nativeBase, path.join('/tmp/Test.app', 'Contents', 'Helpers', 'studio-browser'));
+    assert.equal(paths.dataBase, path.join('/tmp/Test.app', 'Contents', 'Resources', 'studio-browser'));
     const win = browserStagePaths('x86_64-pc-windows-msvc', '/tmp/win');
     assert.equal(win.nativeBase, win.dataBase);
 });
