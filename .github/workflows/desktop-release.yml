@@ -108,6 +108,7 @@ jobs:
         run: |
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
           pnpm desktop:check
+          pnpm motion:verify:mcp
           pnpm ai:test
           pnpm integrations:verify:mcp
           node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs

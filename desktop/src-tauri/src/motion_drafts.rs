@@ -76,6 +76,14 @@ fn access<T>(
     Ok(result)
 }
 pub fn root_dir() -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("TORIS_STUDIO_MOTION_TEST_HOME") {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() || path.parent().is_none() {
+            return Err("모션 테스트 경로 오류".into());
+        }
+        return Ok(path);
+    }
     Ok(crate::config::config_path()
         .parent()
         .ok_or("모션 저장 경로 오류")?

@@ -114,6 +114,7 @@ jobs:
         run: |
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
           pnpm desktop:check
+          pnpm motion:verify:mcp
           cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --test ipc_acl_contract
           cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib native_windows::
           cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib updater::
