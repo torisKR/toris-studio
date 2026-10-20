@@ -14,6 +14,7 @@ const profile = { mcpUrl: "http://127.0.0.1:21228/mcp", pluginUrl: "https://chat
 const capabilities = { video: true, title: true, description: true, tags: true, hashtags: true, thumbnail: true, thumbnailFrame: true, draft: true, direct: true, directPublicSupported: false };
 const accounts = ["youtube", "instagram", "facebook", "threads", "tiktok"].map(platform => ({ platform, accountId: `${platform}-account`, name: `${platform} 검증 계정`, publishingAuthorized: true, capabilities, creatorInfo: platform === "tiktok" ? { privacyLevelOptions: ["SELF_ONLY", "PUBLIC_TO_EVERYONE"], commentDisabled: false, duetDisabled: true, stitchDisabled: false, maxVideoPostDurationSec: 180, checkedAt: now } : null }));
 const media = [];
+let fixturePublicationSequence = 0;
 let saved, aiRequest, submits = 0, draftToolReady = true;
 const server = await createServer({ configFile: resolve("desktop/vite.config.ts"), server: { port: 0, strictPort: false } });
 await server.listen();
@@ -35,7 +36,24 @@ try {
       media.push(item); return item;
     }
     if (command === "publication_accounts") return { accounts, warnings: [{ platform: "facebook", message: "QA 부분 권한 안내" }], checkedAt: now };
-    if (command === "publication_save") { saved = { ...args.input, id: "qa-publication", revision: (saved?.revision || 0) + 1, jobs: saved?.jobs || [], createdAt: now, updatedAt: now }; return saved; }
+    if (command === "publication_save") {
+      const previous = saved;
+      const editing = args.input.id != null;
+      if (editing) {
+        assert.ok(previous);
+        assert.equal(args.input.id, previous.id);
+        assert.equal(args.input.revision, previous.revision);
+      }
+      saved = {
+        ...args.input,
+        id: editing ? previous.id : `qa-publication-${++fixturePublicationSequence}`,
+        revision: editing ? previous.revision + 1 : 1,
+        jobs: editing ? structuredClone(previous.jobs || []) : [],
+        createdAt: editing ? previous.createdAt : now,
+        updatedAt: now,
+      };
+      return saved;
+    }
     if (command === "publication_preflight") {
       const targets = saved.targets.filter(target => args.input.targetIds.includes(target.id));
       const checks = targets.map(target => ({ targetId: target.id, ready: target.platform === "naver_blog" ? target.options.confirmHandoff === true : target.platform !== "instagram" || target.options.confirmPublic === true, message: target.platform === "instagram" && target.options.confirmPublic !== true ? "Instagram 공개 게시 동의가 필요합니다." : target.platform === "naver_blog" && target.options.confirmHandoff !== true ? "수동 인계 확인이 필요합니다." : "실제 게시가 아닌 검증 fixture", details: { warnings: ["QA 필드 적용 안내"] } }));
@@ -315,6 +333,23 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   await page.screenshot({ path: resolve(out, "publication-narrow.png"), fullPage: true });
   report.checks.push("Narrow 820px layout has no horizontal page overflow");
+  await page.setViewportSize({ width: 1380, height: 1000 });
+  const precedingPublicationId = saved.id;
+  await studio.getByRole("button", { name: "새 초안", exact: true }).click();
+  await studio.getByLabel("게시 공통 제목", { exact: true }).fill("부분 대상 승인 회귀");
+  await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
+  for (const [label, platform] of [["YouTube", "youtube"], ["Instagram Reels", "instagram"], ["TikTok", "tiktok"]]) {
+    await studio.getByRole("button", { name: label, exact: true }).click();
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+  }
+  await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
+  await studio.getByLabel("TikTok 음악 사용 확인", { exact: false }).check();
+  await studio.getByLabel("표시된 계정·캡션·공개 범위와 TikTok 전송에 동의합니다.", { exact: true }).check();
+  await studio.getByRole("button", { name: "초안 저장", exact: true }).click();
+  assert.notEqual(saved.id, precedingPublicationId);
+  assert.equal(saved.revision, 1);
+  assert.deepEqual(saved.jobs, []);
+  report.checks.push("Fresh draft fixture gets a new identity/revision and never inherits another publication's jobs");
   await page.getByRole("button", { name: "AI 작업실", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "AI로 작성", exact: true }).count(), 0);
   assert.equal(await page.getByText("직접 작성에 사용할 로컬 AI 제공자", { exact: false }).count(), 0);
