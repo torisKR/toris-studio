@@ -1,6 +1,11 @@
 name: Resume verified desktop publication
 
 on:
+  # Register a new manual workflow when its definition is pushed. The job below
+  # still executes only for an explicit workflow_dispatch on main.
+  push:
+    branches: [main]
+    paths: ['.github/workflows/desktop-publish-resume.yml']
   workflow_dispatch:
     inputs:
       run_id:
@@ -13,7 +18,7 @@ permissions:
 
 jobs:
   publish:
-    if: github.repository == 'torisKR/toris-studio' && github.ref == 'refs/heads/main'
+    if: github.repository == 'torisKR/toris-studio' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     concurrency:
       group: desktop-publish-toris-studio
       cancel-in-progress: false
