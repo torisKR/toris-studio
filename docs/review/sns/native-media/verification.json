@@ -1,0 +1,43 @@
+{
+  "scope": "Actual Rust compositor and pinned bundled FFmpeg/FFprobe; synthetic isolated project",
+  "test": "bundled_tools_render_korean_chart_image_and_preview_matches_output",
+  "passed": true,
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": "24/1",
+    "codec": "h264",
+    "audio": "aac"
+  },
+  "decodedFrameTimesSec": [
+    0,
+    1,
+    1.9583333333333333
+  ],
+  "previewVsDecodedFrameMeanAbsoluteDifferenceBound": 3,
+  "systemFfmpegUsed": false,
+  "framesVisuallyInspected": true,
+  "userDataAccessed": false,
+  "files": [
+    {
+      "file": "start.png",
+      "bytes": 18156,
+      "sha256": "d4868ba8ece0cd4fd36d69939ea53a990cc27e950bb31aa7f9e6543d2a7e2fcb"
+    },
+    {
+      "file": "middle.png",
+      "bytes": 57725,
+      "sha256": "e277d3d7d76490016e47cb803560e919fba93b62376dc19f18c164c466559e2b"
+    },
+    {
+      "file": "end.png",
+      "bytes": 57730,
+      "sha256": "ab585ac177f1143b77c1f999de581c49a55750747c3281326a56c2f7ed66214d"
+    },
+    {
+      "file": "fixture.mp4",
+      "bytes": 33602,
+      "sha256": "df3c4a30b411c253c9d9c80cd5f75d5d0082247d5b2dea781850c3bb63b76997"
+    }
+  ]
+}

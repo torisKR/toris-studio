@@ -99,7 +99,7 @@ try {
   run("cargo",["test","--locked","--manifest-path","desktop/src-tauri/Cargo.toml","--no-default-features","--test","analytics_contract","--","--ignored","--test-threads=1"],{
     ...process.env,TORIS_STUDIO_TEST_DATABASE_URL:`postgresql://toris_app:fixture-only@127.0.0.1:${port}/${analyticsName}`,TMPDIR:scratch
   },true);
-  console.log("PASS: isolated migrations preserve legacy snapshots, hold unbound approvals once, retain X/Clip across reruns, and preserve handoff SQL constraints, manual handoff, user confirmation, queue recovery and competing claims; six real analytics persistence/expiry/backoff contracts also pass.");
+  console.log("PASS: isolated migrations preserve legacy snapshots, hold unbound approvals once, retain X/Clip across reruns, and preserve handoff SQL constraints, manual handoff, user confirmation, queue recovery and competing claims; all analytics ownership/persistence/expiry/backoff contracts also pass.");
 } finally {
   if (client) await client.end().catch(() => {});
   if (started) run(join(bin, "pg_ctl"), ["-D", data, "-m", "immediate", "-w", "stop"]);
