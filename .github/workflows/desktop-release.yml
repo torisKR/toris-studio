@@ -43,6 +43,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: node scripts/release-assets.mjs preflight
 
+      - name: Check locked dependency advisories and JavaScript contracts
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level=low
+          pnpm test
+          node --import tsx --test infrastructure/oauth-callback/callback.test.mjs
+          node --test scripts/publication-release-contract.test.mjs
+
   publication-safety:
     needs: prepare
     uses: ./.github/workflows/publication-checks.yml

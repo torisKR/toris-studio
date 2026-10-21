@@ -47,3 +47,13 @@ test('main and signed releases cannot skip the reusable publication gate', async
     assert.equal(desktop.split(`'${pattern}'`).length - 1, 2, `${pattern} must trigger both push and pull_request`);
   }
 });
+
+test('signed releases audit the locked dependencies before any packaging or publication', async () => {
+  const release = await source('.github/workflows/desktop-release.yml');
+  const prepare = job(release, 'prepare');
+  assert.match(prepare, /pnpm install --frozen-lockfile/);
+  assert.match(prepare, /pnpm audit --audit-level=low/);
+  assert.match(prepare, /pnpm test/);
+  assert.doesNotMatch(prepare, /continue-on-error: true|pnpm audit[^\n]*(?:\|\| true|--ignore)/);
+  assert.match(job(release, 'native'), /needs: \[prepare, publication-safety\]/);
+});
