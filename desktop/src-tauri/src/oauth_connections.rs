@@ -2,6 +2,7 @@
 use super::*;
 use uuid::Uuid;
 const INDEX: &str = "connections:v2";
+const COMMIT_INDEX: &str = "connection-commits:v2";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteIdentity {
@@ -80,6 +81,68 @@ fn save_connection(s: &OAuthService, c: &Connection) -> Result<(), String> {
     }
     Ok(())
 }
+fn commit_ids(s: &OAuthService) -> Result<Vec<String>, String> {
+    let result: Vec<String> = s
+        .store
+        .read(COMMIT_INDEX)?
+        .map(|v| serde_json::from_str(&v))
+        .transpose()
+        .map_err(|_| "연결 복구 목록 오류")?
+        .unwrap_or_default();
+    if result.len() > 100 || result.iter().any(|id| Uuid::parse_str(id).is_err()) {
+        return Err("연결 복구 목록을 확인하세요.".into());
+    }
+    Ok(result)
+}
+fn commit_connection(s: &OAuthService, c: &Connection) -> Result<(), String> {
+    if ids(s)?.contains(&c.id) {
+        return save_connection(s, c);
+    }
+    let mut pending = commit_ids(s)?;
+    if !pending.contains(&c.id) {
+        if pending.len() >= 100 {
+            return Err("보류된 연결 복구를 먼저 완료하세요.".into());
+        }
+        pending.push(c.id.clone());
+        verified_write(
+            s,
+            COMMIT_INDEX,
+            &serde_json::to_string(&pending).map_err(|_| "연결 복구 목록 저장 실패")?,
+        )?;
+    }
+    // The discovery marker is durable before the verified credential record.
+    // If the normal index write fails after code consumption, list can recover
+    // the exact record without replaying OAuth or asking for credentials again.
+    save_connection(s, c)?;
+    pending.retain(|id| id != &c.id);
+    verified_write(
+        s,
+        COMMIT_INDEX,
+        &serde_json::to_string(&pending).map_err(|_| "연결 복구 목록 저장 실패")?,
+    )
+}
+fn recover_commits(s: &OAuthService) -> Result<Vec<Value>, String> {
+    let mut pending = commit_ids(s)?;
+    let mut warnings = vec![];
+    let mut recovered = vec![];
+    for id in &pending {
+        match read_connection(s, id).and_then(|c| save_connection(s, &c)) {
+            Ok(()) => recovered.push(id.clone()),
+            Err(message) => {
+                warnings.push(json!({"connectionId":id,"recoverable":true,"message":message}))
+            }
+        }
+    }
+    if !recovered.is_empty() {
+        pending.retain(|id| !recovered.contains(id));
+        verified_write(
+            s,
+            COMMIT_INDEX,
+            &serde_json::to_string(&pending).map_err(|_| "연결 복구 목록 저장 실패")?,
+        )?;
+    }
+    Ok(warnings)
+}
 fn event(c: &mut Connection, now: u64, event: &str, outcome: &str) {
     c.audit.push(AuditEvent {
         at: now,
@@ -136,16 +199,25 @@ fn has_read(p: Provider, scopes: &[String]) -> bool {
 }
 fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
     let mut result = vec![];
-    let mut warnings = vec![];
+    let mut warnings = recover_commits(s)
+        .unwrap_or_else(|message| vec![json!({"kind":"connection_recovery","message":message})]);
     let now = s.clock.now();
     for id in ids(s)? {
         match read_connection(s, &id) {
             Ok(c) => {
                 let p = Provider::parse(&c.platform)?;
-                let connected =
-                    !c.disconnected && !c.session.needs_reconnect && c.session.expires_at > now;
+                let revocation_pending = pending_revocation(s, &id)?.is_some();
+                let refreshable = c.session.refreshable(p, now)
+                    || retained_candidate(s, &id, &c.session, now)?.is_some();
+                let connected = !revocation_pending
+                    && !c.disconnected
+                    && !c.session.needs_reconnect
+                    && c.session.expires_at > now;
                 let mut audit = c.audit.clone();
-                if let Some(raw) = s.store.read(&audit_key(&id))? {
+                if let Some(raw) = s.store.read(&audit_key(&id)).unwrap_or_else(|message| {
+                    warnings.push(json!({"connectionId":id,"kind":"audit","message":message}));
+                    None
+                }) {
                     if let Ok(external) = serde_json::from_str::<Vec<AuditEvent>>(&raw) {
                         audit.extend(external);
                         audit.sort_by_key(|e| e.at);
@@ -155,7 +227,7 @@ fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
                     }
                 }
                 for a in &c.identities {
-                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected,"needsReconnect":!c.disconnected&&(c.session.needs_reconnect||(!c.session.refreshable(p,now)&&c.session.expires_at<=now)),"refreshable":!c.disconnected&&c.session.refreshable(p,now),"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared}));
+                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending,"revocationPending":revocation_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared}));
                 }
             }
             Err(message) => warnings.push(json!({"connectionId":id,"message":message})),
@@ -299,6 +371,25 @@ fn same_identities(a: &[RemoteIdentity], b: &[RemoteIdentity]) -> bool {
             .map(|a| &a.account_id)
             .collect::<std::collections::HashSet<_>>()
 }
+fn retained_candidate(
+    s: &OAuthService,
+    id: &str,
+    current: &TokenSession,
+    now: u64,
+) -> Result<Option<TokenSession>, String> {
+    s.store
+        .read(&format!("refresh-candidate:v2:{id}"))?
+        .map(|raw| serde_json::from_str::<TokenSession>(&raw))
+        .transpose()
+        .map_err(|_| "토큰 갱신 복구 정보 오류".to_string())
+        .map(|candidate| {
+            candidate.filter(|c| {
+                c.issued_at >= current.issued_at
+                    && c.access_token != current.access_token
+                    && c.expires_at > now
+            })
+        })
+}
 async fn refresh_connection_locked(
     s: &OAuthService,
     id: &str,
@@ -307,14 +398,19 @@ async fn refresh_connection_locked(
     let mut c = read_connection(s, id)?;
     let p = Provider::parse(&c.platform)?;
     let now = s.clock.now();
-    if c.disconnected || !c.session.refreshable(p, now) {
+    let candidate_key = format!("refresh-candidate:v2:{id}");
+    let candidate = retained_candidate(s, id, &c.session, now)?;
+    if c.disconnected
+        || pending_revocation(s, id)?.is_some()
+        || (candidate.is_none() && !c.session.refreshable(p, now))
+    {
         return if automatic {
             Ok(())
         } else {
             Err("갱신할 수 없는 연결입니다. 다시 로그인하세요.".into())
         };
     }
-    if p.meta() && now < c.session.issued_at.saturating_add(DAY) {
+    if candidate.is_none() && p.meta() && now < c.session.issued_at.saturating_add(DAY) {
         return if automatic {
             Ok(())
         } else {
@@ -322,23 +418,12 @@ async fn refresh_connection_locked(
         };
     }
     if automatic
+        && candidate.is_none()
         && (c.session.retry_at > now
             || c.session.expires_at > now.saturating_add(if p.meta() { 7 * DAY } else { 300 }))
     {
         return Ok(());
     }
-    let candidate_key = format!("refresh-candidate:v2:{id}");
-    let candidate = s
-        .store
-        .read(&candidate_key)?
-        .map(|raw| serde_json::from_str::<TokenSession>(&raw))
-        .transpose()
-        .map_err(|_| "토큰 갱신 복구 정보 오류")?
-        .filter(|candidate| {
-            candidate.issued_at >= c.session.issued_at
-                && candidate.access_token != c.session.access_token
-                && candidate.expires_at > now
-        });
     let refreshed = if let Some(candidate) = candidate {
         Ok(candidate)
     } else {
@@ -412,6 +497,9 @@ async fn access_locked(
     scopes: &[&str],
     publish: bool,
 ) -> Result<PublishingAccess, String> {
+    if pending_revocation(s, id)?.is_some() {
+        return Err("해제한 계정의 Google 인증 취소를 기다리고 있습니다.".into());
+    }
     let mut c = read_connection(s, id)?;
     validate_binding(&c, platform, account, scopes)?;
     if c.session.expires_at <= s.clock.now() + 60 {
@@ -475,6 +563,68 @@ async fn access_locked(
         tiktok_audit_declared: p == Provider::Tiktok && c.client.tiktok_audit_declared,
     })
 }
+#[derive(Serialize, Deserialize)]
+struct PendingRevocation {
+    token: String,
+    retry_at: u64,
+    failures: u8,
+}
+fn revocation_key(id: &str) -> String {
+    format!("revocation-pending:v2:{id}")
+}
+fn pending_revocation(s: &OAuthService, id: &str) -> Result<Option<PendingRevocation>, String> {
+    s.store
+        .read(&revocation_key(id))?
+        .map(|raw| serde_json::from_str(&raw).map_err(|_| "인증 취소 복구 정보 오류".into()))
+        .transpose()
+}
+async fn retry_revocation(s: &OAuthService, id: &str, force: bool) -> Result<(), String> {
+    let Some(mut pending) = pending_revocation(s, id)? else {
+        return Ok(());
+    };
+    let c = read_connection(s, id)?;
+    if c.platform != "youtube" {
+        return Err("인증 취소 플랫폼 정보 오류".into());
+    }
+    if !force && pending.retry_at > s.clock.now() {
+        return Ok(());
+    }
+    let result = s
+        .transport
+        .send(TokenRequest {
+            endpoint: GOOGLE_REVOKE_ENDPOINT,
+            get: false,
+            parameters: vec![("token".into(), pending.token.clone())],
+            bearer: None,
+        })
+        .await;
+    match result {
+        Ok(_) => {
+            // A previous process may have crashed with the durable deny marker
+            // committed but the active record not yet cleared. Never remove the
+            // marker until its disconnected tombstone has also been verified.
+            disconnect_locked(s, id)?;
+            s.store.delete(&revocation_key(id))?;
+            connection_audit(s, id, "remote_revocation", "confirmed")?;
+            Ok(())
+        }
+        Err(f) => {
+            pending.failures = pending.failures.saturating_add(1);
+            pending.retry_at = s.clock.now().saturating_add(match pending.failures {
+                1 => 60,
+                2 => 300,
+                _ => 900,
+            });
+            verified_write(
+                s,
+                &revocation_key(id),
+                &serde_json::to_string(&pending).map_err(|_| "인증 취소 복구 정보 저장 실패")?,
+            )?;
+            connection_audit(s, id, "remote_revocation", f.outcome)?;
+            Err("이 연결은 로컬에서 해제되었습니다. Google 인증 취소는 연결이 복구되면 다시 시도합니다.".into())
+        }
+    }
+}
 fn disconnect_locked(s: &OAuthService, id: &str) -> Result<(), String> {
     let mut c = read_connection(s, id)?;
     if let Some(p) = s
@@ -494,6 +644,42 @@ fn disconnect_locked(s: &OAuthService, id: &str) -> Result<(), String> {
     s.store.delete(&format!("refresh-candidate:v2:{id}"))?;
     Ok(())
 }
+async fn disconnect_connection(s: &OAuthService, id: &str) -> Result<(), String> {
+    let c = read_connection(s, id)?;
+    if c.platform != "youtube" {
+        return disconnect_locked(s, id);
+    }
+    if pending_revocation(s, id)?.is_none() {
+        let candidate = s
+            .store
+            .read(&format!("refresh-candidate:v2:{id}"))?
+            .map(|raw| serde_json::from_str::<TokenSession>(&raw))
+            .transpose()
+            .map_err(|_| "토큰 갱신 복구 정보 오류")?;
+        let session = candidate.as_ref().unwrap_or(&c.session);
+        let token = session
+            .refresh_token
+            .as_deref()
+            .unwrap_or(&session.access_token);
+        if token.is_empty() {
+            return disconnect_locked(s, id);
+        }
+        let pending = PendingRevocation {
+            token: token.into(),
+            retry_at: 0,
+            failures: 0,
+        };
+        // This durable marker blocks every native access before remote I/O and
+        // survives a crash or a vault failure while clearing the active record.
+        verified_write(
+            s,
+            &revocation_key(id),
+            &serde_json::to_string(&pending).map_err(|_| "인증 취소 복구 정보 저장 실패")?,
+        )?;
+    }
+    let _ = retry_revocation(s, id, true).await;
+    disconnect_locked(s, id)
+}
 async fn begin_connection(
     s: &Arc<OAuthService>,
     p: Provider,
@@ -510,6 +696,11 @@ async fn begin_connection(
     }
     if !["read", "publish"].contains(&purpose) {
         return Err("읽기 또는 게시 연결 목적을 선택하세요.".into());
+    }
+    if let Some(id) = existing {
+        if pending_revocation(s, id)?.is_some() {
+            return Err("기존 Google 인증 취소가 완료된 뒤 다시 연결하세요.".into());
+        }
     }
     let id = existing
         .map(str::to_owned)
@@ -729,6 +920,7 @@ async fn complete_connection(
         audit: old.as_ref().map(|c| c.audit.clone()).unwrap_or_default(),
         legacy_source: old.and_then(|c| c.legacy_source),
     };
+    commit_connection(s, &c)?;
     connection_audit(
         s,
         id,
@@ -739,7 +931,6 @@ async fn complete_connection(
         },
         "identity_verified",
     )?;
-    save_connection(s, &c)?;
     connection_list_locked(s)
 }
 async fn listen_connection(
@@ -878,7 +1069,11 @@ pub(super) async fn refresh_all() -> Result<(), String> {
     let mut failed = false;
     for id in index {
         let _g = s.gate.lock().await;
-        failed |= refresh_connection_locked(s, &id, true).await.is_err();
+        failed |= if pending_revocation(s, &id)?.is_some() {
+            retry_revocation(s, &id, false).await.is_err()
+        } else {
+            refresh_connection_locked(s, &id, true).await.is_err()
+        };
     }
     if failed {
         Err("일부 연결 갱신 실패".into())
@@ -942,8 +1137,12 @@ pub(super) async fn dispatch(input: Value) -> Result<Value, String> {
         "disconnect" => {
             let s = service();
             let _g = s.gate.lock().await;
-            disconnect_locked(s, id()?)?;
-            connection_list_locked(s)
+            disconnect_connection(s, id()?).await?;
+            let mut result = connection_list_locked(s)?;
+            if pending_revocation(s, id()?)?.is_some() {
+                result["warnings"].as_array_mut().unwrap().push(json!({"connectionId":id()?,"kind":"revocation_pending","message":"로컬 연결은 해제되었습니다. Google 인증 취소는 연결이 복구되면 다시 시도합니다."}));
+            }
+            Ok(result)
         }
         "migrateLegacy" => {
             let s = service();

@@ -30,6 +30,7 @@ use tokio::{
 };
 use url::Url;
 
+const GOOGLE_REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
 const SERVICE: &str = "kr.toris.studio.oauth.v1";
 const CALLBACK_PORT: u16 = 38471;
 const LOGIN_TTL: u64 = 300;
@@ -592,27 +593,38 @@ impl TokenTransport for OfficialTransport {
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            let body: Value = serde_json::from_slice(&bytes)
-                .map_err(|_| TokenFailure::transient("invalid_response"))?;
-            if let Some(error) = provider_error(&body) {
-                return Err(error);
-            }
-            if !status.is_success() {
-                return Err(if status.as_u16() == 401 {
-                    TokenFailure::invalid()
-                } else {
-                    TokenFailure::transient("provider_failure")
-                });
-            }
-            Ok(body)
+            parse_token_response(request.endpoint, status.as_u16(), &bytes)
         })
     }
+}
+fn parse_token_response(endpoint: &str, status: u16, bytes: &[u8]) -> Result<Value, TokenFailure> {
+    // Google returns HTTP 200 with no JSON body after a successful revocation.
+    if endpoint == GOOGLE_REVOKE_ENDPOINT
+        && status == 200
+        && bytes.iter().all(u8::is_ascii_whitespace)
+    {
+        return Ok(json!({}));
+    }
+    let body: Value =
+        serde_json::from_slice(bytes).map_err(|_| TokenFailure::transient("invalid_response"))?;
+    if let Some(error) = provider_error_for(endpoint, &body) {
+        return Err(error);
+    }
+    if !(200..300).contains(&status) {
+        return Err(if status == 401 {
+            TokenFailure::invalid()
+        } else {
+            TokenFailure::transient("provider_failure")
+        });
+    }
+    Ok(body)
 }
 fn allowed_endpoint(endpoint: &str) -> bool {
     PROVIDERS
         .into_iter()
         .any(|p| p.token_endpoint() == endpoint)
         || [
+            GOOGLE_REVOKE_ENDPOINT,
             "https://graph.threads.net/access_token",
             "https://graph.threads.net/refresh_access_token",
             "https://graph.instagram.com/access_token",
@@ -628,6 +640,29 @@ fn allowed_endpoint(endpoint: &str) -> bool {
             "https://graph.facebook.com/v25.0/me/permissions",
         ]
         .contains(&endpoint)
+}
+fn provider_error_for(endpoint: &str, body: &Value) -> Option<TokenFailure> {
+    if endpoint.starts_with("https://open.tiktokapis.com/v2/") {
+        if let Some(code) = body["error"]["code"].as_str() {
+            return if code == "ok" {
+                None
+            } else if [
+                "access_token_invalid",
+                "access_token_expired",
+                "invalid_token",
+                "invalid_grant",
+                "invalid_refresh_token",
+                "scope_not_authorized",
+            ]
+            .contains(&code)
+            {
+                Some(TokenFailure::invalid())
+            } else {
+                Some(TokenFailure::transient("provider_rejected"))
+            };
+        }
+    }
+    provider_error(body)
 }
 fn provider_error(body: &Value) -> Option<TokenFailure> {
     let error = body
@@ -1915,6 +1950,11 @@ pub(super) mod tests {
         }
     }
     pub(super) struct TestClock(AtomicU64);
+    impl TestClock {
+        pub(super) fn set(&self, now: u64) {
+            self.0.store(now, Ordering::Relaxed);
+        }
+    }
     impl Clock for TestClock {
         fn now(&self) -> u64 {
             self.0.load(Ordering::Relaxed)
