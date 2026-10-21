@@ -12,14 +12,14 @@ importers:
   .:
     dependencies:
       '@modelcontextprotocol/express':
-        specifier: 2.0.1
-        version: 2.0.1(@modelcontextprotocol/server@2.2.0)(express@5.2.1(supports-color@8.1.1))
+        specifier: 2.0.2
+        version: 2.0.2(@modelcontextprotocol/server@2.3.0)(express@5.2.1(supports-color@8.1.1))
       '@modelcontextprotocol/node':
         specifier: 2.1.0
-        version: 2.1.0(@modelcontextprotocol/server@2.2.0)(hono@4.13.11)
+        version: 2.1.0(@modelcontextprotocol/server@2.3.0)(hono@4.13.11)
       '@modelcontextprotocol/server':
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@remotion/bundler':
         specifier: 4.0.530
         version: 4.0.530(@swc/helpers@0.5.23)(lightningcss@1.33.0)(postcss@8.5.28)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -719,15 +719,15 @@ packages:
     peerDependencies:
       mediabunny: ^1.0.0
 
-  '@modelcontextprotocol/core@2.2.0':
-    resolution: {integrity: sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw==}
+  '@modelcontextprotocol/core@2.3.0':
+    resolution: {integrity: sha512-09BHFaNVBe5pB2AhzCfLj0cqmsKLERvZQ4FblzP90UMGLaXVqdZPByFjURwsUYCmxonUW2yAwgTTvle+8O2/8w==}
     engines: {node: '>=20'}
 
-  '@modelcontextprotocol/express@2.0.1':
-    resolution: {integrity: sha512-ufZbY2kxdJH5sJqMMG+trJOKhob7qDzoh9elVu/TYaKIMBChm9GfF8aee/zj1yOb3yXHiP0qYDcuauVvNGyB6A==}
+  '@modelcontextprotocol/express@2.0.2':
+    resolution: {integrity: sha512-lUvfV7gT/tgP8nLRs0ajUtgL+MlMNWWHAls5c9cf4PyBexq3EgmhWWrS4irQOC9OoKuUsHHcNjUw9urhHz542g==}
     engines: {node: '>=20'}
     peerDependencies:
-      '@modelcontextprotocol/server': ^2.1.0
+      '@modelcontextprotocol/server': ^2.3.0
       express: ^4.18.0 || ^5.0.0
 
   '@modelcontextprotocol/node@2.1.0':
@@ -740,8 +740,8 @@ packages:
       hono:
         optional: true
 
-  '@modelcontextprotocol/server@2.2.0':
-    resolution: {integrity: sha512-qFnltjus6Gk8Lx6J1w2RXmr3YPN22MNT6qD6zjAkaiWIlFIFxWClz0rXHNuJF/KSUyn5YGhkSvXkWDbQHVLFEQ==}
+  '@modelcontextprotocol/server@2.3.0':
+    resolution: {integrity: sha512-+6b0LdsQLmHsvS7J6sQJ4weTpzUn61fU1JKS+321/+IyDYoHW5CR2Tgqcs6GgAAQvlesCo6yX3xttgmx+XGtJw==}
     engines: {node: '>=20'}
 
   '@module-federation/error-codes@0.22.0':
@@ -3207,26 +3207,26 @@ snapshots:
     dependencies:
       mediabunny: 1.56.1
 
-  '@modelcontextprotocol/core@2.2.0':
+  '@modelcontextprotocol/core@2.3.0':
     dependencies:
       zod: 4.5.4
 
-  '@modelcontextprotocol/express@2.0.1(@modelcontextprotocol/server@2.2.0)(express@5.2.1(supports-color@8.1.1))':
+  '@modelcontextprotocol/express@2.0.2(@modelcontextprotocol/server@2.3.0)(express@5.2.1(supports-color@8.1.1))':
     dependencies:
-      '@modelcontextprotocol/server': 2.2.0
+      '@modelcontextprotocol/server': 2.3.0
       cors: 2.8.6
       express: 5.2.1(supports-color@8.1.1)
 
-  '@modelcontextprotocol/node@2.1.0(@modelcontextprotocol/server@2.2.0)(hono@4.13.11)':
+  '@modelcontextprotocol/node@2.1.0(@modelcontextprotocol/server@2.3.0)(hono@4.13.11)':
     dependencies:
       '@hono/node-server': 1.19.17(hono@4.13.11)
-      '@modelcontextprotocol/server': 2.2.0
+      '@modelcontextprotocol/server': 2.3.0
     optionalDependencies:
       hono: 4.13.11
 
-  '@modelcontextprotocol/server@2.2.0':
+  '@modelcontextprotocol/server@2.3.0':
     dependencies:
-      '@modelcontextprotocol/core': 2.2.0
+      '@modelcontextprotocol/core': 2.3.0
       zod: 4.5.4
 
   '@module-federation/error-codes@0.22.0': {}
