@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir,writeFile } from 'node:fs/promises';
+import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import {homedir} from 'node:os';
+import {tmpdir} from 'node:os';
 import { chromium } from 'playwright';
 import { createFixtureServer, projectRoot,fixtureBridge,shellFixture,unhandled } from './ui-fixture-helpers.mjs';
 
@@ -26,13 +26,16 @@ const legacySource={id:'legacy-source-A',sourceKind:'import',platform:'youtube',
 const legacyRow=observation({id:'legacy-observation-A',sourceId:legacySource.id,sourceKind:'import',reportChannelId:'channel-youtube',accountId:'UC-fixture-A',connectionId:null,expiresAt:null,metric:'legacy_report_views',definition:'이전 계정 공식 내보내기 조회수',timezone:'Asia/Seoul',value:11,apiVersion:'user-report'});
 const imports=[legacySource],importRows=[legacyRow],previews=new Map(),creations=[],calls=[],errors=[];let clipboard='',paused=false,previewInput,deferAccountQuery=false,deferMappedPreview=false;const pendingAccountQueries=[],pendingMappedPreviews=[],exports=[];
 const report={adapter:'Actual React application in headless Chromium with explicit sanitized IPC fixtures; native/provider/real RDC execution is separate',checks:[],screenshots:[],errors,node:process.version};
-const server=await createFixtureServer({configFile:path.join(projectRoot,'desktop/vite.config.ts'),server:{port:0,strictPort:false,watch:{ignored:['**/src-tauri/**','**/docs/review/**']}}});await server.listen();
-let browser,page;
+let server,browser,page,credentialFixture;
 const status=()=>({schemaReady:true,migrationRequired:false,paused,jobs:[{connectionId:connections[0].connectionId,platform:'youtube',accountId:'UC-fixture-A',status:'partial',lastSyncAt:now,nextSyncAt:now,cursor:{},coverage:{from:today,to:today,partial:true},message:'검증 자료: 실제 반환한 하루만 표시합니다.'}],capabilities:platforms.map(platform=>({platform,apiVersion:platform==='x'?'manual-report':'fixture-v1',accountRequirement:'검증 fixture의 실제 계정 선택 필요',requiredScopes:[],metrics:['views'],history:'확인한 기간만 표시',latency:'원본 집계 지연 유지',limitations:['실제 제공자의 권한·응답을 검증한 결과가 아닙니다.'],manualOnly:['x','naver_blog','naver_clip'].includes(platform)})),limits:{maxBytes:5242880,maxRows:10000,maxColumns:100}});
 const waitFixture=async(test,label)=>{for(let i=0;i<100;i++){if(test())return;await page.waitForTimeout(50);}assert.fail(`Fixture did not reach ${label}`);};
 const capture=async name=>{await page.evaluate(()=>scrollTo(0,0));const file=`${name}.png`;await page.screenshot({path:path.join(artifacts,file),fullPage:true});report.screenshots.push(file);};
 const noOverflow=async label=>{const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body *')].filter(el=>{const r=el.getBoundingClientRect();return r.width&&r.right>innerWidth+1&&getComputedStyle(el).position!=='fixed';}).slice(0,10).map(el=>({tag:el.tagName,cls:el.className,right:el.getBoundingClientRect().right}))}));assert.ok(layout.scroll<=layout.width+1,`${label}: ${JSON.stringify(layout)}`);};
 try{
+ credentialFixture=await mkdtemp(path.join(tmpdir(),'toris-sns-denied-'));
+ const credentialPath=path.join(credentialFixture,'.codex','auth.json'),credentialSentinel=`fixture-only-${randomUUID()}`;
+ await mkdir(path.dirname(credentialPath));await writeFile(credentialPath,JSON.stringify({fixture:credentialSentinel}));
+ server=await createFixtureServer({configFile:path.join(projectRoot,'desktop/vite.config.ts'),server:{port:0,strictPort:false,watch:{ignored:['**/src-tauri/**','**/docs/review/**']}}});await server.listen();
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1380,height:900},reducedMotion:'reduce'});page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));
  await page.exposeFunction('__snsFixture',async(command,args={})=>{
   calls.push({command,args:structuredClone(args)});
@@ -88,7 +91,7 @@ try{
  });
  await page.addInitScript(()=>{window.__TAURI_INTERNALS__={invoke:(command,args)=>window.__snsFixture(command,args)};});
  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`,{waitUntil:'networkidle'});
- const denied=await page.request.get(new URL(`/@fs/${path.join(homedir(),'.codex','auth.json').replaceAll('\\','/')}`,page.url()).href);assert.equal(denied.status(),403);report.checks.push('Actual Vite worktree policy serves app and rejects a user-home credential path before content exposure');
+ const denied=await page.request.get(new URL(`/@fs/${credentialPath.replaceAll('\\','/')}`,page.url()).href);assert.equal(denied.status(),403);assert.ok(!(await denied.text()).includes(credentialSentinel));report.checks.push('Actual Vite worktree policy serves app and rejects an existing owned credential-path fixture outside allowed roots without exposing its content');
  const main=page.getByRole('navigation',{name:'주 메뉴',exact:true});
  assert.deepEqual(await main.getByRole('button').allTextContents(),['SNS 관리','콘텐츠','제작','게시']);
  await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).waitFor();
@@ -167,4 +170,4 @@ try{
  await page.getByLabel('주제와 작성 방향',{exact:false}).fill('요청 뒤 달라진 주제');await inbox.getByRole('button',{name:'초안 검토',exact:true}).click();await inbox.getByRole('alert').filter({hasText:'요청 이후 주제·자료가 변경'}).waitFor();assert.equal(await page.getByLabel('문구 · 직접 편집',{exact:true}).inputValue(),creations[0].draft.text);report.checks.push('Keyboard navigation and remembered section context preserve unsaved work; RDC copy stays saved-only and platform or topic changes make received prose stale without overwriting edited context');
  await noOverflow('820 creation');await capture('creation-820');await page.setViewportSize({width:1380,height:900});await noOverflow('1380 creation');await capture('creation-1380');
  assert.deepEqual(errors,[]);report.passed=true;report.calls=calls.map(({command,args})=>({command,...(['oauth_connection_dispatch','analytics_dispatch'].includes(command)?{action:args.input?.action}:{})}));await writeFile(path.join(artifacts,'verification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
-}catch(error){report.failure=String(error);await writeFile(path.join(artifacts,'failure.json'),JSON.stringify(report,null,2));if(page){await page.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(path.join(artifacts,'failure.html'),await page.content().catch(()=>''));}throw error;}finally{await browser?.close();await server.close();}
+}catch(error){report.failure=String(error);await writeFile(path.join(artifacts,'failure.json'),JSON.stringify(report,null,2));if(page){await page.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(path.join(artifacts,'failure.html'),await page.content().catch(()=>''));}throw error;}finally{try{await browser?.close();}finally{try{await server?.close();}finally{if(credentialFixture)await rm(credentialFixture,{recursive:true,force:true});}}}
