@@ -11,9 +11,9 @@ pnpm desktop:dev
 pnpm desktop:build
 ```
 
-앱의 **로컬 설정**에서 OrbStack/Docker PostgreSQL을 준비하고, **SNS 로그인**에서 각 플랫폼의 OAuth 앱 정보를 등록합니다. OAuth 토큰과 저장한 API 키는 macOS Keychain / Windows 자격 증명 관리자에 보관합니다. YouTube 공개 채널·영상 조회와 트렌드 수집은 YouTube Data API 키를 사용합니다. 로컬 AI 작업실은 기존 OpenCodex / teamclaude 또는 로그인한 Claude CLI에 연결합니다.
+앱의 **설정**에서 기존 OrbStack/Docker PostgreSQL을 연결하고, **SNS 관리 → 채널 → 연결·권한**에서 플랫폼별 OAuth 계정을 연결합니다. OAuth 토큰과 저장한 API 키는 macOS Keychain / Windows 자격 증명 관리자에 보관합니다. YouTube 공개 채널·영상 조회와 트렌드 수집은 YouTube Data API 키를 사용합니다. 문구·이미지·영상·모션 제작은 실제 ChatGPT 대화와 [Remote Desktop Commander](docs/REMOTE_DESKTOP_WORKFLOW.md)로 연결합니다. 코딩 기능은 제거했습니다.
 
-채널·콘텐츠·발행 계획은 로컬 DB에서 관리합니다. 발행 계획 저장은 SNS 자동 게시 실행을 의미하지 않으며, 각 플랫폼의 게시 권한과 기능은 별도 구현 대상입니다. 기본 브라우저의 로그인 쿠키를 이용하고 OAuth 연결을 갱신합니다. 상세한 실행·검증 범위는 [데스크톱 가이드](docs/DESKTOP.md), 앱 등록과 갱신 제한은 [OAuth 가이드](docs/OAUTH.md)를 참고하세요.
+채널·콘텐츠·발행 계획은 로컬 DB에서 관리합니다. 발행 계획 저장은 SNS 자동 게시 실행을 의미하지 않으며, 실제 게시에는 지원하는 플랫폼의 게시 권한과 명시적 승인이 필요합니다. X와 네이버 블로그·클립은 수동 보고서·수동 게시를 사용합니다. 기본 브라우저의 로그인 쿠키를 이용하고 OAuth 연결을 갱신합니다. 상세한 실행·검증 범위는 [데스크톱 가이드](docs/DESKTOP.md), 앱 등록과 갱신 제한은 [OAuth 가이드](docs/OAUTH.md)를 참고하세요.
 
 **키워드 탐색**에서 키워드로 수집 콘텐츠를 찾고, 콘텐츠별 실제 검색어와 추출 단어를 확인할 수 있습니다. 선택한 공개 원문은 로컬 Crawl4AI 컨테이너로 수집합니다. 공식 API 범위와 검색 근거·10개 도구의 적용 상태는 [키워드 탐색 설계](docs/KEYWORD_EXPLORER.md)에 정리했습니다. 기존 Opal 탐색은 이 화면으로 교체하며 개인 설정과 과거 DB 기록은 보존합니다.
 
@@ -33,9 +33,9 @@ pnpm desktop:dev
 pnpm desktop:build
 ```
 
-앱의 **로컬 설정**에서 OrbStack/Docker PostgreSQL을 준비하고, **SNS 로그인**에서 각 플랫폼의 OAuth 앱 정보를 등록합니다. OAuth 토큰과 저장한 API 키는 macOS Keychain / Windows 자격 증명 관리자에 보관합니다. YouTube 공개 채널·영상 조회와 트렌드 수집은 YouTube Data API 키를 사용합니다. 로컬 AI 작업실은 기존 OpenCodex / teamclaude 또는 로그인한 Claude CLI에 연결합니다.
+앱의 **설정**에서 기존 OrbStack/Docker PostgreSQL을 연결하고, **SNS 관리 → 채널 → 연결·권한**에서 플랫폼별 OAuth 계정을 연결합니다. OAuth 토큰과 저장한 API 키는 macOS Keychain / Windows 자격 증명 관리자에 보관합니다. YouTube 공개 채널·영상 조회와 트렌드 수집은 YouTube Data API 키를 사용합니다. 문구·이미지·영상·모션 제작은 실제 ChatGPT 대화와 [Remote Desktop Commander](docs/REMOTE_DESKTOP_WORKFLOW.md)로 연결합니다. 코딩 기능은 제거했습니다.
 
-채널·콘텐츠·발행 계획은 로컬 DB에서 관리합니다. 발행 계획 저장은 SNS 자동 게시 실행을 의미하지 않으며, 각 플랫폼의 게시 권한과 기능은 별도 구현 대상입니다. 기본 브라우저의 로그인 쿠키를 이용하고 OAuth 연결을 갱신합니다. 상세한 실행·검증 범위는 [데스크톱 가이드](docs/DESKTOP.md), 앱 등록과 갱신 제한은 [OAuth 가이드](docs/OAUTH.md)를 참고하세요.
+채널·콘텐츠·발행 계획은 로컬 DB에서 관리합니다. 발행 계획 저장은 SNS 자동 게시 실행을 의미하지 않으며, 실제 게시에는 지원하는 플랫폼의 게시 권한과 명시적 승인이 필요합니다. X와 네이버 블로그·클립은 수동 보고서·수동 게시를 사용합니다. 기본 브라우저의 로그인 쿠키를 이용하고 OAuth 연결을 갱신합니다. 상세한 실행·검증 범위는 [데스크톱 가이드](docs/DESKTOP.md), 앱 등록과 갱신 제한은 [OAuth 가이드](docs/OAUTH.md)를 참고하세요.
 
 **키워드 탐색**에서 키워드로 수집 콘텐츠를 찾고, 콘텐츠별 실제 검색어와 추출 단어를 확인할 수 있습니다. 선택한 공개 원문은 로컬 Crawl4AI 컨테이너로 수집합니다. 공식 API 범위와 검색 근거·10개 도구의 적용 상태는 [키워드 탐색 설계](docs/KEYWORD_EXPLORER.md)에 정리했습니다. 기존 Opal 탐색은 이 화면으로 교체하며 개인 설정과 과거 DB 기록은 보존합니다.
 

@@ -46,7 +46,7 @@ ChatGPT에 연결한 후 앱의 **확인 요청 복사** 내용을 대화에 전
 
 - `cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test release_integration_contract`
 - `cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib oauth::upload_tests`
-- `node scripts/verify-integration-ui.mjs` (브라우저 IPC fixture; 실제 공개 게시하지 않음)
+- `node scripts/verify-sns-workspace.mjs` (브라우저 IPC fixture; 실제 공개 게시하지 않음)
 - `cargo run --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --example publishing_sample_probe -- --generate-local-sample` (실제 로컬 샘플 생성; 전송하지 않음)
 
 기존 업데이트 공개키와 데이터 경로를 유지합니다. 세 플랫폼 설치 파일과 서명/검증 manifest가 모두 준비된 뒤 GitHub Release와 GitHub Packages OCI에 배포합니다. 앱 업데이트는 공개 Release의 `latest.json`을 사용하며, package visibility와 무관합니다. Apple 공증·Windows Authenticode는 Tauri 업데이트 서명과 별개입니다.

@@ -14,7 +14,8 @@ try {
   await db.query(await readFile("db/migrations/001_social.sql", "utf8"));
   for (const version of ["004_opal_research", "005_opal_result_shape", "006_keyword_explorer", "007_publications", "008_publication_handoffs", "009_oauth_connections", "010_analytics", "011_sns_workspace"]) {
     const applied = await db.query("SELECT 1 FROM social_schema_migrations WHERE version=$1", [version]);
-    if (!applied.rowCount) await db.query(await readFile(`db/migrations/${version}.sql`, "utf8"));
+    const needsReportOwners = version === "011_sns_workspace" && (await db.query("SELECT to_regclass('public.analytics_report_owners') IS NULL AS missing")).rows[0].missing;
+    if (!applied.rowCount || needsReportOwners) await db.query(await readFile(`db/migrations/${version}.sql`, "utf8"));
   }
   await db.query("COMMIT");
   console.log("Social schemas through 011 are ready; existing records preserved and manual handoffs remain non-executable.");

@@ -54,8 +54,13 @@ fn stack_root() -> Result<PathBuf, String> {
         HANDOFF_SCHEMA,
     )
     .map_err(|_| "DB 설정 저장 실패")?;
-    for (name, schema) in [("009_oauth_connections.sql",OAUTH_SCHEMA),("010_analytics.sql",ANALYTICS_SCHEMA),("011_sns_workspace.sql",WORKSPACE_SCHEMA)] {
-        fs::write(root.join("db/migrations").join(name),schema).map_err(|_|"SNS 스키마 저장 실패")?;
+    for (name, schema) in [
+        ("009_oauth_connections.sql", OAUTH_SCHEMA),
+        ("010_analytics.sql", ANALYTICS_SCHEMA),
+        ("011_sns_workspace.sql", WORKSPACE_SCHEMA),
+    ] {
+        fs::write(root.join("db/migrations").join(name), schema)
+            .map_err(|_| "SNS 스키마 저장 실패")?;
     }
     #[cfg(unix)]
     {
@@ -285,9 +290,39 @@ pub async fn migrate_database() -> Result<(), String> {
         .batch_execute(SCHEMA)
         .await
         .map_err(|_| "DB 스키마 갱신 실패")?;
-    for (version,schema) in [("004_opal_research",OPAL_SCHEMA),("005_opal_result_shape",OPAL_RESULT_SHAPE),("006_keyword_explorer",KEYWORD_SCHEMA),("007_publications",PUBLICATION_SCHEMA),("008_publication_handoffs",HANDOFF_SCHEMA),("009_oauth_connections",OAUTH_SCHEMA),("010_analytics",ANALYTICS_SCHEMA),("011_sns_workspace",WORKSPACE_SCHEMA)] {
-        let applied:bool=transaction.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version=$1)",&[&version]).await.map_err(|_|"마이그레이션 이력 확인 실패")?.get(0);
-        if !applied { transaction.batch_execute(schema).await.map_err(|_|"SNS DB 스키마 갱신 실패")?; }
+    for (version, schema) in [
+        ("004_opal_research", OPAL_SCHEMA),
+        ("005_opal_result_shape", OPAL_RESULT_SHAPE),
+        ("006_keyword_explorer", KEYWORD_SCHEMA),
+        ("007_publications", PUBLICATION_SCHEMA),
+        ("008_publication_handoffs", HANDOFF_SCHEMA),
+        ("009_oauth_connections", OAUTH_SCHEMA),
+        ("010_analytics", ANALYTICS_SCHEMA),
+        ("011_sns_workspace", WORKSPACE_SCHEMA),
+    ] {
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version=$1)",
+                &[&version],
+            )
+            .await
+            .map_err(|_| "마이그레이션 이력 확인 실패")?
+            .get(0);
+        let missing_report_owners = version == "011_sns_workspace"
+            && transaction
+                .query_one(
+                    "SELECT to_regclass('public.analytics_report_owners') IS NULL",
+                    &[],
+                )
+                .await
+                .map_err(|_| "보고서 소유자 저장소 확인 실패")?
+                .get::<_, bool>(0);
+        if !applied || missing_report_owners {
+            transaction
+                .batch_execute(schema)
+                .await
+                .map_err(|_| "SNS DB 스키마 갱신 실패")?;
+        }
     }
     transaction
         .commit()
@@ -309,7 +344,7 @@ pub async fn migrate_configured_publications(config: &AppConfig) -> Result<(), S
         .map_err(|_| "DB 스키마 상태를 확인하지 못했습니다.")?
         .get::<_, Option<String>>(0)
         .is_some();
-    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='011_sns_workspace')",&[]).await
+    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='011_sns_workspace') AND to_regclass('public.analytics_report_owners') IS NOT NULL",&[]).await
         .map_err(|_|"DB 마이그레이션 상태를 확인하지 못했습니다.")?.get::<_,bool>(0) {return Ok(());}
     drop(session);
     let raw = config

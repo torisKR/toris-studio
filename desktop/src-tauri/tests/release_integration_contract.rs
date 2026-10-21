@@ -16,9 +16,27 @@ async fn packaged_mcp_lists_real_tools_and_queues_without_credentials() {
     .await
     .unwrap();
     let tools = list["result"]["tools"].as_array().unwrap();
-    let names: std::collections::BTreeSet<&str> = tools.iter().map(|t|t["name"].as_str().unwrap()).collect();
-    let expected:std::collections::BTreeSet<&str>=["studio_connection_check","studio_asset_presets","studio_asset_list","studio_asset_request","studio_asset_receive","studio_asset_resize","studio_asset_create_3d","studio_asset_review","studio_asset_job_status","studio_publication_draft_receive","studio_motion_request_get","studio_motion_draft_receive","studio_creation_request_get","studio_creation_draft_receive"].into_iter().collect();
-    assert_eq!(names,expected);
+    let names: std::collections::BTreeSet<&str> =
+        tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let expected: std::collections::BTreeSet<&str> = [
+        "studio_connection_check",
+        "studio_asset_presets",
+        "studio_asset_list",
+        "studio_asset_request",
+        "studio_asset_receive",
+        "studio_asset_resize",
+        "studio_asset_create_3d",
+        "studio_asset_review",
+        "studio_asset_job_status",
+        "studio_publication_draft_receive",
+        "studio_motion_request_get",
+        "studio_motion_draft_receive",
+        "studio_creation_request_get",
+        "studio_creation_draft_receive",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(names, expected);
     let receive = tools
         .iter()
         .find(|t| t["name"] == "studio_asset_receive")

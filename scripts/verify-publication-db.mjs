@@ -45,10 +45,34 @@ try {
     await client.query("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status) VALUES ($1,$2,1,$3,$4,$5,$6,$7)", [jobIds[index], publicationIds[index], randomUUID(), "a".repeat(64), { fixture: true, platform: index === 0 ? "youtube" : "naver_blog" }, mode, index === 0 ? "queued" : "needs_human_publish"]);
   }
   const before = (await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows;
-  // Reapplication must preserve already-created rows and constraints.
-  for (const schema of schemas) await client.query(schema);
-  assert.equal((await client.query("SELECT count(*)::int AS n FROM social_schema_migrations")).rows[0].n, 3);
-  assert.deepEqual((await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows, before);
+  const versions=["004_opal_research","005_opal_result_shape","006_keyword_explorer","007_publications","008_publication_handoffs","009_oauth_connections","010_analytics","011_sns_workspace"];
+  async function upgrade(){
+    await client.query("BEGIN");
+    try{
+      await client.query("SELECT pg_advisory_xact_lock(8740291)");
+      await client.query(schemas[0]);
+      for(const version of versions){const applied=await client.query("SELECT 1 FROM social_schema_migrations WHERE version=$1",[version]);if(!applied.rowCount||(version==="011_sns_workspace"&&(await client.query("SELECT to_regclass('public.analytics_report_owners') IS NULL AS missing")).rows[0].missing))await client.query(await readFile(resolve(`db/migrations/${version}.sql`),"utf8"));}
+      await client.query("COMMIT");
+    }catch(error){await client.query("ROLLBACK");throw error;}
+  }
+  await upgrade();
+  const upgraded=(await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows;
+  const legacy=upgraded.find(row=>row.id===jobIds[0]);
+  assert.equal(legacy.status,"needs_confirmation");
+  assert.deepEqual(legacy.snapshot,before.find(row=>row.id===jobIds[0]).snapshot);
+  assert.equal(upgraded.find(row=>row.id===jobIds[1]).status,"needs_human_publish");
+  const channelIds=[randomUUID(),randomUUID()];
+  for(const [i,platform] of ["x","naver_clip"].entries())await client.query("INSERT INTO social_channels(id,platform,name,handle,url) VALUES($1,$2,'manual fixture','fixture',$3)",[channelIds[i],platform,platform==="x"?"https://x.com/fixture":"https://clip.naver.com/fixture"]);
+  // The ledger prevents historical six-platform constraints and legacy job
+  // mutation from running again after X/Clip channels have been stored.
+  // Repair an early workspace ledger without its additive report-owner table.
+  await client.query("DROP TABLE analytics_report_owners");
+  await client.query("REVOKE ALL ON analytics_settings,analytics_sources,analytics_previews,analytics_observations,analytics_jobs FROM toris_app");
+  await upgrade();
+  assert.equal((await client.query("SELECT has_table_privilege('toris_app','analytics_sources','SELECT') AS allowed")).rows[0].allowed,true);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM social_schema_migrations")).rows[0].n,9);
+  assert.deepEqual((await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows,upgraded);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM social_channels WHERE id=ANY($1::uuid[])",[channelIds])).rows[0].n,2);
   await assert.rejects(client.query("UPDATE publication_jobs SET status='queued' WHERE id=$1", [jobIds[1]]), { code: "23514" });
   await assert.rejects(client.query("UPDATE publication_jobs SET status='needs_human_publish' WHERE id=$1", [jobIds[0]]), { code: "23514" });
   await assert.rejects(client.query("UPDATE publication_jobs SET scheduled_at=now() WHERE id=$1", [jobIds[1]]), { code: "23514" });
@@ -62,7 +86,20 @@ try {
     TORIS_PUBLICATIONS_TEST_STATE_ROOT: state,
     TMPDIR: scratch,
   }, true);
-  console.log("PASS: isolated migrations preserve existing rows, handoff SQL constraints, manual handoff, user confirmation, queue recovery and competing claims.");
+  const analyticsName = `studio_analytics_test_${Date.now()}`;
+  client = new pg.Client({host:"127.0.0.1",port,user:"toris_owner",database:"postgres"});
+  await client.connect();await client.query(`CREATE DATABASE ${analyticsName}`);await client.end();
+  client = new pg.Client({host:"127.0.0.1",port,user:"toris_owner",database:analyticsName});await client.connect();
+  for(const version of ["001_social",...versions])await client.query(await readFile(resolve(`db/migrations/${version}.sql`),"utf8"));
+  await client.end();client=null;
+  const appClient=new pg.Client({host:"127.0.0.1",port,user:"toris_app",database:analyticsName});
+  await appClient.connect();
+  try{await assert.rejects(appClient.query("CREATE TABLE forbidden_app_ddl(id int)"),{code:"42501"});}
+  finally{await appClient.end();}
+  run("cargo",["test","--locked","--manifest-path","desktop/src-tauri/Cargo.toml","--no-default-features","--test","analytics_contract","--","--ignored","--test-threads=1"],{
+    ...process.env,TORIS_STUDIO_TEST_DATABASE_URL:`postgresql://toris_app:fixture-only@127.0.0.1:${port}/${analyticsName}`,TMPDIR:scratch
+  },true);
+  console.log("PASS: isolated migrations preserve legacy snapshots, hold unbound approvals once, retain X/Clip across reruns, and preserve handoff SQL constraints, manual handoff, user confirmation, queue recovery and competing claims; six real analytics persistence/expiry/backoff contracts also pass.");
 } finally {
   if (client) await client.end().catch(() => {});
   if (started) run(join(bin, "pg_ctl"), ["-D", data, "-m", "immediate", "-w", "stop"]);

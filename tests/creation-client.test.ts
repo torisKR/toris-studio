@@ -25,3 +25,15 @@ test("creation IPC preserves request identity and propagates native rejection", 
 test("handoff rejects a missing or nonabsolute executable", () => {
   assert.throws(() => remoteDesktopHandoff({ mcpExecutable: "studio", protocolVersion: "", lastObservedAt: null }, "studio_connection_check", {}), /실행 파일/);
 });
+
+test("template and research prompts emit only the native receipt projection",async()=>{
+ const {videoDraftProjection,videoCreationPrompt}=await import("../desktop/src/creation-client");
+ const full={id:"existing-project",createdAt:"now",updatedAt:"now",title:"분기 보고",format:"shorts" as const,template:"adaptive-promo" as const,language:"ko" as const,scenes:[{id:"scene-1",headline:"18%",body:"원본 수치",narration:"18퍼센트",durationSec:9,mediaType:"none" as const,accent:"#00aaff",layout:"hero" as const,role:"hook" as const,motion:{preset:"kinetic-title",intensity:0.5}}]};
+ const projection=videoDraftProjection(full);
+ assert.deepEqual(Object.keys(projection),["title","format","template","language","scenes"]);
+ assert.deepEqual(Object.keys(projection.scenes[0]),["id","headline","body","narration","durationSec","motion"]);
+ const prompt=videoCreationPrompt(full,{topic:"분기 보고",sources:[{title:"원본"}]});
+ assert.deepEqual(JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n')+2)),{project:projection});
+ assert.match(prompt,/studio_creation_draft_receive/);
+ assert.equal(projection.scenes[0].headline,"18%");
+});

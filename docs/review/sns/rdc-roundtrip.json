@@ -1,0 +1,16 @@
+{
+  "transport": "actual Remote Desktop Commander MCP connection",
+  "scope": "isolated development binary and controlled verification request",
+  "requestId": "13318fb5-f7f8-4a00-80b8-1294e80d6ef3",
+  "revision": "e471f43d-370e-4e65-8279-53777474fb53",
+  "status": "draft-received",
+  "createdAt": "2026-10-21T11:35:01.643713+00:00",
+  "readAt": "2026-10-21T11:35:17.415894+00:00",
+  "draftReceivedAt": "2026-10-21T11:35:35.643078+00:00",
+  "draft": {
+    "text": "SNS 관리에서 채널별 성과와 연결 상태를 한곳에서 확인하세요. 원본 수치 18을 그대로 보존하며, 받은 초안은 검토 후 적용합니다."
+  },
+  "applied": false,
+  "published": false,
+  "userDataAccessed": false
+}

@@ -8,7 +8,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { VideoFormat, VideoProject, VideoScene } from "../../lib/video/types";
 import { External } from "./External";
-import { creationApi, creationFingerprint, type CreationRequest } from "./creation-client";
+import { creationApi, creationFingerprint, videoCreationPrompt, type CreationRequest } from "./creation-client";
 import { ChatGPTHandoff, CreationInbox } from "./ChatGPTHandoff";
 import type { VideoResearchMetadata, VideoResearchPreview, VideoResearchProvider, VideoResearchResult, VideoResearchSeed, VideoResearchSource } from "./video-research";
 import { ideaCategories, motionPresets, readIdeaMetadata, readMotion, type StudioVideoProject, type StudioVideoScene, type VideoIdeaCategory, type VideoIdeaInput, type VideoIdeaProvider, type VideoMotionPreset } from "./video-idea";
@@ -270,14 +270,15 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
     setLoading(true); setListError("");
     try {
       const saved = (await invoke<StudioVideoProject[]>("video_list_projects")).filter(item => !(item as unknown as {motionGraphics?:unknown}).motionGraphics);
+      if (!mounted.current) return;
       setProjects((current) => version === selectionVersion.current ? saved : [...current, ...saved.filter((item) => !current.some((existing) => existing.id === item.id))]);
       if (version === selectionVersion.current && !selectedProject.current && !activeResearch.current && saved.length) {
         selectedProject.current = saved[0];
         setProject(saved[0]); setBaseline(JSON.stringify(saved[0]));
         setSceneId(saved[0].scenes[0]?.id ?? "");
       }
-    } catch (error) { setListError(message(error)); }
-    finally { setLoading(false); }
+    } catch (error) { if (mounted.current) setListError(message(error)); }
+    finally { if (mounted.current) setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -295,7 +296,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
     onSeedHandled.current?.(researchSeed.requestId);
   }, [active, researchSeed, busy, pending, importOpen, dirty]);
 
-  useEffect(() => () => { previewVersion.current += 1; selectionVersion.current += 1; }, []);
+  useEffect(() => () => { initialized.current = false; previewVersion.current += 1; selectionVersion.current += 1; }, []);
 
   useEffect(() => {
     mounted.current = true;
@@ -408,10 +409,10 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
         const value = await invoke<unknown>("video_template_preview", { input: { templateId: selectedTemplate.id, topic: input.topic, category: input.category, format: input.format, language: input.language, sceneCount: input.sceneCount, durationSec: input.durationSec } });
         const prepared = readVideoTemplatePreview(value);
         if (!prepared) throw new Error("선택한 템플릿으로 ChatGPT 요청을 준비하지 못했습니다.");
-        prompt = prepared.prompt;
+        prompt = videoCreationPrompt(prepared.project,input);
       } else {
         const template = { ...blankProject(), title: input.topic, format: input.format, language: input.language };
-        prompt = ["실제 ChatGPT 대화에서 영상의 장면·본문·내레이션을 작성해줘. 외부 모델이나 API를 호출하지 마.", JSON.stringify(input), "아래 VideoProject JSON 형식을 유지해 유효한 JSON 한 개로 반환해줘. 장면마다 id,headline,body,narration,durationSec,mediaType:'none',accent,layout,role을 채우고 원본 미디어·음성을 생성했다고 주장하지 마. 모션은 kinetic-title,stagger-rise,slide-reveal,focus-pulse,parallax-pan,orbit-cards 중 preset과 0~1 intensity만 사용해줘. 응답은 앱의 JSON 가져오기에 붙여넣어 사용자가 검토·저장해야 하며 자동 게시하지 않아.", JSON.stringify(template, null, 2)].join("\n\n");
+        prompt = videoCreationPrompt(template,input);
       }
       if (!mounted.current) return;
       const result = await creationApi<{request:CreationRequest;prompt:string}>("create", {kind:"video",title:input.topic,prompt,sourceId:project?.id??"video-workspace",sourceRevision:await creationFingerprint(project)});
@@ -443,14 +444,14 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
     setBusy("research"); setNotice(null); setResearchWarnings([]);
     try {
       if (researchProvider === "chatgpt") {
-        let structure = JSON.stringify({ ...blankProject(), title: researchTopic, format: researchFormat }, null, 2);
+        let structure = { ...blankProject(), title: researchTopic, format: researchFormat };
         if (selectedTemplate) {
           const value = await invoke<unknown>("video_template_preview", { input: { templateId: selectedTemplate.id, topic: researchTopic, category: ideaCategory || selectedTemplate.categories[0], format: researchFormat, language: ideaLanguage, sceneCount: ideaSceneCount, durationSec: ideaDuration } });
           const prepared = readVideoTemplatePreview(value);
           if (!prepared) throw new Error("선택한 템플릿의 장면 구성을 확인하지 못했습니다.");
-          structure = prepared.prompt;
+          structure = prepared.project;
         }
-        const prompt = ["실제 ChatGPT 대화에서 제공된 출처만 근거로 영상 대본을 구성하고 아래 형식의 VideoProject JSON 한 개로 반환해줘. 원문을 확인하지 않았다면 사실과 추정을 구분해줘. 예시 문장은 근거가 아니므로 아래 실제 출처에 맞춰 교체해줘. 외부 모델을 호출하거나 자동 게시하지 마.", JSON.stringify({ keyword: researchKeyword, topic: researchTopic, format: researchFormat, sources: preview.sources }), structure, "응답은 사용자가 JSON 가져오기로 검토·저장한 뒤 로컬에서 렌더할 수 있도록 장면의 headline,body,narration,durationSec을 작성해줘."] .join("\n\n");
+        const prompt = videoCreationPrompt(structure,{keyword:researchKeyword,topic:researchTopic,format:researchFormat,sources:preview.sources});
         const result = await creationApi<{request:CreationRequest;prompt:string}>("create",{kind:"video",title:researchTopic,prompt,sourceId:project?.id??"video-workspace",sourceRevision:await creationFingerprint(project)});
         setCreationHandoff(result.prompt); setNotice({tone:"info",text:"근거 기반 영상 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣으세요."});
         return;

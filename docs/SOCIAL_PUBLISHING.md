@@ -6,7 +6,7 @@
 
 ## ChatGPT 초안과 에셋
 
-코딩에서 실제 ChatGPT 대화와 Codexify를 연결하고 대화를 직접 시작하세요. 앱은 연결된 대화에 초안 요청 ID와 주제를 전달합니다. ChatGPT는 `studio_publication_draft_receive`로 제목·설명·태그·해시태그를 반환합니다. 수신된 초안은 적용·편집·저장할 수 있으며 자동 승인되지 않습니다. 이미지 생성은 기존 `studio_asset_request` / `studio_asset_receive` 경로로 요청·수신하고 게시 썸네일 선택에 사용합니다.
+게시 화면에서 Remote Desktop Commander 전달문을 실제 ChatGPT 대화에 붙여넣으세요. 전달문에는 초안 요청 ID와 revision이 포함됩니다. ChatGPT는 `studio_publication_draft_receive`로 제목·설명·태그·해시태그를 반환합니다. 수신된 초안은 적용·편집·저장할 수 있으며 자동 승인되지 않습니다. 이미지 생성은 기존 `studio_asset_request` / `studio_asset_receive` 경로로 요청·수신하고 게시 썸네일 선택에 사용합니다.
 
 전달 저장, ChatGPT의 요청 수신, 답변, 파일 수신은 별도 상태입니다. 메시지 저장만으로 모델이 실행됐다고 표시하지 않습니다. 대화가 쉬고 있거나 연결이 끊겼으면 실제 ChatGPT에서 대화를 재개해야 합니다. ChatGPT 사용 한도는 그대로 적용됩니다. Open WebUI와 직접 모델 API·CLI 호출은 데스크톱에서 제거했습니다. 이전 앱 소유 컨테이너는 중지하고 대화 데이터 볼륨은 보존합니다.
 
@@ -65,4 +65,4 @@ DB 변경은 `008_publication_handoffs`이며 앱의 기존 DB 이행 경로와 
 Rust fixture 테스트로 API 단계, 범위·계정 검증, 업로드·조회, TikTok 초안과 실제 게시 구분, 중복 방지 및 제한을 검사합니다.
 Facebook Page·Threads 텍스트도 원격 ID 저장/재조회와 모호한 commit 재실행 금지를 fixture로 검사합니다. `node scripts/verify-publication-db.mjs`는 별도 임시 PostgreSQL로 기존 행을 가진 migration 재적용, 수동 인계 SQL 제약·사용자 확인·큐 복구를 검사하고 종료/삭제합니다. Homebrew PostgreSQL 17 기본 경로를 사용하며 다른 설치는 `TORIS_TEST_PG_BIN`으로 지정합니다. 앱 자격 증명·기존 DB에는 연결하지 않습니다. Chromium의 `scripts/verify-publication-ui.mjs`는 명시적 IPC fixture이며 실제 네이버 게시나 OS 폴더 선택 대화상자의 성공 증거가 아닙니다. 별도 임시 PostgreSQL 통합 테스트로 DB 이행·재실행 복구·수정 충돌·실행 claim을 검사합니다. 실제 계정 게시 성공은 사용자 승인 콘텐츠로 API 결과를 확인한 경우에만 주장합니다. 로컬 fixture 통과나 설치 파일 빌드는 실제 SNS 게시 또는 Windows 기기 실행 검증을 대신하지 않습니다.
 
-공식 계약: [Codexify](https://github.com/devnoname120/codexify/blob/main/docs/REFERENCE.md), [YouTube 업로드](https://developers.google.com/youtube/v3/docs/videos/insert), [Meta Reel 샘플](https://github.com/fbsamples/reels_publishing_apis), [Threads API](https://www.postman.com/meta/threads/documentation/dht3nzz/threads-api), [TikTok 게시 지침](https://developers.tiktok.com/doc/content-sharing-guidelines).
+공식 계약: [Remote Desktop Commander 연결](REMOTE_DESKTOP_WORKFLOW.md), [YouTube 업로드](https://developers.google.com/youtube/v3/docs/videos/insert), [Meta Reel 샘플](https://github.com/fbsamples/reels_publishing_apis), [Threads API](https://www.postman.com/meta/threads/documentation/dht3nzz/threads-api), [TikTok 게시 지침](https://developers.tiktok.com/doc/content-sharing-guidelines).

@@ -17,7 +17,7 @@
     "assets:mcp": "tsx mcp/asset-stdio.ts",
     "ai:verify:ui": "node scripts/verify-ai-workspace.mjs",
     "ai:test": "node --import tsx --test tests/ai-discovery.test.ts tests/publication-client.test.ts",
-    "integrations:verify:ui": "node scripts/verify-integration-ui.mjs",
+    "integrations:verify:ui": "node scripts/verify-sns-workspace.mjs",
     "integrations:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop && node scripts/verify-asset-mcp.mjs --native",
     "integrations:test": "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test release_integration_contract && cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib oauth::upload_tests",
     "assets:verify:mcp": "node scripts/verify-asset-mcp.mjs",
@@ -61,7 +61,8 @@
     "motion:test": "node --import tsx --test tests/motion-editor.test.ts && cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test graphics_contract --test graphics_render_contract --test motion_inbox_contract",
     "motion:verify:ui": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --example motion_qa_bridge && node scripts/verify-motion-ui.mjs",
     "motion:verify:media": "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test graphics_media_contract -- --ignored",
-    "motion:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop --example motion_qa_bridge && node scripts/verify-motion-mcp.mjs"
+    "motion:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop --example motion_qa_bridge && node scripts/verify-motion-mcp.mjs",
+    "sns:verify:ui": "node scripts/verify-sns-workspace.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "2.0.1",

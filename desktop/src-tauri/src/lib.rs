@@ -1,16 +1,12 @@
-pub mod workspace_export;
 pub mod ai;
+pub mod analytics;
 pub mod assets;
 pub mod browser;
 pub mod chatgpt_drafts;
+pub mod config;
 pub mod creation;
 #[cfg(feature = "desktop")]
 mod creation_native;
-pub mod shared_binary;
-pub mod analytics;
-#[cfg(feature = "desktop")]
-mod oauth_native;
-pub mod config;
 pub mod credentials;
 pub mod graphics;
 pub mod graphics_export;
@@ -31,7 +27,11 @@ mod motion_native;
 #[cfg(any(feature = "desktop", test))]
 pub mod native_windows;
 pub mod oauth;
+#[cfg(feature = "desktop")]
+mod oauth_native;
 pub mod publications;
+pub mod shared_binary;
+pub mod workspace_export;
 #[cfg(feature = "desktop")]
 static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 pub mod ops;
@@ -183,7 +183,11 @@ mod desktop {
         social::refresh_trends(&config, keyword).await
     }
     #[tauri::command]
-    pub async fn analytics_dispatch(window: tauri::WebviewWindow, state: State<'_, Arc<AppState>>, input: Value) -> Result<Value, String> {
+    pub async fn analytics_dispatch(
+        window: tauri::WebviewWindow,
+        state: State<'_, Arc<AppState>>,
+        input: Value,
+    ) -> Result<Value, String> {
         updater::authorize(&window)?;
         analytics::dispatch(&state.config_snapshot().await, input).await
     }
@@ -760,11 +764,9 @@ mod desktop {
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {
-                    use tauri::Manager;
                     crate::publications::shutdown_media();
                 }
                 if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
-                    use tauri::Manager;
                     // The updater holds the publication barrier until this signed restart.
                     if code == Some(tauri::RESTART_EXIT_CODE)
                         && app.state::<Arc<updater::UpdateController>>().status().phase

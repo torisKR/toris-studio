@@ -352,14 +352,14 @@ export function App() {
     if (aiBusy) return;
     setAiError(""); setAiBusy(true);
     try {
-      const sourceRevision = await creationFingerprint([aiTopic, aiCompiledContext.text]);
+      const sourceRevision = await creationFingerprint([aiPlatform, aiTopic, aiCompiledContext.text]);
       const value = await creationApi<{ request: CreationRequest; prompt: string }>("create", { kind: "text", title: aiTopic.slice(0, 180), prompt: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences), sourceId: "text-workspace", sourceRevision });
       setAiHandoff(value.prompt); setAiSelectionNotice("요청을 저장했습니다. 전달문을 ChatGPT에 붙여넣고 RDC로 계속하세요.");
     } catch (error) { setAiError(errorMessage(error)); }
     finally { setAiBusy(false); }
   }
   async function reviewText(request: CreationRequest) {
-    const currentRevision = await creationFingerprint([aiTopic, aiCompiledContext.text]);
+    const currentRevision = await creationFingerprint([aiPlatform, aiTopic, aiCompiledContext.text]);
     if (request.sourceRevision !== currentRevision) throw new Error("요청 이후 주제·자료가 변경되었습니다. 현재 내용을 기준으로 다시 요청하세요. 받은 초안은 보존했습니다.");
     if (!request.draft?.text) throw new Error("수신한 문구가 없습니다.");
     if (aiOutput && !window.confirm("현재 편집한 결과를 수신 초안으로 바꿔 검토할까요?")) return;

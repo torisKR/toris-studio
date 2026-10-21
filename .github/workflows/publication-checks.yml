@@ -18,6 +18,7 @@ jobs:
           {
             printf 'TMPDIR=%s\n' "$RUNNER_TEMP"
             printf 'TORIS_TEST_SCRATCH=%s/studio-publications\n' "$RUNNER_TEMP"
+            printf 'TORIS_SNS_UI_ARTIFACTS=%s/studio-sns-ui\n' "$RUNNER_TEMP"
             printf 'TORIS_PUBLICATION_UI_ARTIFACTS=%s/studio-publication-ui\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -52,10 +53,14 @@ jobs:
         run: node scripts/verify-publication-db.mjs
       - name: Verify publication UI with explicit IPC fixtures
         run: node scripts/verify-publication-ui.mjs
+      - name: Verify SNS account isolation, report review and RDC handoff UI
+        run: node scripts/verify-sns-workspace.mjs
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:
           name: publication-ui-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.TORIS_PUBLICATION_UI_ARTIFACTS }}
+          path: |
+            ${{ env.TORIS_PUBLICATION_UI_ARTIFACTS }}
+            ${{ env.TORIS_SNS_UI_ARTIFACTS }}
           if-no-files-found: warn
           retention-days: 7

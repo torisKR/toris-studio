@@ -279,7 +279,12 @@ pub fn validate_platform_url(platform: &str, value: &str) -> Result<String, Stri
             "www.threads.com",
         ],
         "naver_blog" => &["blog.naver.com", "m.blog.naver.com"],
-        "naver_clip" => &["clip.naver.com", "www.clip.naver.com", "m.clip.naver.com", "clipcreators.naver.com"],
+        "naver_clip" => &[
+            "clip.naver.com",
+            "www.clip.naver.com",
+            "m.clip.naver.com",
+            "clipcreators.naver.com",
+        ],
         "x" => &["x.com", "www.x.com", "twitter.com", "www.twitter.com"],
         "tiktok" => &[
             "tiktok.com",
