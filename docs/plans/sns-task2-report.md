@@ -25,7 +25,7 @@ X text/article/video and Naver Clip video use explicit manual_handoff jobs. Thei
 
 Memory-vault/provider fixtures and temporary media fixtures only; no user vault credentials, settings, provider API calls, user databases, deployment, installation, or publication were used.
 
-- OAuth tests after review fixes: 43 passed; 1 explicitly opted-in live-provider test ignored.
+- OAuth tests after durability review: 44 passed; 1 explicitly opted-in live-provider test ignored.
 - Publishing fixtures: 42 passed.
 - Publication/media/handoff tests: 23 passed; 2 isolated-PostgreSQL tests ignored pending root integration.
 - Desktop-feature `cargo check --lib --offline`: passed; the only initial warnings were removed or in root-owned lib.rs.
@@ -46,3 +46,15 @@ A retained refresh candidate is loaded before the old token's refreshability che
 The YouTube disconnect path writes `revocation-pending:v2:{connectionId}` to the OS vault before making a POST to `https://oauth2.googleapis.com/revoke`. Native access rejects the marker immediately, including after a process restart before local cleanup. Remote failure still completes local disconnect and returns a redacted warning plus `revocationPending:true`; explicit disconnect retries immediately and the running refresh loop retries with persisted 60/300/900-second backoff. Success verifies the disconnected tombstone before removing the marker. The retry token is never returned through IPC. Tests cover outage/retry, exact selected grant, empty success response, persisted denial after a simulated crash and backoff without real provider I/O.
 
 Google's revocation semantics may invalidate other grants for the **same Google user and Cloud project**, including scopes granted to other clients in that project. Local vault records for other connections are preserved, but affected Google grants may require reauthorization. [Official Google token revocation reference](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke). TikTok's success envelope follows the [official Get User Info response](https://developers.tiktok.com/docs/en/tiktok-api-v2-get-user-info).
+
+## Durable disconnect cleanup
+
+A database outage no longer relies on the active grant's `disconnected` flag as its retry record. Every explicit disconnect first writes a verified, independent `db-cleanup-pending:v2:{connectionId}` OS-vault marker. The marker survives an authorization-record overwrite and blocks same-ID login initiation/completion, native token issuance and refresh until cleanup succeeds. Public connection rows expose only `cleanupPending`; a native-only random generation binds acknowledgement to the exact cleanup intent.
+
+The native wrapper and background retry enumerate pending cleanup tickets even if an older writer restored an active grant. Cleanup holds every matching executable queued/scheduled/failed publication job and deletes only that connection's API cache/jobs through analytics. It preserves manual imports, successful/processing/uncertain publication records and other connections. Locked approvals are no longer silently skipped: bounded PostgreSQL lock/statement timeouts leave the durable ticket intact for retry. Acknowledgement runs only after both job cleanup and exact cache cleanup succeed, and verifies marker deletion. Same-ID reconnect remains blocked on any database, cache or acknowledgement failure.
+
+Regression coverage includes a RED test reproducing the missing durable marker, then GREEN verification that an active-record overwrite cannot lose cleanup intent or issue tokens, stale acknowledgements cannot clear it, and reconnection resumes only after acknowledgement. An opt-in desktop-feature PostgreSQL test covers unavailable configuration, blocked reconnection, a locked scheduled approval, recovery, API-cache removal and preservation of manual imports/another connection. The test uses a memory credential vault and requires a disposable loopback database with a fixture-only name and a non-application port.
+
+Latest verification: 44 OAuth fixture tests passed with one live-provider test intentionally ignored. The new desktop-feature cleanup regression passed against a fresh disposable PostgreSQL instance after additive migrations were applied twice; it included an actual row-lock timeout followed by successful retry. This also compiled the native desktop wrapper. No user vault, user database, provider request or publication was used. The temporary server and test directory were removed after the run.
+
+Channel binding now calls analytics `remember_report_owners` before its mapping upsert in the same PostgreSQL transaction. Local channel ID, prior owner and next owner aliases are recorded under analytics' first-owner rules; a missing alias schema or mapping failure rolls back the bind. Original manual-report account IDs are never rewritten.

@@ -2642,3 +2642,12 @@ pub(crate) async fn publishing_access_for(
 pub(crate) async fn unique_connection_id(platform: &str) -> Result<String, String> {
     connections_impl::unique_id(platform).await
 }
+
+#[cfg(feature = "desktop")]
+pub(crate) async fn pending_connection_cleanups() -> Result<Vec<serde_json::Value>, String> {
+    connections_impl::pending_cleanups().await
+}
+#[cfg(feature = "desktop")]
+pub(crate) async fn complete_connection_cleanup(id: &str, generation: &str) -> Result<(), String> {
+    connections_impl::complete_cleanup(id, generation).await
+}

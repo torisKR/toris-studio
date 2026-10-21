@@ -22,6 +22,67 @@ struct Connection {
     audit: Vec<AuditEvent>,
     legacy_source: Option<String>,
 }
+#[derive(Serialize, Deserialize)]
+struct PendingCleanup {
+    generation: String,
+    platform: String,
+    requested_at: u64,
+}
+fn cleanup_key(id: &str) -> String {
+    format!("db-cleanup-pending:v2:{id}")
+}
+fn cleanup_pending(s: &OAuthService, id: &str) -> Result<bool, String> {
+    Ok(s.store.read(&cleanup_key(id))?.is_some())
+}
+fn mark_cleanup_pending(s: &OAuthService, id: &str) -> Result<(), String> {
+    if cleanup_pending(s, id)? {
+        return Ok(());
+    }
+    let c = read_connection(s, id)?;
+    let pending = PendingCleanup {
+        generation: random_secret(),
+        platform: c.platform,
+        requested_at: s.clock.now(),
+    };
+    verified_write(
+        s,
+        &cleanup_key(id),
+        &serde_json::to_string(&pending).map_err(|_| "연결 정리 상태 저장 실패")?,
+    )
+}
+#[cfg(any(feature = "desktop", test))]
+fn cleanup_tickets_locked(s: &OAuthService) -> Result<Vec<Value>, String> {
+    let mut known = ids(s)?;
+    known.extend(commit_ids(s)?);
+    known.sort();
+    known.dedup();
+    let mut tickets = vec![];
+    for id in known {
+        if let Some(raw) = s.store.read(&cleanup_key(&id))? {
+            let p: PendingCleanup =
+                serde_json::from_str(&raw).map_err(|_| "연결 정리 복구 정보 오류")?;
+            tickets
+                .push(json!({"connectionId":id,"generation":p.generation,"platform":p.platform}));
+        }
+    }
+    Ok(tickets)
+}
+#[cfg(any(feature = "desktop", test))]
+fn complete_cleanup_locked(s: &OAuthService, id: &str, generation: &str) -> Result<(), String> {
+    Uuid::parse_str(id).map_err(|_| "연결 식별자 오류")?;
+    let Some(raw) = s.store.read(&cleanup_key(id))? else {
+        return Ok(());
+    };
+    let p: PendingCleanup = serde_json::from_str(&raw).map_err(|_| "연결 정리 복구 정보 오류")?;
+    if p.generation != generation {
+        return Err("연결 정리 요청이 변경되었습니다. 다시 정리하세요.".into());
+    }
+    s.store.delete(&cleanup_key(id))?;
+    if s.store.read(&cleanup_key(id))?.is_some() {
+        return Err("연결 정리 완료를 저장하지 못했습니다.".into());
+    }
+    Ok(())
+}
 fn connection_key(id: &str) -> String {
     format!("connection:v2:{id}")
 }
@@ -207,9 +268,11 @@ fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
             Ok(c) => {
                 let p = Provider::parse(&c.platform)?;
                 let revocation_pending = pending_revocation(s, &id)?.is_some();
+                let cleanup_pending = cleanup_pending(s, &id)?;
                 let refreshable = c.session.refreshable(p, now)
                     || retained_candidate(s, &id, &c.session, now)?.is_some();
-                let connected = !revocation_pending
+                let connected = !cleanup_pending
+                    && !revocation_pending
                     && !c.disconnected
                     && !c.session.needs_reconnect
                     && c.session.expires_at > now;
@@ -227,7 +290,7 @@ fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
                     }
                 }
                 for a in &c.identities {
-                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending,"revocationPending":revocation_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared}));
+                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending||cleanup_pending,"revocationPending":revocation_pending,"cleanupPending":cleanup_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!cleanup_pending&&!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared}));
                 }
             }
             Err(message) => warnings.push(json!({"connectionId":id,"message":message})),
@@ -401,6 +464,7 @@ async fn refresh_connection_locked(
     let candidate_key = format!("refresh-candidate:v2:{id}");
     let candidate = retained_candidate(s, id, &c.session, now)?;
     if c.disconnected
+        || cleanup_pending(s, id)?
         || pending_revocation(s, id)?.is_some()
         || (candidate.is_none() && !c.session.refreshable(p, now))
     {
@@ -497,6 +561,11 @@ async fn access_locked(
     scopes: &[&str],
     publish: bool,
 ) -> Result<PublishingAccess, String> {
+    if cleanup_pending(s, id)? {
+        return Err(
+            "이 연결의 이전 예약과 API 캐시 정리가 완료될 때까지 사용할 수 없습니다.".into(),
+        );
+    }
     if pending_revocation(s, id)?.is_some() {
         return Err("해제한 계정의 Google 인증 취소를 기다리고 있습니다.".into());
     }
@@ -645,6 +714,7 @@ fn disconnect_locked(s: &OAuthService, id: &str) -> Result<(), String> {
     Ok(())
 }
 async fn disconnect_connection(s: &OAuthService, id: &str) -> Result<(), String> {
+    mark_cleanup_pending(s, id)?;
     let c = read_connection(s, id)?;
     if c.platform != "youtube" {
         return disconnect_locked(s, id);
@@ -698,6 +768,9 @@ async fn begin_connection(
         return Err("읽기 또는 게시 연결 목적을 선택하세요.".into());
     }
     if let Some(id) = existing {
+        if cleanup_pending(s, id)? {
+            return Err("이전 연결의 예약과 API 캐시 정리가 완료된 뒤 다시 연결하세요.".into());
+        }
         if pending_revocation(s, id)?.is_some() {
             return Err("기존 Google 인증 취소가 완료된 뒤 다시 연결하세요.".into());
         }
@@ -820,6 +893,9 @@ async fn complete_connection(
 ) -> Result<Value, String> {
     let _g = s.gate.lock().await;
     Uuid::parse_str(id).map_err(|_| "연결 식별자 오류")?;
+    if cleanup_pending(s, id)? {
+        return Err("이전 연결의 예약과 API 캐시 정리를 먼저 완료하세요.".into());
+    }
     let (p, validated) = {
         let pending = s.pending.lock().unwrap_or_else(|p| p.into_inner());
         let pending = pending.get(id).ok_or("진행 중인 연결 로그인이 없습니다.")?;
@@ -1029,6 +1105,18 @@ async fn migrate_legacy(s: &OAuthService, p: Provider) -> Result<String, String>
     );
     save_connection(s, &c)?;
     Ok(id)
+}
+#[cfg(feature = "desktop")]
+pub(super) async fn pending_cleanups() -> Result<Vec<Value>, String> {
+    let s = service();
+    let _g = s.gate.lock().await;
+    cleanup_tickets_locked(s)
+}
+#[cfg(feature = "desktop")]
+pub(super) async fn complete_cleanup(id: &str, generation: &str) -> Result<(), String> {
+    let s = service();
+    let _g = s.gate.lock().await;
+    complete_cleanup_locked(s, id, generation)
 }
 pub(super) async fn list() -> Result<Value, String> {
     let s = service();

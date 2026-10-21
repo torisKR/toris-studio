@@ -542,3 +542,219 @@ async fn youtube_revocation_marker_denies_access_before_local_cleanup_or_retry()
     assert!(disconnected.session.access_token.is_empty());
     assert!(store.read(&revocation_key(&c.id)).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn disconnect_cleanup_survives_failed_database_and_same_id_reconnect_attempt() {
+    let (service, store, transport, _) = fixture();
+    let c = sample("111");
+    save_connection(&service, &c).unwrap();
+    disconnect_connection(&service, &c.id).await.unwrap();
+    let listed = connection_list_locked(&service).unwrap();
+    assert_eq!(listed["connections"][0]["cleanupPending"], true);
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_err(),
+        "DB-down cleanup must block same-ID reconnection"
+    );
+    // Even an older writer restoring active credentials cannot erase cleanup intent.
+    save_connection(&service, &c).unwrap();
+    assert!(access_locked(&service, &c.id, "threads", "111", &[], false)
+        .await
+        .is_err());
+    let tickets = cleanup_tickets_locked(&service).unwrap();
+    assert_eq!(tickets.len(), 1);
+    let generation = tickets[0]["generation"].as_str().unwrap();
+    assert!(
+        !listed.to_string().contains(generation),
+        "native acknowledgement nonce must not cross IPC"
+    );
+    assert!(complete_cleanup_locked(&service, &c.id, "stale-generation").is_err());
+    assert_eq!(cleanup_tickets_locked(&service).unwrap().len(), 1);
+    complete_cleanup_locked(&service, &c.id, generation).unwrap();
+    assert!(cleanup_tickets_locked(&service).unwrap().is_empty());
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_ok()
+    );
+    assert!(transport.requests.lock().unwrap().is_empty());
+    assert!(store.read(&connection_key(&c.id)).unwrap().is_some());
+}
+
+#[cfg(feature = "desktop")]
+#[tokio::test]
+#[ignore = "requires disposable TORIS_PUBLICATIONS_TEST_DB or TORIS_STUDIO_TEST_DATABASE_URL"]
+async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_imports(
+) -> Result<(), String> {
+    let raw = std::env::var("TORIS_PUBLICATIONS_TEST_DB")
+        .or_else(|_| std::env::var("TORIS_STUDIO_TEST_DATABASE_URL"))
+        .map_err(|_| "Disposable fixture database required")?;
+    let url = Url::parse(&raw).map_err(|_| "Fixture URL error")?;
+    if url.host_str() != Some("127.0.0.1")
+        || url.port() == Some(54329)
+        || !url.path().starts_with("/toris_publications_test_")
+            && !url.path().starts_with("/studio_analytics_test_")
+    {
+        return Err("Refusing non-isolated fixture database".into());
+    }
+    let config = crate::config::AppConfig {
+        database_url: Some(raw),
+        ..Default::default()
+    };
+    let (service, _, transport, _) = fixture();
+    let c = sample("fixture_account");
+    let other = sample("other_account");
+    save_connection(&service, &c)?;
+    save_connection(&service, &other)?;
+    let db = crate::social::database(&config).await?;
+    let publication = Uuid::new_v4();
+    let job = Uuid::new_v4();
+    let other_job = Uuid::new_v4();
+    let selected_api = Uuid::new_v4();
+    let manual_import = Uuid::new_v4();
+    let other_api = Uuid::new_v4();
+    db.client
+        .execute(
+            "INSERT INTO publications(id,payload)VALUES($1,$2)",
+            &[&publication, &json!({"title":"OAuth cleanup fixture"})],
+        )
+        .await
+        .map_err(|_| "fixture publication")?;
+    for (id, connection) in [(job, &c.id), (other_job, &other.id)] {
+        db.client.execute("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status,scheduled_at)VALUES($1,$2,1,$3,$4,$5,'scheduled','scheduled',now()+interval '1 day')",&[&id,&publication,&Uuid::new_v4(),&"0".repeat(64),&json!({"connectionId":connection,"platform":"threads","accountId":"fixture_account"})]).await.map_err(|_|"fixture approval")?;
+    }
+    for (id, kind, connection) in [
+        (selected_api, "api", &c.id),
+        (manual_import, "import", &c.id),
+        (other_api, "api", &other.id),
+    ] {
+        db.client.execute("INSERT INTO analytics_sources(id,source_kind,platform,account_id,connection_id,label,digest)VALUES($1,$2,'threads','fixture_account',$3,'cleanup fixture',$4)",&[&id,&kind,&connection,&id.to_string()]).await.map_err(|_|"fixture source")?;
+    }
+    disconnect_connection(&service, &c.id).await?;
+    let ticket = cleanup_tickets_locked(&service)?.remove(0);
+    let generation = ticket["generation"].as_str().ok_or("fixture generation")?;
+    let offline = crate::config::AppConfig::default();
+    assert!(crate::oauth_native::run_cleanup(
+        crate::oauth_native::cleanup_database(&offline, &c.id),
+        async { complete_cleanup_locked(&service, &c.id, generation) }
+    )
+    .await
+    .is_err());
+    assert!(cleanup_pending(&service, &c.id)?);
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_err()
+    );
+    // Simulate the legacy overwrite from the review: the independent marker
+    // must still deny tokens and remain visible to background cleanup.
+    save_connection(&service, &c)?;
+    assert!(
+        access_locked(&service, &c.id, "threads", "fixture_account", &[], false)
+            .await
+            .is_err()
+    );
+    let mut blocker = crate::social::database(&config).await?;
+    let locked = blocker
+        .client
+        .transaction()
+        .await
+        .map_err(|_| "fixture lock transaction")?;
+    locked
+        .query_one(
+            "SELECT id FROM publication_jobs WHERE id=$1 FOR UPDATE",
+            &[&job],
+        )
+        .await
+        .map_err(|_| "fixture row lock")?;
+    assert!(
+        crate::oauth_native::run_cleanup(
+            crate::oauth_native::cleanup_database(&config, &c.id),
+            async { complete_cleanup_locked(&service, &c.id, generation) }
+        )
+        .await
+        .is_err(),
+        "locked approvals must retain the marker, never silently skip"
+    );
+    assert!(cleanup_pending(&service, &c.id)?);
+    assert_eq!(
+        db.client
+            .query_one(
+                "SELECT count(*) FROM analytics_sources WHERE id=$1",
+                &[&selected_api]
+            )
+            .await
+            .map_err(|_| "fixture source check")?
+            .get::<_, i64>(0),
+        1
+    );
+    locked.rollback().await.map_err(|_| "fixture unlock")?;
+    crate::oauth_native::run_cleanup(
+        crate::oauth_native::cleanup_database(&config, &c.id),
+        async { complete_cleanup_locked(&service, &c.id, generation) },
+    )
+    .await?;
+    assert!(!cleanup_pending(&service, &c.id)?);
+    assert_eq!(
+        db.client
+            .query_one("SELECT status FROM publication_jobs WHERE id=$1", &[&job])
+            .await
+            .map_err(|_| "fixture selected job")?
+            .get::<_, String>(0),
+        "needs_confirmation"
+    );
+    assert_eq!(
+        db.client
+            .query_one(
+                "SELECT status FROM publication_jobs WHERE id=$1",
+                &[&other_job]
+            )
+            .await
+            .map_err(|_| "fixture other job")?
+            .get::<_, String>(0),
+        "scheduled"
+    );
+    assert_eq!(
+        db.client
+            .query_one(
+                "SELECT count(*) FROM analytics_sources WHERE id=$1",
+                &[&selected_api]
+            )
+            .await
+            .map_err(|_| "fixture API cache")?
+            .get::<_, i64>(0),
+        0
+    );
+    for source in [manual_import, other_api] {
+        assert_eq!(
+            db.client
+                .query_one(
+                    "SELECT count(*) FROM analytics_sources WHERE id=$1",
+                    &[&source]
+                )
+                .await
+                .map_err(|_| "fixture preserved source")?
+                .get::<_, i64>(0),
+            1
+        );
+    }
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_ok()
+    );
+    assert!(transport.requests.lock().unwrap().is_empty());
+    db.client
+        .execute("DELETE FROM publications WHERE id=$1", &[&publication])
+        .await
+        .map_err(|_| "fixture publication cleanup")?;
+    db.client
+        .execute(
+            "DELETE FROM analytics_sources WHERE id=ANY($1)",
+            &[&vec![selected_api, manual_import, other_api]],
+        )
+        .await
+        .map_err(|_| "fixture source cleanup")?;
+    Ok(())
+}
