@@ -107,7 +107,7 @@ pub async fn publication_export_handoff(
     app.dialog()
         .file()
         .set_parent(&window)
-        .set_title("네이버 수동 게시 자료를 저장할 폴더")
+        .set_title("수동 게시 자료를 저장할 폴더")
         .pick_folder(move |folder| {
             let _ = sender.send(folder);
         });

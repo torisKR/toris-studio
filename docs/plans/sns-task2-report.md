@@ -1,0 +1,38 @@
+# Task 2: independent OAuth connections and immutable publication targets
+
+Implemented native independent authorizations for the six existing providers. Each grant has a UUID `connectionId`, its own OS-vault record containing client snapshot, access/refresh credentials, verified remote account IDs, and bounded audit events. Same-platform logins do not replace an existing connection. Reauthorization and refresh reject a changed remote identity. Instagram retains Instagram Login and its existing Business/Creator flow. X and Naver Clip have no OAuth implementation or API publisher.
+
+## Native contract
+
+- `oauth_connections(window,state)` returns `{connections,warnings,bindings}`. Each connection row is one verified remote account; a Facebook grant may have several Page rows with the same `connectionId`. Fields include platform, accountId, accountTitle, identityVerified, connected, disconnected, needsReconnect, refreshable, readAuthorized, publishingAuthorized, scopes, expiry and redacted audit events. No credentials or authorization state are serialized. An expired but refreshable token has `connected:false,refreshable:true`; native scoped access refreshes it.
+- `oauth_connection_dispatch(window,app,state,input)` supports `list`; `beginLogin {platform,purpose:'read'|'publish',connectionId?}`; `completeLogin {connectionId,callbackUrl}`; `cancelLogin {connectionId}`; `refresh {connectionId}`; `disconnect {connectionId}`; `migrateLegacy {platform}`; `bindChannel {channelId,connectionId,accountId}`. Add authorization by omitting connectionId; grant more permissions or reconnect the same exact account by supplying it. Native beginLogin opens the system browser, strips authorizationUrl, and returns `{connectionId,platform,purpose,redirectUri,pending,manualCallback}`. Callback state and provider are bound to the intended connection and consumed before token I/O.
+- `bindChannel` validates the stored remote account before writing migration009's `social_channel_connections` mapping. It returns connection rows and bindings plus `binding`. Mapping read failure adds a warning without hiding vault connections. Bindings persist across disconnect to retain provenance; they do not authorize access.
+- Rust analytics access is `oauth::scoped_access(connection_id:&str,platform:&str,account_id:&str,required_scopes:&[&str]) -> Result<PublishingAccess,String>`. `PublishingAccess` has native-only `token`, `scopes`, and `tiktok_audit_declared`. It validates all requested scopes and all three identity components. Facebook read access resolves the exact Page token and requires ANALYZE or MANAGE. Publishing uses `publishing_access_for` and still verifies the remote account immediately before transmission.
+
+## Permission and migration behavior
+
+Read authorization requests YouTube `youtube.readonly` plus `yt-analytics.readonly`, Threads `threads_manage_insights`, Instagram `instagram_business_manage_insights`, Facebook `read_insights` plus `pages_read_engagement`, and TikTok `user.info.stats` plus `video.list`, with required provider identity scopes. Publishing consent remains separate. Meta permission responses are verified rather than inferred from requested scopes. Revenue and advertising scopes are absent.
+
+Legacy migration is explicit, identity-verified, resumable through a stable copy marker, and idempotent. The original platform client/session/audit keys are never removed by migration. Each copied grant is read back and verified before indexing it; a failed index write can recover the same grant. Changing legacy app credentials first creates and verifies an encrypted vault backup and marks the old grant for explicit reconnection rather than deleting the original session or silently pairing it with a different app. A rotated refresh candidate is retained natively before identity verification so a temporary identity-read outage does not lose the rotated refresh token.
+
+Disconnect erases that grant's tokens and leaves a disconnected identity/audit tombstone. It does not revoke other grants, delete imported reports, delete API metric caches, or remove source media. Analytics cache deletion remains a separate explicit analytics action. Pending authorizations are bounded, cancellable and single-use.
+
+Publication target normalization, approval hashes, immutable snapshots and job output now include connectionId alongside platform/accountId. Execution refuses an absent connectionId; platform-only compatibility token APIs fail when selection is ambiguous. Migration009 holds unbound queued/scheduled/failed API jobs for confirmation without modifying successful, processing or uncertain jobs. The runtime also holds unbound executable jobs if a caller-managed database has not applied that migration. No legacy approval is automatically mapped to a different account or republished. Direct YouTube QA confirmation tickets likewise pin the selected connection and channel.
+
+X text/article/video and Naver Clip video use explicit manual_handoff jobs. Their packages preserve approved text and optional images, and stream MP4 copies with byte-count/SHA-256 verification. Export remains needs_human_publish/not_published. A user-confirmed receipt requires the corresponding official HTTPS host and concrete post path; X also requires the selected handle. Receipts remain verification:user_confirmed, never an API publication claim. Existing Naver Blog contracts remain supported.
+
+## Verification
+
+Memory-vault/provider fixtures and temporary media fixtures only; no user vault credentials, settings, provider API calls, user databases, deployment, installation, or publication were used.
+
+- OAuth tests: 38 passed; 1 explicitly opted-in live-provider test ignored.
+- Publishing fixtures: 42 passed.
+- Publication/media/handoff tests: 23 passed; 2 isolated-PostgreSQL tests ignored pending root integration.
+- Desktop-feature `cargo check --lib --offline`: passed; the only initial warnings were removed or in root-owned lib.rs.
+- `rustfmt` on owned Rust files and `git diff --check`: passed.
+
+The tests exercise independent same-platform grants, explicit identity/scope failures, cross-connection callback rejection and replay, secret redaction, interruption/retry of legacy migration, preservation of original credentials, rotated-refresh recovery, identity-change blocking, exact Facebook Page token/task selection, approval-hash target binding, manual-only destination restrictions and hash-verified video exports. The isolated PostgreSQL queue fixture was updated to distinguish bound approved jobs from legacy unbound jobs; root will run it against a temporary database.
+
+Provider app approval, real account scopes, live OAuth browser callbacks, Page tasks, provider API execution and actual manual post receipts remain unverified. Clip URL validation conservatively accepts official clip/video/shorts/player content paths and may require an additive format change for a different official share-link format. This is user-confirmed reporting, not verification of remote ownership.
+
+Official permission references checked during implementation: [YouTube OAuth scopes](https://developers.google.com/identity/protocols/oauth2/scopes), [YouTube Analytics authorization](https://developers.google.com/youtube/reporting/guides/authorization/server-side-web-apps), [TikTok scopes](https://developers.tiktok.com/docs/en/tiktok-api-scopes), [Naver Clip creation](https://help.naver.com/service/30048/contents/24422?osType=COMMONOS). Meta scope names follow the approved task specification and retain the project's existing Instagram Login method; live approval is not claimed.

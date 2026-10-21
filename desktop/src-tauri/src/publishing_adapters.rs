@@ -581,25 +581,61 @@ pub async fn accounts(platform: Option<&str>) -> Result<Value, String> {
     if platform.is_some_and(|p| !PLATFORMS.contains(&p)) {
         return Err("지원하지 않는 게시 플랫폼입니다.".into());
     }
+    let connections = crate::oauth::connections().await?;
     let mut accounts = Vec::new();
     let mut warnings = Vec::new();
-    for platform in PLATFORMS
-        .into_iter()
-        .filter(|p| platform.map_or(true, |requested| requested == *p))
-    {
+    let mut visited = std::collections::HashSet::new();
+    for connection in connections["connections"].as_array().into_iter().flatten() {
+        let Some(p) = connection["platform"]
+            .as_str()
+            .filter(|p| PLATFORMS.contains(p) && platform.map_or(true, |selected| selected == *p))
+        else {
+            continue;
+        };
+        let Some(id) = connection["connectionId"].as_str() else {
+            continue;
+        };
+        if connection["disconnected"] == true || !visited.insert(id.to_owned()) {
+            continue;
+        }
+        let account = connection["accountId"].as_str().unwrap_or("");
         let result = async {
-            let access = crate::oauth::publishing_access(platform)
+            let access = crate::oauth::publishing_access_for(id, p, account)
                 .await
-                .map_err(AdapterError::before)?;
-            accounts_with(&Official, platform, &access).await
+                .map_err(AdapterError::invalid)?;
+            accounts_with(&Official, p, &access).await
         }
         .await;
         match result {
-            Ok(items) => accounts.extend(items.into_iter().map(|item| item.public)),
-            Err(error) => warnings.push(json!({"platform":platform,"message":error.message})),
+            Ok(items) => {
+                for mut item in items {
+                    if connections["connections"].as_array().is_some_and(|cs| {
+                        cs.iter().any(|c| {
+                            c["connectionId"] == id && c["accountId"] == item.public["accountId"]
+                        })
+                    }) {
+                        item.public["connectionId"] = json!(id);
+                        accounts.push(item.public);
+                    }
+                }
+            }
+            Err(error) => {
+                warnings.push(json!({"platform":p,"connectionId":id,"message":error.message}))
+            }
         }
     }
     Ok(json!({"accounts":accounts,"warnings":warnings,"checkedAt":chrono::Utc::now().to_rfc3339()}))
+}
+async fn access_for_plan(plan: &Value) -> Result<crate::oauth::PublishingAccess, String> {
+    let connection = plan["connectionId"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("이전 작업의 계정 연결을 선택하고 다시 승인하세요. 자동 게시하지 않습니다.")?;
+    let platform = plan["platform"].as_str().ok_or("플랫폼을 선택하세요.")?;
+    let account = plan["accountId"]
+        .as_str()
+        .ok_or("게시 계정을 선택하세요.")?;
+    crate::oauth::publishing_access_for(connection, platform, account).await
 }
 fn validate_plan(plan: &Value) -> Result<(&str, &str), AdapterError> {
     let platform = plan["platform"]
@@ -998,8 +1034,8 @@ fn validate_media_probe(plan: &Value, account: &Value) -> Result<(), AdapterErro
     Ok(())
 }
 pub async fn preflight(plan: &Value) -> Result<Value, String> {
-    let (platform, _) = validate_plan(plan).map_err(|error| error.message)?;
-    let access = crate::oauth::publishing_access(platform).await?;
+    validate_plan(plan).map_err(|error| error.message)?;
+    let access = access_for_plan(plan).await?;
     let account = selected_account(&Official, plan, &access)
         .await
         .map_err(|error| error.message)?;
@@ -1100,11 +1136,9 @@ pub async fn publish_with_checkpoint(
     public_thumbnail_url: Option<&str>,
     checkpoint_fn: Checkpoint,
 ) -> Result<Value, AdapterError> {
-    let (platform, _) = validate_plan(&plan)?;
+    validate_plan(&plan)?;
     let length = approved_media_length(&plan, media_path).await?;
-    let access = crate::oauth::publishing_access(platform)
-        .await
-        .map_err(AdapterError::before)?;
+    let access = access_for_plan(&plan).await.map_err(AdapterError::before)?;
     let account = selected_account(&Official, &plan, &access).await?;
     publish_with(
         &Official,
@@ -1606,9 +1640,8 @@ pub async fn reconcile_with_checkpoint(
         .get("remote")
         .filter(|r| r.is_object())
         .ok_or_else(|| AdapterError::uncertain(None))?;
-    let (platform, _) =
-        validate_plan(&plan).map_err(|_| AdapterError::uncertain(Some(remote.clone())))?;
-    let access = crate::oauth::publishing_access(platform)
+    validate_plan(&plan).map_err(|_| AdapterError::uncertain(Some(remote.clone())))?;
+    let access = access_for_plan(&plan)
         .await
         .map_err(|_| AdapterError::uncertain(Some(remote.clone())))?;
     // Reading a previously submitted TikTok task must remain possible when its

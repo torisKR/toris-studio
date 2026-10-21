@@ -21,6 +21,8 @@ static UPLOAD_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub struct Draft {
     platform: String,
     channel_id: String,
+    #[serde(default)]
+    connection_id: String,
     file_id: String,
     title: String,
     #[serde(default)]
@@ -212,7 +214,13 @@ pub async fn channels() -> Result<Value, String> {
     channels_with(&crate::oauth::youtube_upload_access().await?).await
 }
 pub async fn prepare(input: Value) -> Result<Value, String> {
-    let draft = validate_draft(input)?;
+    let mut draft = validate_draft(input)?;
+    if draft.connection_id.is_empty() {
+        draft.connection_id = crate::oauth::unique_connection_id("youtube").await?;
+    }
+    let access =
+        crate::oauth::publishing_access_for(&draft.connection_id, "youtube", &draft.channel_id)
+            .await?;
     let selected = cache()
         .lock()
         .map_err(|_| "영상 선택 상태 오류")?
@@ -229,7 +237,7 @@ pub async fn prepare(input: Value) -> Result<Value, String> {
     {
         return Err("이 영상의 이전 전송 결과가 불명확합니다. YouTube Studio에서 확인한 뒤 ‘전송 결과 확인 완료’를 눌러주세요. 자동 재전송하지 않습니다.".into());
     }
-    let channels = channels().await?;
+    let channels = channels_with(&access.token).await?;
     let channel_title = channels["channels"]
         .as_array()
         .unwrap()
@@ -239,7 +247,7 @@ pub async fn prepare(input: Value) -> Result<Value, String> {
         .ok_or("선택한 채널은 현재 인증된 업로드 계정의 채널이 아닙니다.")?
         .to_string();
     let ticket = Uuid::new_v4().to_string();
-    let output = json!({"ticketId":ticket,"channelTitle":channel_title,"channelId":draft.channel_id,"title":draft.title,"description":draft.description,"privacy":draft.privacy,"madeForKids":draft.made_for_kids,"fileName":selected.name,"bytes":selected.bytes.len(),"sha256":selected.sha256,"expiresInSeconds":600});
+    let output = json!({"ticketId":ticket,"connectionId":draft.connection_id,"platform":"youtube","accountId":draft.channel_id,"channelTitle":channel_title,"channelId":draft.channel_id,"title":draft.title,"description":draft.description,"privacy":draft.privacy,"madeForKids":draft.made_for_kids,"fileName":selected.name,"bytes":selected.bytes.len(),"sha256":selected.sha256,"expiresInSeconds":600});
     let mut c = cache().lock().map_err(|_| "게시 확인 상태 오류")?;
     c.pending.clear();
     c.pending.insert(
@@ -323,7 +331,13 @@ pub async fn upload(ticket_id: String, confirmed: bool) -> Result<Value, String>
     {
         return Err("이 영상의 이전 전송 결과를 YouTube Studio에서 먼저 확인하세요. 중복 전송하지 않았습니다.".into());
     }
-    let token = crate::oauth::youtube_upload_access().await?;
+    let token = crate::oauth::publishing_access_for(
+        &pending.draft.connection_id,
+        "youtube",
+        &pending.draft.channel_id,
+    )
+    .await?
+    .token;
     let current = channels_with(&token).await?;
     if !current["channels"]
         .as_array()
@@ -334,7 +348,7 @@ pub async fn upload(ticket_id: String, confirmed: bool) -> Result<Value, String>
         return Err("로그인 계정이 바뀌었습니다. 게시 대상을 다시 확인하세요.".into());
     }
     let d = &pending.draft;
-    let mut record = json!({"attemptId":ticket_id,"status":"sending","channelId":d.channel_id,"channelTitle":pending.channel_title,"title":d.title,"requestedPrivacy":d.privacy,"sha256":pending.file.sha256,"fileName":pending.file.name,"startedAt":Utc::now().to_rfc3339(),"videoId":null,"actualPrivacy":null});
+    let mut record = json!({"attemptId":ticket_id,"connectionId":pending.draft.connection_id,"platform":"youtube","accountId":pending.draft.channel_id,"status":"sending","channelId":d.channel_id,"channelTitle":pending.channel_title,"title":d.title,"requestedPrivacy":d.privacy,"sha256":pending.file.sha256,"fileName":pending.file.name,"startedAt":Utc::now().to_rfc3339(),"videoId":null,"actualPrivacy":null});
     write_attempt(&record)?;
     let operation=async {
         let http=client()?;

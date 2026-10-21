@@ -271,6 +271,7 @@ struct PendingLogin {
     expires_at: u64,
     cancel: watch::Sender<bool>,
     publishing: bool,
+    provider_id: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -616,6 +617,12 @@ fn allowed_endpoint(endpoint: &str) -> bool {
             "https://graph.threads.net/refresh_access_token",
             "https://graph.instagram.com/access_token",
             "https://graph.instagram.com/refresh_access_token",
+            "https://www.googleapis.com/youtube/v3/channels",
+            "https://graph.threads.net/v1.0/me",
+            "https://graph.instagram.com/v25.0/me",
+            "https://graph.facebook.com/v25.0/me/accounts",
+            "https://open.tiktokapis.com/v2/user/info/",
+            "https://openapi.naver.com/v1/nid/me",
             "https://graph.threads.net/v1.0/me/permissions",
             "https://graph.instagram.com/v25.0/me/permissions",
             "https://graph.facebook.com/v25.0/me/permissions",
@@ -848,7 +855,16 @@ impl OAuthService {
                 || old.redirect_uri != config.redirect_uri
         });
         if changed {
-            self.store.delete(&format!("session:{}", provider.id()))?;
+            if let Some(original) = self.store.read(&format!("session:{}", provider.id()))? {
+                let backup = json!({"client":previous,"session":serde_json::from_str::<Value>(&original).map_err(|_|"이전 연결 백업 실패")?}).to_string();
+                let key = format!("legacy-backup:{}:{}", provider.id(), random_secret());
+                self.store.write(&key, &backup)?;
+                if self.store.read(&key)?.as_deref() != Some(backup.as_str()) {
+                    return Err("이전 연결 백업 검증 실패".into());
+                }
+                self.store
+                    .write(&format!("legacy-client-changed:{}", provider.id()), "true")?;
+            }
             // Audit approval belongs to one developer app, not to the user account.
             // Changing client credentials requires a fresh explicit declaration.
             config.tiktok_audit_declared = false;
@@ -858,9 +874,11 @@ impl OAuthService {
         self.audit(provider, "client_saved", "success")?;
         Ok(self.status_locked())
     }
+    #[cfg(test)]
     async fn begin_login(self: &Arc<Self>, provider: Provider) -> Result<Value, String> {
         self.begin_login_mode(provider, false).await
     }
+    #[cfg(test)]
     async fn begin_login_mode(
         self: &Arc<Self>,
         provider: Provider,
@@ -912,6 +930,7 @@ impl OAuthService {
                     expires_at: self.clock.now() + LOGIN_TTL,
                     cancel,
                     publishing: upload,
+                    provider_id: Some(provider.id().into()),
                 },
             );
         if let Err(error) = self.audit(provider, "login_started", "pending") {
@@ -932,6 +951,7 @@ impl OAuthService {
             json!({"authorizationUrl":authorization_url, "redirectUri":config.redirect_uri, "pending":true, "manualCallback":!loopback}),
         )
     }
+    #[cfg(test)]
     async fn complete_login(&self, provider: Provider, input: Value) -> Result<Value, String> {
         let _guard = self.gate.lock().await;
         let object = input.as_object().ok_or("콜백 주소를 입력하세요.")?;
@@ -1046,11 +1066,13 @@ impl OAuthService {
         self.audit(provider, "login_completed", "success")?;
         Ok(self.status_locked())
     }
+    #[cfg(test)]
     async fn refresh_session(&self, provider: Provider) -> Result<Value, String> {
         let _guard = self.gate.lock().await;
         self.refresh_locked(provider, false).await?;
         Ok(self.status_locked())
     }
+    #[cfg(test)]
     async fn refresh_locked(&self, provider: Provider, automatic: bool) -> Result<(), String> {
         let Some(client) = self.read::<ClientConfig>("client", provider)? else {
             return if automatic {
@@ -1129,6 +1151,7 @@ impl OAuthService {
             }
         }
     }
+    #[cfg(test)]
     async fn refresh_due(&self) -> Result<(), String> {
         let _guard = self.gate.lock().await;
         // Continue other accounts when one provider/vault entry cannot be refreshed.
@@ -1144,6 +1167,7 @@ impl OAuthService {
             Ok(())
         }
     }
+    #[cfg(test)]
     async fn disconnect(&self, provider: Provider) -> Result<Value, String> {
         let _guard = self.gate.lock().await;
         self.cancel_pending(provider);
@@ -1151,6 +1175,7 @@ impl OAuthService {
         self.audit(provider, "session_disconnected", "local_only")?;
         Ok(self.status_locked())
     }
+    #[cfg(test)]
     async fn listen(
         self: Arc<Self>,
         provider: Provider,
@@ -1639,12 +1664,53 @@ fn service() -> &'static Arc<OAuthService> {
     })
 }
 pub async fn status() -> Result<Value, String> {
-    service().status().await
+    let mut status = service().status().await?;
+    let connections = connections().await?;
+    if let Some(providers) = status["providers"].as_array_mut() {
+        for provider in providers {
+            let platform = provider["platform"].as_str().unwrap_or("").to_owned();
+            let matching = connections["connections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| c["platform"] == platform && c["disconnected"] == false)
+                .collect::<Vec<_>>();
+            provider["legacyAvailable"] =
+                json!(provider["connected"] == true || provider["refreshable"] == true);
+            provider["connected"] = json!(matching.iter().any(|c| c["connected"] == true));
+            provider["publishingAuthorized"] =
+                json!(matching.iter().any(|c| c["publishingAuthorized"] == true));
+            provider["uploadAuthorized"] =
+                json!(platform == "youtube" && provider["publishingAuthorized"] == true);
+            provider["needsReconnect"] =
+                json!(matching.iter().any(|c| c["needsReconnect"] == true));
+            provider["connectionCount"] = json!(matching
+                .iter()
+                .map(|c| c["connectionId"].as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len());
+            provider["pending"] = json!(service()
+                .pending
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+                .any(|p| p.provider_id.as_deref() == Some(platform.as_str())));
+            if matching.is_empty() && provider["legacyAvailable"] == true {
+                provider["detail"] = json!(
+                    "이전 연결 원본이 보존되어 있습니다. 계정 검증 후 연결 복사를 진행하세요."
+                );
+            }
+        }
+    }
+    status["connections"] = connections["connections"].clone();
+    status["warnings"] = connections["warnings"].clone();
+    Ok(status)
 }
 pub async fn save_client(platform: String, input: Value) -> Result<Value, String> {
     service()
         .save_client(Provider::parse(&platform)?, input)
-        .await
+        .await?;
+    status().await
 }
 /// Explicit publishing consent; normal account login remains read-only.
 pub async fn begin_publish_login(platform: String) -> Result<Value, String> {
@@ -1652,7 +1718,8 @@ pub async fn begin_publish_login(platform: String) -> Result<Value, String> {
     if provider.publishing_scope().is_none() {
         return Err("이 SNS는 영상 게시 권한을 제공하지 않습니다.".into());
     }
-    service().begin_login_mode(provider, true).await
+    connection_dispatch(json!({"action":"beginLogin","platform":provider.id(),"purpose":"publish"}))
+        .await
 }
 /// Credentials are intentionally native-only. This type is never serialized or Debug.
 pub(crate) struct PublishingAccess {
@@ -1661,39 +1728,7 @@ pub(crate) struct PublishingAccess {
     pub tiktok_audit_declared: bool,
 }
 pub(crate) async fn publishing_access(platform: &str) -> Result<PublishingAccess, String> {
-    let provider = Provider::parse(platform)?;
-    let service = service();
-    let _guard = service.gate.lock().await;
-    let session = service
-        .read::<TokenSession>("session", provider)?
-        .ok_or("게시 계정에 로그인하세요.")?;
-    if session.needs_reconnect {
-        return Err("SNS 계정을 다시 연결하세요.".into());
-    }
-    if session.expires_at <= service.clock.now() + 60 {
-        service.refresh_locked(provider, false).await?;
-    }
-    let session = service
-        .read::<TokenSession>("session", provider)?
-        .ok_or("SNS 연결을 확인하세요.")?;
-    if session.needs_reconnect
-        || session.expires_at <= service.clock.now()
-        || !provider.publishing_authorized(&session.scopes)
-    {
-        return Err(
-            "이 계정의 게시 권한을 별도로 승인하세요. 읽기 전용 연결은 게시 권한이 아닙니다."
-                .into(),
-        );
-    }
-    let audit_declared = provider == Provider::Tiktok
-        && service
-            .read::<ClientConfig>("client", provider)?
-            .is_some_and(|client| client.tiktok_audit_declared);
-    Ok(PublishingAccess {
-        token: session.access_token,
-        scopes: session.scopes,
-        tiktok_audit_declared: audit_declared,
-    })
+    connections_impl::unique_access(platform).await
 }
 fn granted_permissions(response: &Value) -> Result<Vec<String>, String> {
     let data = response
@@ -1710,54 +1745,52 @@ fn granted_permissions(response: &Value) -> Result<Vec<String>, String> {
     Ok(scopes)
 }
 pub async fn begin_youtube_upload_login() -> Result<Value, String> {
-    service().begin_login_mode(Provider::Youtube, true).await
+    begin_publish_login("youtube".into()).await
 }
 /// Token remains native-only and is used solely for fixed Google API endpoints.
 pub(crate) async fn youtube_upload_access() -> Result<String, String> {
-    let service = service();
-    let _guard = service.gate.lock().await;
-    let provider = Provider::Youtube;
-    let session = service
-        .read::<TokenSession>("session", provider)?
-        .ok_or("YouTube 업로드 계정에 로그인하세요.")?;
-    if !has_upload_scope(&session.scopes) {
-        return Err(
-            "YouTube 업로드 권한을 추가로 승인하세요. 기존 읽기 연결은 그대로 유지됩니다.".into(),
-        );
-    }
-    if session.needs_reconnect {
-        return Err("YouTube 계정에 다시 로그인하세요.".into());
-    }
-    if session.expires_at <= service.clock.now() + 60 {
-        service.refresh_locked(provider, false).await?;
-    }
-    let session = service
-        .read::<TokenSession>("session", provider)?
-        .ok_or("YouTube 연결을 확인하세요.")?;
-    if session.needs_reconnect
-        || session.expires_at <= service.clock.now()
-        || !has_upload_scope(&session.scopes)
-    {
-        return Err("YouTube 업로드 권한을 다시 승인하세요.".into());
-    }
-    Ok(session.access_token)
+    Ok(publishing_access("youtube").await?.token)
 }
 pub async fn begin_login(platform: String) -> Result<Value, String> {
-    service().begin_login(Provider::parse(&platform)?).await
+    connection_dispatch(json!({"action":"beginLogin","platform":platform,"purpose":"read"})).await
 }
 pub async fn complete_login(platform: String, input: Value) -> Result<Value, String> {
-    service()
-        .complete_login(Provider::parse(&platform)?, input)
-        .await
+    Provider::parse(&platform)?;
+    if let Some(id) = input["connectionId"].as_str() {
+        let pending = service().pending.lock().unwrap_or_else(|p| p.into_inner());
+        if pending.get(id).and_then(|p| p.provider_id.as_deref()) != Some(platform.as_str()) {
+            return Err("진행 중인 로그인 플랫폼과 연결이 일치하지 않습니다.".into());
+        }
+    }
+    let connection_id = if let Some(id) = input["connectionId"].as_str() {
+        id.to_owned()
+    } else {
+        let pending = service().pending.lock().unwrap_or_else(|p| p.into_inner());
+        let ids = pending
+            .iter()
+            .filter(|(_, p)| p.provider_id.as_deref() == Some(platform.as_str()))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        if ids.len() != 1 {
+            return Err("진행 중인 계정 연결을 명시적으로 선택하세요.".into());
+        }
+        ids[0].clone()
+    };
+    connection_dispatch(json!({"action":"completeLogin","connectionId":connection_id,"callbackUrl":input["callbackUrl"]})).await?;
+    status().await
 }
 pub async fn refresh_session(platform: String) -> Result<Value, String> {
-    service().refresh_session(Provider::parse(&platform)?).await
+    let id = unique_connection_id(&platform).await?;
+    connection_dispatch(json!({"action":"refresh","connectionId":id})).await?;
+    status().await
 }
 pub async fn disconnect(platform: String) -> Result<Value, String> {
-    service().disconnect(Provider::parse(&platform)?).await
+    let id = unique_connection_id(&platform).await?;
+    connection_dispatch(json!({"action":"disconnect","connectionId":id})).await?;
+    status().await
 }
 pub async fn refresh_due() -> Result<(), String> {
-    service().refresh_due().await
+    connections_impl::refresh_all().await
 }
 
 #[cfg(test)]
@@ -1769,7 +1802,7 @@ mod upload_tests;
 mod live_tests;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     #[test]
     fn system_login_handoff_opens_only_native_url_and_redacts_response() {
@@ -1831,7 +1864,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU64, Ordering};
     #[derive(Default)]
-    struct MemoryStore(StdMutex<HashMap<String, String>>);
+    pub(super) struct MemoryStore(StdMutex<HashMap<String, String>>);
     impl CredentialStore for MemoryStore {
         fn read(&self, account: &str) -> Result<Option<String>, String> {
             Ok(self.0.lock().unwrap().get(account).cloned())
@@ -1865,9 +1898,9 @@ mod tests {
         }
     }
     #[derive(Default)]
-    struct MockTransport {
-        responses: StdMutex<VecDeque<Result<Value, TokenFailure>>>,
-        requests: StdMutex<Vec<TokenRequest>>,
+    pub(super) struct MockTransport {
+        pub(super) responses: StdMutex<VecDeque<Result<Value, TokenFailure>>>,
+        pub(super) requests: StdMutex<Vec<TokenRequest>>,
     }
     impl TokenTransport for MockTransport {
         fn send(&self, request: TokenRequest) -> TokenFuture<'_> {
@@ -1881,13 +1914,13 @@ mod tests {
             Box::pin(async move { response })
         }
     }
-    struct TestClock(AtomicU64);
+    pub(super) struct TestClock(AtomicU64);
     impl Clock for TestClock {
         fn now(&self) -> u64 {
             self.0.load(Ordering::Relaxed)
         }
     }
-    fn fixture() -> (
+    pub(super) fn fixture() -> (
         Arc<OAuthService>,
         Arc<MemoryStore>,
         Arc<MockTransport>,
@@ -1907,7 +1940,7 @@ mod tests {
             clock,
         )
     }
-    fn client(provider: Provider) -> ClientConfig {
+    pub(super) fn client(provider: Provider) -> ClientConfig {
         ClientConfig {
             tiktok_audit_declared: false,
             client_id: "example-client-id".into(),
@@ -1930,6 +1963,7 @@ mod tests {
                 expires_at,
                 cancel,
                 publishing: false,
+                provider_id: None,
             },
         );
     }
@@ -2255,8 +2289,8 @@ mod tests {
             .is_err());
     }
     #[tokio::test]
-    async fn blank_client_fields_preserve_and_changed_client_invalidates_session() {
-        let (service, _, _, clock) = fixture();
+    async fn blank_client_fields_preserve_and_changed_client_keeps_recoverable_original() {
+        let (service, store, _, clock) = fixture();
         let provider = Provider::Youtube;
         service
             .write("client", provider, &client(provider))
@@ -2291,7 +2325,20 @@ mod tests {
         assert!(service
             .read::<TokenSession>("session", provider)
             .unwrap()
-            .is_none());
+            .is_some());
+        assert_eq!(
+            store
+                .read("legacy-client-changed:youtube")
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+        assert!(store
+            .0
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| key.starts_with("legacy-backup:youtube:")));
     }
     #[tokio::test]
     async fn meta_tokens_are_upgraded_and_refresh_waits_twenty_four_hours() {
@@ -2527,4 +2574,31 @@ mod tests {
         chunked_delete(&store, "session:youtube").unwrap();
         assert!(store.inner.0.lock().unwrap().is_empty());
     }
+}
+
+#[path = "oauth_connections.rs"]
+mod connections_impl;
+pub async fn connections() -> Result<Value, String> {
+    connections_impl::list().await
+}
+pub async fn connection_dispatch(input: Value) -> Result<Value, String> {
+    connections_impl::dispatch(input).await
+}
+pub(crate) async fn scoped_access(
+    connection_id: &str,
+    platform: &str,
+    account_id: &str,
+    required_scopes: &[&str],
+) -> Result<PublishingAccess, String> {
+    connections_impl::scoped(connection_id, platform, account_id, required_scopes, false).await
+}
+pub(crate) async fn publishing_access_for(
+    connection_id: &str,
+    platform: &str,
+    account_id: &str,
+) -> Result<PublishingAccess, String> {
+    connections_impl::scoped(connection_id, platform, account_id, &[], true).await
+}
+pub(crate) async fn unique_connection_id(platform: &str) -> Result<String, String> {
+    connections_impl::unique_id(platform).await
 }

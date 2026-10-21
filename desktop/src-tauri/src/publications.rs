@@ -303,12 +303,15 @@ fn normalize(input: &Value) -> Result<Value, String> {
                     "threads",
                     "tiktok",
                     "naver_blog",
+                    "naver_clip",
+                    "x",
                 ]
                 .contains(s)
             })
             .ok_or("일괄 게시 플랫폼을 확인하세요.")?;
-        if (content_kind == "text" && !["facebook", "threads", "naver_blog"].contains(&platform))
-            || (content_kind == "article" && platform != "naver_blog")
+        if (content_kind == "text"
+            && !["facebook", "threads", "naver_blog", "x"].contains(&platform))
+            || (content_kind == "article" && !["naver_blog", "x"].contains(&platform))
             || (content_kind == "video" && platform == "naver_blog")
         {
             return Err("콘텐츠 종류와 게시 플랫폼이 일치하지 않습니다.".into());
@@ -321,14 +324,18 @@ fn normalize(input: &Value) -> Result<Value, String> {
             return Err("초안 전송은 TikTok에서만 지원합니다.".into());
         }
         let scheduled = target["scheduledAt"].as_str().filter(|s| !s.is_empty());
-        if (platform == "naver_blog") != (mode == "manual_handoff")
+        if ["naver_blog", "naver_clip", "x"].contains(&platform) != (mode == "manual_handoff")
             || (mode == "manual_handoff" && scheduled.is_some())
         {
-            return Err("네이버 블로그는 자동 예약 대신 수동 게시 인계만 지원합니다.".into());
+            return Err("이 플랫폼은 자동 예약 대신 수동 게시 인계만 지원합니다.".into());
         }
         if mode == "scheduled" {
             DateTime::parse_from_rfc3339(scheduled.ok_or("예약 시간을 선택하세요.")?)
                 .map_err(|_| "예약 시간은 시간대가 포함된 날짜여야 합니다.")?;
+        }
+        let connection = text(target, "connectionId", 36, false)?;
+        if !connection.is_empty() {
+            uuid(&connection)?;
         }
         let account = text(target, "accountId", 200, false)?;
         if !account.is_empty() && !accounts_seen.insert((platform.to_owned(), account.clone())) {
@@ -358,7 +365,7 @@ fn normalize(input: &Value) -> Result<Value, String> {
                 words(&overrides, field)?;
             }
         }
-        normalized.push(json!({"id":target_id,"platform":platform,"accountId":account,"accountTitle":account_title,"mode":mode,"scheduledAt":scheduled,"overrides":overrides,"options":options}));
+        normalized.push(json!({"id":target_id,"platform":platform,"connectionId":connection,"accountId":account,"accountTitle":account_title,"mode":mode,"scheduledAt":scheduled,"overrides":overrides,"options":options}));
     }
     Ok(
         json!({"contentKind":content_kind,"title":title,"description":description,"tags":tags,"hashtags":hashtags,"videoMediaId":video,"thumbnailMediaId":thumbnail,"imageMediaIds":images,"targets":normalized}),
@@ -368,7 +375,7 @@ fn job(row: &Row) -> Value {
     let result: Option<Value> = row.get("result");
     let result = result.unwrap_or(Value::Null);
     let snapshot: Value = row.get("snapshot");
-    json!({"id":row.get::<_,Uuid>("id").to_string(),"targetId":row.get::<_,Uuid>("target_id").to_string(),"platform":snapshot["platform"],"contentKind":snapshot["contentKind"],"accountId":snapshot["accountId"],"accountTitle":snapshot["accountTitle"],"revision":row.get::<_,i32>("revision"),"status":row.get::<_,String>("status"),"mode":row.get::<_,String>("mode"),"scheduledAt":row.get::<_,Option<DateTime<Utc>>>("scheduled_at").map(|v|v.to_rfc3339()),"externalId":result["externalId"],"url":result["url"],"verification":result["verification"],"error":row.get::<_,Option<String>>("error"),"warnings":result.get("warnings").cloned().unwrap_or_else(||json!([])),"thumbnailStatus":result["thumbnailStatus"],"retryable":row.get::<_,bool>("retryable"),"updatedAt":row.get::<_,DateTime<Utc>>("updated_at").to_rfc3339()})
+    json!({"id":row.get::<_,Uuid>("id").to_string(),"targetId":row.get::<_,Uuid>("target_id").to_string(),"platform":snapshot["platform"],"connectionId":snapshot["connectionId"],"contentKind":snapshot["contentKind"],"accountId":snapshot["accountId"],"accountTitle":snapshot["accountTitle"],"revision":row.get::<_,i32>("revision"),"status":row.get::<_,String>("status"),"mode":row.get::<_,String>("mode"),"scheduledAt":row.get::<_,Option<DateTime<Utc>>>("scheduled_at").map(|v|v.to_rfc3339()),"externalId":result["externalId"],"url":result["url"],"verification":result["verification"],"error":row.get::<_,Option<String>>("error"),"warnings":result.get("warnings").cloned().unwrap_or_else(||json!([])),"thumbnailStatus":result["thumbnailStatus"],"retryable":row.get::<_,bool>("retryable"),"updatedAt":row.get::<_,DateTime<Utc>>("updated_at").to_rfc3339()})
 }
 fn publication(row: &Row, jobs: Vec<Value>) -> Value {
     let mut value: Value = row.get("payload");
@@ -511,7 +518,7 @@ fn selection(publication: &Value, input: &Value) -> Result<Vec<String>, String> 
     Ok(chosen)
 }
 fn merged(publication: &Value, target: &Value) -> Value {
-    let mut plan = json!({"platform":target["platform"],"accountId":target["accountId"],"accountTitle":target["accountTitle"],"mode":target["mode"],"scheduledAt":target["scheduledAt"],"options":target["options"],"title":publication["title"],"description":publication["description"],"tags":publication["tags"],"hashtags":publication["hashtags"],"videoMediaId":publication["videoMediaId"],"thumbnailMediaId":publication["thumbnailMediaId"]});
+    let mut plan = json!({"platform":target["platform"],"connectionId":target["connectionId"],"accountId":target["accountId"],"accountTitle":target["accountTitle"],"mode":target["mode"],"scheduledAt":target["scheduledAt"],"options":target["options"],"title":publication["title"],"description":publication["description"],"tags":publication["tags"],"hashtags":publication["hashtags"],"videoMediaId":publication["videoMediaId"],"thumbnailMediaId":publication["thumbnailMediaId"]});
     plan["contentKind"] = publication
         .get("contentKind")
         .cloned()
@@ -645,8 +652,8 @@ pub async fn preflight(config: &AppConfig, input: Value) -> Result<Value, String
         let mut plan = merged(&publication, target);
         plan["video"] = video.clone();
         plan["thumbnail"] = thumbnail.clone().unwrap_or(Value::Null);
-        let checked = if target["platform"] == "naver_blog" {
-            crate::publication_handoff::validate_plan(&plan).map(|_| json!({"ready":true,"message":"수동 게시 인계 자료 준비됨. 계정 실재·게시 권한을 API로 검증한 결과가 아닙니다.","warnings":["내보내기만으로 게시되지 않습니다. 네이버 편집기에서 직접 게시한 뒤 실제 URL을 기록하세요."]}))
+        let checked = if target["mode"] == "manual_handoff" {
+            crate::publication_handoff::validate_plan(&plan).map(|_| json!({"ready":true,"message":"수동 게시 인계 자료 준비됨. 계정 실재·게시 권한을 API로 검증한 결과가 아닙니다.","editorUrl":crate::publication_handoff::editor_url(&plan),"warnings":["내보내기만으로 게시되지 않습니다. 플랫폼에서 직접 게시한 뒤 실제 URL을 기록하세요."]}))
         } else {
             crate::publishing_adapters::preflight(&plan).await
         };
@@ -783,8 +790,21 @@ pub async fn export_handoff(
         )?;
         images.push((meta.clone(), path));
     }
+    let video = if plan["contentKind"] == "video" {
+        let meta = plan["video"].clone();
+        let path =
+            crate::publication_media::private_path(meta["id"].as_str().ok_or("영상 식별자 오류")?)?;
+        Some((meta, path))
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || {
-        crate::publication_handoff::write_package(&plan, &images, &parent)
+        crate::publication_handoff::write_package_with_media(
+            &plan,
+            &images,
+            video.as_ref(),
+            &parent,
+        )
     })
     .await
     .map_err(|_| "수동 게시 패키지 내보내기 실패".to_string())?
@@ -793,16 +813,17 @@ pub async fn confirm_handoff(config: &AppConfig, input: Value) -> Result<Value, 
     let _guard = lock_for_update()?;
     if input["confirmed"] != true {
         return Err(
-            "네이버에서 실제 게시를 확인한 뒤 동의하세요. 예약 설정만으로 완료 처리하지 않습니다."
+            "플랫폼에서 실제 게시를 확인한 뒤 동의하세요. 예약 설정만으로 완료 처리하지 않습니다."
                 .into(),
         );
     }
     let (id, publication, plan) = approved_handoff(config, &input).await?;
-    let url = crate::publication_handoff::post_url(
+    let url = crate::publication_handoff::platform_post_url(
+        plan["platform"].as_str().unwrap(),
         plan["accountId"].as_str().unwrap(),
         input["url"].as_str().ok_or("실제 게시 URL을 입력하세요.")?,
     )?;
-    let result = json!({"status":"published","url":url,"verification":"user_confirmed","warnings":["사용자가 외부 네이버 블로그에서 게시를 확인했습니다. API 검증 결과가 아닙니다."]});
+    let result = json!({"status":"published","url":url,"verification":"user_confirmed","warnings":["사용자가 외부 플랫폼에서 게시를 확인했습니다. API 검증 결과가 아닙니다."]});
     let dbs = crate::social::database(config).await?;
     if db(dbs.client.execute("UPDATE publication_jobs j SET status='published',result=$2,retryable=false,error=NULL,updated_at=now() FROM publications p WHERE j.id=$1 AND p.id=j.publication_id AND p.revision=j.revision AND j.status='needs_human_publish' AND j.mode='manual_handoff'", &[&id, &result]).await)? != 1 { return Err("인계 작업이 변경되었습니다. 다시 확인하세요.".into()); }
     get(config, &publication.to_string()).await
@@ -942,7 +963,8 @@ pub async fn recover(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 async fn claim(tx: &Transaction<'_>, is_paused: bool) -> Result<Option<Row>, String> {
-    db(tx.query_opt("UPDATE publication_jobs SET status='sending',claimed_at=now(),attempts=attempts+1,updated_at=now() WHERE id=(SELECT j.id FROM publication_jobs j JOIN publications p ON p.id=j.publication_id AND p.revision=j.revision WHERE (NOT $1::boolean OR j.mode<>'scheduled') AND (j.status='queued' OR (j.status='scheduled' AND j.scheduled_at<=now())) ORDER BY j.scheduled_at NULLS FIRST,j.created_at FOR UPDATE OF p,j SKIP LOCKED LIMIT 1) RETURNING *",&[&is_paused]).await)
+    db(tx.execute("UPDATE publication_jobs SET status='needs_confirmation',retryable=false,error='계정 연결을 선택하고 다시 승인하세요. 자동 재게시하지 않습니다.',updated_at=now() WHERE id IN (SELECT id FROM publication_jobs WHERE mode<>'manual_handoff' AND status IN ('queued','scheduled') AND COALESCE(snapshot->>'connectionId','')='' FOR UPDATE SKIP LOCKED)",&[]).await)?;
+    db(tx.query_opt("UPDATE publication_jobs SET status='sending',claimed_at=now(),attempts=attempts+1,updated_at=now() WHERE id=(SELECT j.id FROM publication_jobs j JOIN publications p ON p.id=j.publication_id AND p.revision=j.revision WHERE COALESCE(j.snapshot->>'connectionId','')<>'' AND (NOT $1::boolean OR j.mode<>'scheduled') AND (j.status='queued' OR (j.status='scheduled' AND j.scheduled_at<=now())) ORDER BY j.scheduled_at NULLS FIRST,j.created_at FOR UPDATE OF p,j SKIP LOCKED LIMIT 1) RETURNING *",&[&is_paused]).await)
 }
 pub async fn tick(config: &AppConfig) -> Result<(), String> {
     heartbeat();
@@ -1013,7 +1035,11 @@ async fn execute(
         uncertain: false,
         remote: None,
     };
-    if plan["platform"] == "naver_blog" || plan["mode"] == "manual_handoff" {
+    if matches!(
+        plan["platform"].as_str(),
+        Some("naver_blog" | "naver_clip" | "x")
+    ) || plan["mode"] == "manual_handoff"
+    {
         return Err(local_error(
             "수동 게시 인계는 자동 실행할 수 없습니다.".into(),
         ));
@@ -1165,6 +1191,25 @@ mod tests {
         assert!(normalize(&input).is_err());
     }
     #[test]
+    fn x_and_clip_are_strictly_manual_and_legacy_connections_stay_unbound() {
+        let mut input = json!({"contentKind":"text","title":"X handoff","description":"Original text","targets":[{"id":Uuid::new_v4().to_string(),"platform":"x","accountId":"fixture_x","mode":"manual_handoff","options":{"confirmHandoff":true}}]});
+        let normalized = normalize(&input).unwrap();
+        assert_eq!(normalized["targets"][0]["connectionId"], "");
+        input["targets"][0]["mode"] = json!("manual");
+        assert!(normalize(&input).is_err());
+        input["targets"][0]["mode"] = json!("manual_handoff");
+        input["contentKind"] = json!("article");
+        assert!(normalize(&input).is_ok());
+        input["targets"][0]["platform"] = json!("naver_clip");
+        assert!(normalize(&input).is_err());
+        input["contentKind"] = json!("video");
+        input["videoMediaId"] = json!(Uuid::new_v4().to_string());
+        assert!(normalize(&input).is_ok());
+        input["targets"][0]["mode"] = json!("scheduled");
+        input["targets"][0]["scheduledAt"] = json!("2030-12-31T00:00:00Z");
+        assert!(normalize(&input).is_err());
+    }
+    #[test]
     fn target_selection_rejects_duplicates() {
         let id = Uuid::new_v4().to_string();
         let value = json!({"targets":[{"id":id}]});
@@ -1208,7 +1253,7 @@ mod tests {
     }
     #[test]
     fn approval_binds_revision_account_and_media() {
-        let p = json!({"id":"a","revision":1,"targets":[{"accountId":"one"}]});
+        let p = json!({"id":"a","revision":1,"targets":[{"accountId":"one","connectionId":"first-connection","platform":"youtube"}]});
         let selected = vec!["target".into()];
         let v = json!({"sha256":"one"});
         let first = hash_approval(&p, &selected, &v, &None);
@@ -1219,6 +1264,12 @@ mod tests {
             first,
             hash_approval(&p, &selected, &json!({"sha256":"two"}), &None)
         );
+        changed = p.clone();
+        changed["targets"][0]["connectionId"] = json!("other-connection");
+        assert_ne!(first, hash_approval(&changed, &selected, &v, &None));
+        changed = p.clone();
+        changed["targets"][0]["platform"] = json!("threads");
+        assert_ne!(first, hash_approval(&changed, &selected, &v, &None));
         changed = p;
         changed["targets"][0]["accountId"] = json!("other");
         assert_ne!(first, hash_approval(&changed, &selected, &v, &None));
@@ -1348,7 +1399,9 @@ mod tests {
             save(&config, edit).await.is_err(),
             "stale revisions must not overwrite drafts"
         );
+        let fixture_connection = Uuid::new_v4().to_string();
         let mut payload = second.clone();
+        payload["connectionId"] = json!(fixture_connection);
         payload.as_object_mut().unwrap().remove("jobs");
         dbs.client
             .execute(
@@ -1357,6 +1410,9 @@ mod tests {
             )
             .await
             .unwrap();
+        let legacy_job = Uuid::new_v4();
+        let legacy_target = Uuid::new_v4();
+        dbs.client.execute("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status)VALUES($1,$2,2,$3,$4,$5,'manual','queued')",&[&legacy_job,&publication_id,&legacy_target,&"0".repeat(64),&json!({"platform":"youtube","accountId":"fixture"})]).await.unwrap();
         let mut connection_a = crate::social::database(&config).await.unwrap();
         let mut connection_b = crate::social::database(&config).await.unwrap();
         let tx_a = connection_a.client.transaction().await.unwrap();
@@ -1376,7 +1432,18 @@ mod tests {
         tx_a.commit().await.unwrap();
         tx_b.commit().await.unwrap();
         let active = get(&config, &publication_id.to_string()).await.unwrap();
-        assert_eq!(active["jobs"][0]["status"], "sending");
+        assert!(active["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| job["id"] == job_id.to_string() && job["status"] == "sending"));
+        assert!(active["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |job| job["id"] == legacy_job.to_string() && job["status"] == "needs_confirmation"
+            ));
         let mut unsafe_edit = input;
         unsafe_edit["id"] = json!(publication_id.to_string());
         unsafe_edit["revision"] = json!(2);
@@ -1387,7 +1454,11 @@ mod tests {
         RECOVERED.store(false, Ordering::SeqCst);
         recover_locked(&config).await.unwrap();
         let recovered = get(&config, &publication_id.to_string()).await.unwrap();
-        assert_eq!(recovered["jobs"][0]["status"], "uncertain");
+        assert!(recovered["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| job["id"] == job_id.to_string() && job["status"] == "uncertain"));
         assert!(!recovered["jobs"][0]["retryable"].as_bool().unwrap());
         assert!(reconcile(
             &config,
@@ -1401,7 +1472,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(user_confirmed["jobs"][0]["status"], "needs_confirmation");
+        assert!(user_confirmed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| job["id"] == job_id.to_string() && job["status"] == "needs_confirmation"));
         let past_id = Uuid::new_v4();
         let future_id = Uuid::new_v4();
         let queued_id = Uuid::new_v4();
@@ -1481,7 +1556,7 @@ mod tests {
             ),
         ] {
             let target = Uuid::new_v4();
-            dbs.client.execute("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status,scheduled_at)VALUES($1,$2,2,$3,$4,$5,$6,$7,$8)",&[&id,&publication_id,&target,&"0".repeat(64),&json!({}),&mode,&status,&when]).await.unwrap();
+            dbs.client.execute("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status,scheduled_at)VALUES($1,$2,2,$3,$4,$5,$6,$7,$8)",&[&id,&publication_id,&target,&"0".repeat(64),&json!({"connectionId":fixture_connection}),&mode,&status,&when]).await.unwrap();
         }
         let paused_tx = connection_a.client.transaction().await.unwrap();
         assert_eq!(
