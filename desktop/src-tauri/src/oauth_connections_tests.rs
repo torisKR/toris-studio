@@ -548,6 +548,7 @@ async fn disconnect_cleanup_survives_failed_database_and_same_id_reconnect_attem
     let (service, store, transport, _) = fixture();
     let c = sample("111");
     save_connection(&service, &c).unwrap();
+    prepare_cleanup_locked(&service, &c.id, Some("fixture-db-A")).unwrap();
     disconnect_connection(&service, &c.id).await.unwrap();
     let listed = connection_list_locked(&service).unwrap();
     assert_eq!(listed["connections"][0]["cleanupPending"], true);
@@ -569,9 +570,22 @@ async fn disconnect_cleanup_survives_failed_database_and_same_id_reconnect_attem
         !listed.to_string().contains(generation),
         "native acknowledgement nonce must not cross IPC"
     );
-    assert!(complete_cleanup_locked(&service, &c.id, "stale-generation").is_err());
+    assert!(!listed.to_string().contains("fixture-db-A"));
+    assert!(complete_cleanup_locked(&service, &c.id, "stale-generation", "fixture-db-A").is_err());
     assert_eq!(cleanup_tickets_locked(&service).unwrap().len(), 1);
-    complete_cleanup_locked(&service, &c.id, generation).unwrap();
+    assert!(complete_cleanup_locked(&service, &c.id, generation, "fixture-db-B").is_err());
+    // Repeating disconnect after switching config cannot redirect the intent.
+    prepare_cleanup_locked(&service, &c.id, Some("fixture-db-B")).unwrap();
+    assert_eq!(
+        cleanup_tickets_locked(&service).unwrap()[0]["databaseFingerprint"],
+        "fixture-db-A"
+    );
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_err()
+    );
+    complete_cleanup_locked(&service, &c.id, generation, "fixture-db-A").unwrap();
     assert!(cleanup_tickets_locked(&service).unwrap().is_empty());
     assert!(
         begin_connection(&service, Provider::Threads, "read", Some(&c.id))
@@ -580,6 +594,31 @@ async fn disconnect_cleanup_survives_failed_database_and_same_id_reconnect_attem
     );
     assert!(transport.requests.lock().unwrap().is_empty());
     assert!(store.read(&connection_key(&c.id)).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn legacy_cleanup_without_database_identity_never_adopts_current_database() {
+    let (service, store, transport, _) = fixture();
+    let c = sample("111");
+    save_connection(&service, &c).unwrap();
+    // This is the exact pre-fingerprint on-disk format.
+    store
+        .write(
+            &cleanup_key(&c.id),
+            &json!({"generation":"legacy","platform":"threads","requested_at":1}).to_string(),
+        )
+        .unwrap();
+    prepare_cleanup_locked(&service, &c.id, Some("current-db")).unwrap();
+    disconnect_connection(&service, &c.id).await.unwrap();
+    assert!(cleanup_tickets_locked(&service).unwrap()[0]["databaseFingerprint"].is_null());
+    assert!(complete_cleanup_locked(&service, &c.id, "legacy", "current-db").is_err());
+    assert!(cleanup_pending(&service, &c.id).unwrap());
+    assert!(
+        begin_connection(&service, Provider::Threads, "read", Some(&c.id))
+            .await
+            .is_err()
+    );
+    assert!(transport.requests.lock().unwrap().is_empty());
 }
 
 #[cfg(feature = "desktop")]
@@ -602,6 +641,8 @@ async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_impor
         database_url: Some(raw),
         ..Default::default()
     };
+    let fingerprint =
+        crate::oauth_native::database_fingerprint(&config)?.ok_or("fixture fingerprint")?;
     let (service, _, transport, _) = fixture();
     let c = sample("fixture_account");
     let other = sample("other_account");
@@ -631,16 +672,48 @@ async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_impor
     ] {
         db.client.execute("INSERT INTO analytics_sources(id,source_kind,platform,account_id,connection_id,label,digest)VALUES($1,$2,'threads','fixture_account',$3,'cleanup fixture',$4)",&[&id,&kind,&connection,&id.to_string()]).await.map_err(|_|"fixture source")?;
     }
+    prepare_cleanup_locked(&service, &c.id, Some(&fingerprint))?;
     disconnect_connection(&service, &c.id).await?;
     let ticket = cleanup_tickets_locked(&service)?.remove(0);
     let generation = ticket["generation"].as_str().ok_or("fixture generation")?;
     let offline = crate::config::AppConfig::default();
     assert!(crate::oauth_native::run_cleanup(
         crate::oauth_native::cleanup_database(&offline, &c.id),
-        async { complete_cleanup_locked(&service, &c.id, generation) }
+        async { complete_cleanup_locked(&service, &c.id, generation, &fingerprint) }
     )
     .await
     .is_err());
+    assert!(cleanup_pending(&service, &c.id)?);
+    let mut empty_database = url.clone();
+    empty_database.set_path("/postgres");
+    let switched = crate::config::AppConfig {
+        database_url: Some(empty_database.to_string()),
+        ..Default::default()
+    };
+    let empty = crate::social::database(&switched).await?;
+    assert!(empty
+        .client
+        .query_one("SELECT to_regclass('public.publication_jobs')::text", &[])
+        .await
+        .map_err(|_| "fixture empty database")?
+        .get::<_, Option<String>>(0)
+        .is_none());
+    drop(empty);
+    assert!(
+        crate::oauth_native::run_cleanup(
+            async {
+                crate::oauth_native::cleanup_database_target(&ticket, &switched)?;
+                crate::oauth_native::cleanup_database(&switched, &c.id).await
+            },
+            async { complete_cleanup_locked(&service, &c.id, generation, &fingerprint) }
+        )
+        .await
+        .is_err(),
+        "an empty, reachable DB B must not acknowledge DB A's intent"
+    );
+    assert!(
+        complete_cleanup_locked(&service, &c.id, generation, "different-empty-database").is_err()
+    );
     assert!(cleanup_pending(&service, &c.id)?);
     assert!(
         begin_connection(&service, Provider::Threads, "read", Some(&c.id))
@@ -671,7 +744,7 @@ async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_impor
     assert!(
         crate::oauth_native::run_cleanup(
             crate::oauth_native::cleanup_database(&config, &c.id),
-            async { complete_cleanup_locked(&service, &c.id, generation) }
+            async { complete_cleanup_locked(&service, &c.id, generation, &fingerprint) }
         )
         .await
         .is_err(),
@@ -692,7 +765,7 @@ async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_impor
     locked.rollback().await.map_err(|_| "fixture unlock")?;
     crate::oauth_native::run_cleanup(
         crate::oauth_native::cleanup_database(&config, &c.id),
-        async { complete_cleanup_locked(&service, &c.id, generation) },
+        async { complete_cleanup_locked(&service, &c.id, generation, &fingerprint) },
     )
     .await?;
     assert!(!cleanup_pending(&service, &c.id)?);

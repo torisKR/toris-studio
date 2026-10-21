@@ -2648,6 +2648,17 @@ pub(crate) async fn pending_connection_cleanups() -> Result<Vec<serde_json::Valu
     connections_impl::pending_cleanups().await
 }
 #[cfg(feature = "desktop")]
-pub(crate) async fn complete_connection_cleanup(id: &str, generation: &str) -> Result<(), String> {
-    connections_impl::complete_cleanup(id, generation).await
+pub(crate) async fn complete_connection_cleanup(
+    id: &str,
+    generation: &str,
+    database_fingerprint: &str,
+) -> Result<(), String> {
+    connections_impl::complete_cleanup(id, generation, database_fingerprint).await
+}
+#[cfg(feature = "desktop")]
+pub(crate) async fn disconnect_connection_from_database(
+    id: &str,
+    database_fingerprint: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    connections_impl::disconnect_for_database(id, database_fingerprint).await
 }

@@ -27,6 +27,8 @@ struct PendingCleanup {
     generation: String,
     platform: String,
     requested_at: u64,
+    #[serde(default)]
+    database_fingerprint: Option<String>,
 }
 fn cleanup_key(id: &str) -> String {
     format!("db-cleanup-pending:v2:{id}")
@@ -35,6 +37,15 @@ fn cleanup_pending(s: &OAuthService, id: &str) -> Result<bool, String> {
     Ok(s.store.read(&cleanup_key(id))?.is_some())
 }
 fn mark_cleanup_pending(s: &OAuthService, id: &str) -> Result<(), String> {
+    prepare_cleanup_locked(s, id, None)
+}
+fn prepare_cleanup_locked(
+    s: &OAuthService,
+    id: &str,
+    database_fingerprint: Option<&str>,
+) -> Result<(), String> {
+    // An existing intent must retain its original database, even if an older
+    // version omitted that identity. Never adopt the current configuration.
     if cleanup_pending(s, id)? {
         return Ok(());
     }
@@ -43,6 +54,7 @@ fn mark_cleanup_pending(s: &OAuthService, id: &str) -> Result<(), String> {
         generation: random_secret(),
         platform: c.platform,
         requested_at: s.clock.now(),
+        database_fingerprint: database_fingerprint.map(str::to_owned),
     };
     verified_write(
         s,
@@ -61,14 +73,18 @@ fn cleanup_tickets_locked(s: &OAuthService) -> Result<Vec<Value>, String> {
         if let Some(raw) = s.store.read(&cleanup_key(&id))? {
             let p: PendingCleanup =
                 serde_json::from_str(&raw).map_err(|_| "연결 정리 복구 정보 오류")?;
-            tickets
-                .push(json!({"connectionId":id,"generation":p.generation,"platform":p.platform}));
+            tickets.push(json!({"connectionId":id,"generation":p.generation,"platform":p.platform,"databaseFingerprint":p.database_fingerprint}));
         }
     }
     Ok(tickets)
 }
 #[cfg(any(feature = "desktop", test))]
-fn complete_cleanup_locked(s: &OAuthService, id: &str, generation: &str) -> Result<(), String> {
+fn complete_cleanup_locked(
+    s: &OAuthService,
+    id: &str,
+    generation: &str,
+    database_fingerprint: &str,
+) -> Result<(), String> {
     Uuid::parse_str(id).map_err(|_| "연결 식별자 오류")?;
     let Some(raw) = s.store.read(&cleanup_key(id))? else {
         return Ok(());
@@ -76,6 +92,9 @@ fn complete_cleanup_locked(s: &OAuthService, id: &str, generation: &str) -> Resu
     let p: PendingCleanup = serde_json::from_str(&raw).map_err(|_| "연결 정리 복구 정보 오류")?;
     if p.generation != generation {
         return Err("연결 정리 요청이 변경되었습니다. 다시 정리하세요.".into());
+    }
+    if p.database_fingerprint.as_deref() != Some(database_fingerprint) {
+        return Err("원래 정리 대상 DB에서만 연결 정리를 완료할 수 있습니다.".into());
     }
     s.store.delete(&cleanup_key(id))?;
     if s.store.read(&cleanup_key(id))?.is_some() {
@@ -1113,10 +1132,30 @@ pub(super) async fn pending_cleanups() -> Result<Vec<Value>, String> {
     cleanup_tickets_locked(s)
 }
 #[cfg(feature = "desktop")]
-pub(super) async fn complete_cleanup(id: &str, generation: &str) -> Result<(), String> {
+pub(super) async fn complete_cleanup(
+    id: &str,
+    generation: &str,
+    database_fingerprint: &str,
+) -> Result<(), String> {
     let s = service();
     let _g = s.gate.lock().await;
-    complete_cleanup_locked(s, id, generation)
+    complete_cleanup_locked(s, id, generation, database_fingerprint)
+}
+pub(super) async fn disconnect_for_database(
+    id: &str,
+    database_fingerprint: Option<&str>,
+) -> Result<Value, String> {
+    let s = service();
+    let _g = s.gate.lock().await;
+    // Pin the native configuration and disconnect under one OAuth lock. A
+    // cleanup retry cannot acknowledge a preparatory marker in between.
+    prepare_cleanup_locked(s, id, database_fingerprint)?;
+    disconnect_connection(s, id).await?;
+    let mut result = connection_list_locked(s)?;
+    if pending_revocation(s, id)?.is_some() {
+        result["warnings"].as_array_mut().unwrap().push(json!({"connectionId":id,"kind":"revocation_pending","message":"로컬 연결은 해제되었습니다. Google 인증 취소는 연결이 복구되면 다시 시도합니다."}));
+    }
+    Ok(result)
 }
 pub(super) async fn list() -> Result<Value, String> {
     let s = service();
@@ -1222,16 +1261,7 @@ pub(super) async fn dispatch(input: Value) -> Result<Value, String> {
             refresh_connection_locked(s, id()?, false).await?;
             connection_list_locked(s)
         }
-        "disconnect" => {
-            let s = service();
-            let _g = s.gate.lock().await;
-            disconnect_connection(s, id()?).await?;
-            let mut result = connection_list_locked(s)?;
-            if pending_revocation(s, id()?)?.is_some() {
-                result["warnings"].as_array_mut().unwrap().push(json!({"connectionId":id()?,"kind":"revocation_pending","message":"로컬 연결은 해제되었습니다. Google 인증 취소는 연결이 복구되면 다시 시도합니다."}));
-            }
-            Ok(result)
-        }
+        "disconnect" => disconnect_for_database(id()?, None).await,
         "migrateLegacy" => {
             let s = service();
             let _g = s.gate.lock().await;
