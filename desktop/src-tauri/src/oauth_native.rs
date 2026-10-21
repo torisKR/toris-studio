@@ -60,7 +60,14 @@ pub async fn oauth_connection_dispatch(
         return Ok(result);
     }
     let begin = input["action"] == "beginLogin";
-    let result = crate::oauth::connection_dispatch(input).await?;
+    let disconnect = if input["action"] == "disconnect" { input["connectionId"].as_str().map(str::to_owned) } else { None };
+    let mut result = crate::oauth::connection_dispatch(input).await?;
+    if let Some(id) = disconnect {
+        if cleanup_connection(&state.config_snapshot().await, &id).await.is_err() {
+            if !result["warnings"].is_array() { result["warnings"]=json!([]); }
+            result["warnings"].as_array_mut().unwrap().push(json!({"kind":"disconnect_cleanup","message":"연결은 해제되었습니다. 로컬 DB 복구 후 해당 예약과 API 캐시 정리를 계속합니다."}));
+        }
+    }
     if begin {
         use tauri_plugin_opener::OpenerExt;
         let id = result["connectionId"].clone();
@@ -78,6 +85,28 @@ pub async fn oauth_connection_dispatch(
         opened
     } else {
         with_bindings(result, &state.config_snapshot().await).await
+    }
+}
+
+pub(crate) async fn cleanup_connection(config:&crate::config::AppConfig,id:&str)->Result<(),String>{
+    uuid::Uuid::parse_str(id).map_err(|_|"연결 식별자 오류")?;
+    {
+        let session=crate::social::database(config).await?;
+        if session.client.query_one("SELECT to_regclass('public.publication_jobs')::text",&[]).await.map_err(|_|"게시 저장소 확인 실패")?.get::<_,Option<String>>(0).is_some(){
+            session.client.execute("UPDATE publication_jobs SET status='needs_confirmation',retryable=false,error='계정 연결이 해제되었습니다. 다시 연결하고 승인하세요.',updated_at=now() WHERE id IN (SELECT id FROM publication_jobs WHERE snapshot->>'connectionId'=$1 AND mode<>'manual_handoff' AND status IN ('queued','scheduled','failed') FOR UPDATE SKIP LOCKED)",&[&id]).await.map_err(|_|"해제한 계정의 예약 정리 실패")?;
+        }
+        if session.client.query_one("SELECT to_regclass('public.analytics_sources')::text",&[]).await.map_err(|_|"분석 저장소 확인 실패")?.get::<_,Option<String>>(0).is_none(){return Ok(());}
+    }
+    crate::analytics::dispatch(config,json!({"action":"deleteApiCache","connectionId":id})).await?;
+    Ok(())
+}
+
+// Disconnected identities remain in the secure connection index. It is the
+// durable retry marker when PostgreSQL was unavailable during disconnect.
+pub(crate) async fn cleanup_disconnected(config:&crate::config::AppConfig){
+    if let Ok(connections)=crate::oauth::connections().await {
+        let ids:std::collections::BTreeSet<&str>=connections["connections"].as_array().into_iter().flatten().filter(|c|c["disconnected"]==true).filter_map(|c|c["connectionId"].as_str()).collect();
+        for id in ids { let _=cleanup_connection(config,id).await; }
     }
 }
 

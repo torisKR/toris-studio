@@ -9,6 +9,9 @@ const OPAL_SCHEMA: &str = include_str!("../../../db/migrations/004_opal_research
 const OPAL_RESULT_SHAPE: &str = include_str!("../../../db/migrations/005_opal_result_shape.sql");
 const KEYWORD_SCHEMA: &str = include_str!("../../../db/migrations/006_keyword_explorer.sql");
 const PUBLICATION_SCHEMA: &str = include_str!("../../../db/migrations/007_publications.sql");
+const OAUTH_SCHEMA: &str = include_str!("../../../db/migrations/009_oauth_connections.sql");
+const ANALYTICS_SCHEMA: &str = include_str!("../../../db/migrations/010_analytics.sql");
+const WORKSPACE_SCHEMA: &str = include_str!("../../../db/migrations/011_sns_workspace.sql");
 const HANDOFF_SCHEMA: &str = include_str!("../../../db/migrations/008_publication_handoffs.sql");
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
@@ -51,6 +54,9 @@ fn stack_root() -> Result<PathBuf, String> {
         HANDOFF_SCHEMA,
     )
     .map_err(|_| "DB 설정 저장 실패")?;
+    for (name, schema) in [("009_oauth_connections.sql",OAUTH_SCHEMA),("010_analytics.sql",ANALYTICS_SCHEMA),("011_sns_workspace.sql",WORKSPACE_SCHEMA)] {
+        fs::write(root.join("db/migrations").join(name),schema).map_err(|_|"SNS 스키마 저장 실패")?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -279,26 +285,10 @@ pub async fn migrate_database() -> Result<(), String> {
         .batch_execute(SCHEMA)
         .await
         .map_err(|_| "DB 스키마 갱신 실패")?;
-    transaction
-        .batch_execute(OPAL_SCHEMA)
-        .await
-        .map_err(|_| "Opal DB 스키마 갱신 실패")?;
-    transaction
-        .batch_execute(OPAL_RESULT_SHAPE)
-        .await
-        .map_err(|_| "Opal 결과 형식 제약 갱신 실패")?;
-    transaction
-        .batch_execute(KEYWORD_SCHEMA)
-        .await
-        .map_err(|_| "키워드 탐색 DB 스키마 갱신 실패")?;
-    transaction
-        .batch_execute(PUBLICATION_SCHEMA)
-        .await
-        .map_err(|_| "일괄 게시 DB 스키마 갱신 실패")?;
-    transaction
-        .batch_execute(HANDOFF_SCHEMA)
-        .await
-        .map_err(|_| "수동 게시 인계 스키마 갱신 실패")?;
+    for (version,schema) in [("004_opal_research",OPAL_SCHEMA),("005_opal_result_shape",OPAL_RESULT_SHAPE),("006_keyword_explorer",KEYWORD_SCHEMA),("007_publications",PUBLICATION_SCHEMA),("008_publication_handoffs",HANDOFF_SCHEMA),("009_oauth_connections",OAUTH_SCHEMA),("010_analytics",ANALYTICS_SCHEMA),("011_sns_workspace",WORKSPACE_SCHEMA)] {
+        let applied:bool=transaction.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version=$1)",&[&version]).await.map_err(|_|"마이그레이션 이력 확인 실패")?.get(0);
+        if !applied { transaction.batch_execute(schema).await.map_err(|_|"SNS DB 스키마 갱신 실패")?; }
+    }
     transaction
         .commit()
         .await
@@ -319,7 +309,7 @@ pub async fn migrate_configured_publications(config: &AppConfig) -> Result<(), S
         .map_err(|_| "DB 스키마 상태를 확인하지 못했습니다.")?
         .get::<_, Option<String>>(0)
         .is_some();
-    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='008_publication_handoffs')",&[]).await
+    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='011_sns_workspace')",&[]).await
         .map_err(|_|"DB 마이그레이션 상태를 확인하지 못했습니다.")?.get::<_,bool>(0) {return Ok(());}
     drop(session);
     let raw = config

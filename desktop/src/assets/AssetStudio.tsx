@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Box, Check, ChevronLeft, ChevronRight, CircleAlert, ClipboardList, Copy, ExternalLink, FolderOpen, Image as ImageIcon, Layers, LoaderCircle, Plus, RefreshCw, Search, Send, SlidersHorizontal, Star, Upload, X } from "lucide-react";
-import { openConnectedChat, sendToConnectedChat } from "../codexify-client";
+import { remoteDesktopHandoff, type CreationBridge } from "../creation-client";
+import { ChatGPTHandoff } from "../ChatGPTHandoff";
 import { AssetInspector, AssetThumbnail } from "./AssetInspector";
 import { ImageOutputControls } from "./ImageOutputControls";
 import { AssetResizePanel } from "./AssetResizePanel";
@@ -45,7 +46,8 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
   const [segments,setSegments]=useState(32);
   const [color,setColor]=useState("#92b8ff");
   const serial=useRef(0);
-  const chatRetry=useRef<{message:string;requestId:string}|null>(null);
+  const [handoff, setHandoff]=useState("");
+  const openChatGPT=()=>invoke<void>("open_external",{url:"https://chatgpt.com/"});
   const pendingReads=useRef(0);
   const mounted=useRef(false);
   const noticeFrame=useRef<number|null>(null);
@@ -90,22 +92,17 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     setBusy(true);setError("");setNotice("");
     try{await task();}catch(error){if(mounted.current)setError(assetError(error));}finally{if(mounted.current)setBusy(false);}
   }
-  async function copyJobs(jobs:AssetJob[]) {
-    const text=handoffText(jobs);
-    if(text.length>39000) throw new Error("복사할 프롬프트가 큽니다. 작업별 복사 버튼으로 나누어 전달하세요.");
-    await invoke("copy_text",{text});
-    inform(`${jobs.length}개 요청을 복사했습니다. ChatGPT 대화에 붙여넣으세요.`);
-  }
   async function sendJobs(jobs:AssetJob[]) {
-    const text=handoffText(jobs);
-    if(text.length>39000) throw new Error("전송할 요청이 큽니다. 작업별 보내기 버튼으로 나누어 전달하세요.");
-    const connection=await invoke<{fileReceiverReady:boolean}>("codexify_connection_check");
-    if(!mounted.current)return;
-    if(!connection.fileReceiverReady) throw new Error("연결·게시 QA에서 Studio 파일 수신 도구를 먼저 연결하세요.");
-    if(chatRetry.current?.message!==text) chatRetry.current={message:text,requestId:crypto.randomUUID()};
-    const {waiting}=await sendToConnectedChat(text,chatRetry.current.requestId);
-    chatRetry.current=null;
-    inform(waiting ? `${jobs.length}개 요청을 Codexify 대화에 저장했습니다. ChatGPT 응답은 연결 화면에서, 실제 파일은 에셋 보관함에서 확인하세요.` : `${jobs.length}개 요청을 Codexify 대화에 저장했습니다. ChatGPT가 대기 중이 아니므로 저장한 대화에서 실행을 시작하세요.`);
+    const bridge=await invoke<CreationBridge>("creation_bridge_info");
+    const text=remoteDesktopHandoff(bridge,"studio_asset_list",{jobIds:jobs.map(job=>job.id)})+"\n\n"+handoffText(jobs);
+    if(text.length>64000) throw new Error("요청을 나누어 전달하세요. 한 번에 최대 20개 요청을 선택할 수 있습니다.");
+    setHandoff(text);
+    inform(`${jobs.length}개 요청의 전달문을 준비했습니다. ChatGPT에 붙여넣고 Remote Desktop Commander로 계속하세요. 실제 파일 수신 전까지 대기 상태를 유지합니다.`);
+  }
+  async function copyJobs(jobs:AssetJob[]) {
+    const bridge=await invoke<CreationBridge>("creation_bridge_info");
+    const text=remoteDesktopHandoff(bridge,"studio_asset_list",{jobIds:jobs.map(job=>job.id)})+"\n\n"+handoffText(jobs);
+    setHandoff(text); await invoke("copy_text",{text}); inform("전달문을 복사했습니다. ChatGPT 대화에 붙여넣으세요.");
   }
   async function create() {
     const invalid=validationError(spec,mode==="image");
@@ -164,6 +161,7 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     {(visibleError||notice) && <div ref={noticeRef} className={`asset-message ${visibleError?"error":"success"}`} role={visibleError?"alert":"status"}><CircleAlert size={18}/><p>{visibleError||notice}</p>{!error && loadError ? <button className="asset-button small" disabled={busy} onClick={()=>void refresh()}>다시 불러오기</button> : <button className="asset-icon-button" aria-label="에셋 알림 닫기" onClick={()=>{setError("");setNotice("");}}><X size={16}/></button>}</div>}
     {busy && <ActivityStatus title="로컬 작업 처리 중" detail="Studio가 요청한 파일 처리 또는 저장을 수행하고 있습니다. 실제 응답이 도착하면 결과를 반영하며 완료 비율을 추정해서 표시하지 않습니다."/>}
 
+    <ChatGPTHandoff prompt={handoff}/>
     {view==="resize" && resizeSource && <AssetResizePanel key={resizeSource.id} source={resizeSource} settings={snapshot?.settings} busy={busy} onCancel={()=>setView("library")} onChooseFolder={purpose=>void execute(()=>chooseFolder(purpose))} onExport={outputSpec=>void execute(()=>resizeAsset(outputSpec))}/>}
     {view==="create" && <div className="asset-create-layout">
       <form className="asset-create-form" onSubmit={event=>{event.preventDefault();void execute(create);}}>
@@ -184,7 +182,7 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
         </fieldset>
       </form>
       <aside className="asset-workflow">
-        <section><h2>생성부터 재사용까지</h2><p>ChatGPT는 이미지를 만들고,<br/>Studio는 파일을 정리합니다.</p><div className="asset-flow"><span>앱에서 요청</span><ArrowRight size={16}/><span>ChatGPT 대화</span><ArrowRight size={16}/><span>에셋 보관함</span></div><p className="asset-inline-note">연결 화면에서 Codexify 대화를 선택한 뒤 작업 큐의 보내기를 누르세요. ChatGPT가 실행 중인 대화에서 이미지를 생성하고 Studio 도구로 실제 파일을 전달합니다.</p><button className="asset-button" onClick={()=>void execute(openConnectedChat)}><ExternalLink size={16}/>연결된 ChatGPT 열기</button><details className="asset-details"><summary>연결과 이미지 수신 안내</summary><p>연결·게시 QA에서 등록한 플러그인 주소를 저장하고 Studio 파일 수신 상태를 확인하세요. 설치 앱의 MCP 설정을 사용하므로 개발 프로젝트 실행 명령은 필요하지 않습니다.</p><p>ChatGPT가 대기 중이 아니면 연결된 대화에서 시작 안내를 붙여넣어 실행하세요. 수신 도구가 없는 환경에서는 다운로드한 이미지를 파일 연결로 가져올 수 있습니다.</p></details></section>
+        <section><h2>생성부터 재사용까지</h2><p>ChatGPT는 이미지를 만들고,<br/>Studio는 파일을 정리합니다.</p><div className="asset-flow"><span>앱에서 요청</span><ArrowRight size={16}/><span>ChatGPT 대화</span><ArrowRight size={16}/><span>에셋 보관함</span></div><p className="asset-inline-note">작업 큐에서 RDC 전달문을 준비해 ChatGPT에 붙여넣으세요. 실제 생성 파일이 Studio에 도착하면 저장 완료로 표시합니다.</p><button className="asset-button" onClick={()=>void execute(openChatGPT)}><ExternalLink size={16}/>ChatGPT 열기</button><details className="asset-details"><summary>연결과 이미지 수신 안내</summary><p>전달문은 설치 앱의 stdio MCP 실행 설정을 포함합니다. Remote Desktop Commander가 실제 도구를 확인하고 파일을 전달합니다.</p><p>ChatGPT가 대기 중이 아니면 연결된 대화에서 시작 안내를 붙여넣어 실행하세요. 수신 도구가 없는 환경에서는 다운로드한 이미지를 파일 연결로 가져올 수 있습니다.</p></details></section>
         <section className="asset-output-settings"><h3>용도별 저장 폴더</h3>{(["video","project"] as const).map(p=><div key={p} className="asset-folder"><div><span>{p==="video" ? "영상 제작용" : "프로젝트 에셋"}</span><code title={snapshot?.settings[p==="video"?"videoRoot":"projectRoot"]}>{snapshot?.settings[p==="video"?"videoRoot":"projectRoot"] ?? "불러오는 중…"}</code></div><button className="asset-icon-button" disabled={busy} aria-label={`${p==="video"?"영상용":"프로젝트용"} 저장 폴더 선택`} onClick={()=>void execute(()=>chooseFolder(p))}><FolderOpen size={19}/></button></div>)}<p className="asset-inline-note">프로젝트와 에셋별 폴더를 자동 생성합니다. 원본과 규격화된 출력 파일을 따로 보존합니다.</p></section>
         <section className="asset-limits"><h3>사용 범위</h3><p>이미지 생성 API 키나 Codex 호출은 사용하지 않습니다. ChatGPT의 이미지 생성 사용 한도는 그대로 적용됩니다.</p><p>파일당 32 MiB · 자체 포함 GLB · PNG / JPEG / WebP / ICO / OBJ / STL</p></section>
       </aside>
@@ -200,7 +198,7 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
       </div>{selected && <AssetInspector asset={selected} onClose={()=>setSelected(null)} onError={setError} onChanged={()=>{void refresh();void assetApi<{asset:Asset}>("get_asset",{id:selected.id}).then(r=>setSelected(current=>applyAssetRefresh(current,r.asset))).catch(e=>setError(assetError(e)));}} onResize={asset=>{setResizeSource(asset);setView("resize");setError("");setNotice("");}} onReuse={asset=>{setSpec({...asset.spec,quantity:1});setMode(asset.kind);setView("create");inform("설정을 가져왔습니다. 새 요청은 기존 에셋을 덮어쓰지 않습니다.");}}/>}</div>
     </>}
 
-    {view==="queue" && <div className="asset-queue">{pending.length>0&&!busy&&<ActivityStatus title={`ChatGPT 결과 대기 · ${pending.length}개 요청`} state="waiting" clock={false} detail="선택한 Codexify 대화에 요청을 보내세요. ChatGPT 수신과 응답은 연결 화면에서, 실제 파일 저장 결과는 이 큐에서 확인합니다."><button className="asset-button small" onClick={()=>void execute(()=>sendJobs(pending.slice(0,20)))}>연결된 대화에 보내기</button><button className="asset-button small" onClick={()=>void execute(()=>copyJobs(pending.slice(0,20)))}>ChatGPT에 전달할 요청 복사</button><button className="asset-button small" onClick={()=>void execute(openConnectedChat)}>연결된 ChatGPT 열기</button></ActivityStatus>}<div className="asset-section-heading"><div><h2>생성 요청과 저장 결과</h2><p>요청 대기 → ChatGPT에서 생성 → 파일 수신 → 저장 완료</p></div><button className="asset-button primary" disabled={busy||pending.length===0} onClick={()=>void execute(()=>sendJobs(pending.slice(0,20)))}><Send size={16}/>대기 요청 보내기{pending.length>20 ? " (최대 20개)" : ""}</button></div><p className="asset-inline-note">요청 저장 후 ChatGPT가 읽어야 생성이 진행됩니다. 파일이 도착하면 저장 완료로 표시합니다. MCP 연결 전에는 “파일 연결”로 결과를 직접 가져올 수 있습니다.</p>
+    {view==="queue" && <div className="asset-queue">{pending.length>0&&!busy&&<ActivityStatus title={`ChatGPT 결과 대기 · ${pending.length}개 요청`} state="waiting" clock={false} detail="전달문을 ChatGPT에 붙여넣으세요. 실제 파일 저장 결과를 이 큐에서 확인합니다."><button className="asset-button small" onClick={()=>void execute(()=>sendJobs(pending.slice(0,20)))}>RDC 전달문 준비</button><button className="asset-button small" onClick={()=>void execute(()=>copyJobs(pending.slice(0,20)))}>ChatGPT에 전달할 요청 복사</button><button className="asset-button small" onClick={()=>void execute(openChatGPT)}>ChatGPT 열기</button></ActivityStatus>}<div className="asset-section-heading"><div><h2>생성 요청과 저장 결과</h2><p>요청 대기 → ChatGPT에서 생성 → 파일 수신 → 저장 완료</p></div><button className="asset-button primary" disabled={busy||pending.length===0} onClick={()=>void execute(()=>sendJobs(pending.slice(0,20)))}><Send size={16}/>대기 요청 전달문{pending.length>20 ? " (최대 20개)" : ""}</button></div><p className="asset-inline-note">요청 저장 후 ChatGPT가 읽어야 생성이 진행됩니다. 파일이 도착하면 저장 완료로 표시합니다. MCP 연결 전에는 “파일 연결”로 결과를 직접 가져올 수 있습니다.</p>
       {loading ? <div><ActivityStatus title="작업 큐를 불러오는 중입니다."/><ActivitySkeleton label="작업 목록 준비 중" rows={3}/></div> : !snapshot && loadError ? failedLibrary : !snapshot?.jobs.length ? <div className="asset-empty"><ClipboardList size={38}/><h2>아직 생성 요청이 없습니다</h2><p>프롬프트와 출력 규격을 지정해 첫 요청을 만들어보세요.</p><button className="asset-button" onClick={()=>setView("create")}>이미지 요청 만들기</button></div> : <div className="asset-job-list">{snapshot.jobs.map(job=><article key={job.id} className={`asset-job ${job.status}`}><span className="asset-job-icon">{job.status==="completed"?<Check size={21}/>:<ImageIcon size={21}/>}</span><div className="asset-job-info"><h3>{job.spec.title}<small>#{job.index}</small></h3><p>{job.spec.project} · {job.spec.width} × {job.spec.height} · {job.spec.format.toUpperCase()}</p><code title={job.id}>{job.id}</code></div><span className={`asset-job-status ${job.status}`}>{JOB_LABELS[job.status]}</span><div className="asset-job-actions">{job.status==="completed" ? <button className="asset-button small" onClick={()=>void execute(async()=>{const result=await assetApi<{asset:Asset}>("get_asset",{id:job.assetId});setSelected(result.asset);setView("library");})}>에셋 보기</button> : job.status==="cancelled" ? <button className="asset-button small" disabled={busy} onClick={()=>void execute(()=>updateJob(job,"queued"))}>다시 대기</button> : <><button className="asset-icon-button" disabled={busy} aria-label={`${job.spec.title} 요청 보내기`} onClick={()=>void execute(()=>sendJobs([job]))}><Send size={16}/></button><button className="asset-icon-button" disabled={busy} aria-label={`${job.spec.title} 요청 복사`} onClick={()=>void execute(()=>copyJobs([job]))}><Copy size={16}/></button><button className="asset-button small" disabled={busy} onClick={()=>void execute(()=>importFiles(job))}>파일 연결</button><button className="asset-icon-button" disabled={busy} aria-label={`${job.spec.title} 요청 취소`} onClick={()=>void execute(()=>updateJob(job,"cancelled"))}><X size={16}/></button></>}</div></article>)}</div>}
       {snapshot && snapshot.jobTotal>snapshot.jobs.length && <p className="asset-inline-note">최근 {snapshot.jobs.length}개 작업을 표시합니다. 전체 저장 이력은 {snapshot.jobTotal}개입니다.</p>}
     </div>}

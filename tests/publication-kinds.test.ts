@@ -4,9 +4,9 @@ import * as client from "../desktop/src/publication-client";
 
 test("content kinds constrain destinations and changing kind preserves copy but removes incompatible media", () => {
   assert.equal(typeof client.platformsForContent, "function");
-  assert.deepEqual(client.platformsForContent("video"), client.PUBLISH_PLATFORMS);
-  assert.deepEqual(client.platformsForContent("text"), ["facebook", "threads", "naver_blog"]);
-  assert.deepEqual(client.platformsForContent("article"), ["naver_blog"]);
+  assert.deepEqual(client.platformsForContent("video"), [...client.PUBLISH_PLATFORMS, "naver_clip", "x"]);
+  assert.deepEqual(client.platformsForContent("text"), ["facebook", "threads", "naver_blog", "x"]);
+  assert.deepEqual(client.platformsForContent("article"), ["naver_blog", "x"]);
   const original = { ...client.newPublication(), title: "원문", description: "본문", videoMediaId: "video", thumbnailMediaId: "cover", targets: [client.newTarget("youtube"), client.newTarget("threads")] };
   const changed = client.publicationForKind(original, "text");
   assert.equal(changed.contentKind, "text");

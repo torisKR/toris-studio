@@ -24,7 +24,7 @@ export type MotionRequest = {
 export function remoteDesktopPrompt(request: Pick<MotionRequest, 'id' | 'mcpExecutable'>): string {
     if (!request.mcpExecutable) throw new Error('현재 앱의 실행 파일 경로를 확인하지 못했습니다. 요청을 다시 만드세요.');
     return [
-        'Remote Desktop Commander로 이 기기의 Toris Studio 모션 요청을 처리해줘. Codexify나 새 API 키는 사용하지 마.',
+        'Remote Desktop Commander로 이 기기의 Toris Studio 모션 요청을 처리해줘. 추가 모델 API 키는 사용하지 마.',
         `실행 파일: ${JSON.stringify(request.mcpExecutable)}. 인자: --studio-mcp. 이 앱을 설치하거나 교체하지 말고 별도 표준입출력 프로세스로 실행해.`,
         '표준입력에 한 줄씩 JSON-RPC 2.0 메시지를 보내고 표준출력 응답을 읽어. initialize(protocolVersion="2025-11-25",capabilities={},clientInfo={name:"remote-desktop-commander",version:"1"}), notifications/initialized, tools/list 순서로 연결해.',
         `tools/call의 name=studio_motion_request_get, arguments=${JSON.stringify({requestId: request.id})}로 실제 요청과 안정 ID, baseHash, 선택 범위, allowDataEdits를 읽어.`,

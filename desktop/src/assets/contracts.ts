@@ -1,5 +1,5 @@
 import { outputValidationError } from "./presets";
-import { studioToolInstruction } from "../codexify";
+import { studioToolInstruction } from "../creation-client";
 export { PRESETS } from "./presets";
 export type AssetPurpose = "video" | "project";
 export type AssetSpec = {
@@ -52,7 +52,7 @@ export function formatBytes(bytes: number): string {
 export function handoffText(jobs: AssetJob[]): string {
   const active = jobs.filter(j=>j.status==="queued" || j.status==="waiting");
   return [
-    "이미 연결된 Codexify의 작업 프로젝트에서 진행해줘. 프로젝트를 전환하거나 기존 Studio 저장 폴더를 변경하지 마.",
+    "Remote Desktop Commander로 설치된 Toris Studio 제작 요청을 처리해줘. 기존 Studio 저장 폴더를 변경하지 마.",
     studioToolInstruction(),
     "Toris Studio 이미지 작업을 진행해줘. 실제 연결 목록의 studio_asset_list 또는 studio__studio_asset_list 도구로 다음 작업 ID와 상태를 먼저 확인해줘.",
     "파일 수신 도구의 _meta.openai/fileParams가 [file]인지 확인하고 실제 생성 파일 참조를 전달해줘. file 인자에 base64 내용이나 임의의 로컬 경로를 넣지 마.",

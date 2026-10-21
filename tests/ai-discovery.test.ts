@@ -62,10 +62,10 @@ test("observed and extracted keywords retain their provenance and associated mat
   const choices=keywordChoices([item]);assert.equal(choices[0].kind,"observed");assert.equal(choices[1].kind,"extracted");assert.equal(choices[1].material.trend.url,trend.url);
   assert.match(chatBrief("youtube","내 주제","맥락",[materialFromTrend(trend)]),/직접/);
 });
-test("ChatGPT content handoff keeps the connected project instead of forcing the developer checkout",()=>{
+test("ChatGPT content handoff uses RDC without a developer checkout or saved chat dependency",()=>{
   const brief=chatBrief("youtube","내 주제","맥락",[materialFromTrend(trend)]);
   assert.doesNotMatch(brief,/\/Users\/toris\/projects\/toris_studio/);
-  assert.match(brief,/프로젝트를 전환하거나 기존 Studio 저장 폴더를 변경하지 마/);
-  assert.match(brief,/studio__studio_asset_receive/);
+  assert.match(brief,/기존 Studio 저장 폴더를 변경하지 마/);
+  assert.match(brief,/studio_asset_receive/);
   assert.match(brief,/내 주제/);assert.match(brief,/abcdefghijk/);
 });

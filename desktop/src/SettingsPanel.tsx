@@ -316,7 +316,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
         <label htmlFor="settings-database">데이터베이스 연결 주소</label><input id="settings-database" type="password" value={form.databaseUrl} onChange={(event) => update("databaseUrl", event.target.value)} placeholder={settings.databaseConfigured ? "저장된 주소 사용 중 · 변경할 때만 입력" : "postgresql://사용자:비밀번호@127.0.0.1:포트/DB"} maxLength={2000} autoComplete="new-password" spellCheck={false} />
         <p className="social-form-hint">컨테이너가 실행 중이어야 연결됩니다. 주소를 저장하면 실제 DB 연결 상태를 다시 확인합니다.</p>
       </fieldset>
-      <section className="desktop-settings-section"><h2><Sparkles size={18} />ChatGPT 연결</h2><p>AI 작성과 이미지 생성은 실제 ChatGPT 대화에 요청합니다. 코딩 메뉴에서 Codexify와 대화를 연결한 뒤 ChatGPT에서 시작·재개하세요.</p><p className="social-form-hint">이전 로컬 AI 설정은 보존하지만 데스크톱 AI 요청에는 사용하지 않습니다. ChatGPT 사용 한도가 적용됩니다.</p></section>
+      <section className="desktop-settings-section"><h2><Sparkles size={18} />ChatGPT 연결</h2><p>AI 작성과 이미지 생성은 실제 ChatGPT 대화에 요청합니다. 제작 화면에서 요청을 저장하고 RDC 전달문을 ChatGPT에 붙여넣어 시작·재개하세요.</p><p className="social-form-hint">제작 결과는 실제 수신한 뒤 검토·적용합니다. ChatGPT 사용 한도가 적용됩니다.</p></section>
       <fieldset disabled={locked} className="desktop-settings-section"><legend><KeyRound size={18} />수집 API</legend>
         <p>Google 트렌드는 키 없이 수집합니다. YouTube와 네이버 블로그 수집에 필요한 API 정보를 추가하세요.</p>
         <p className="social-form-hint">저장됨 표시로 등록 여부를 확인하고, 보기 버튼으로 저장된 값을 확인하세요. 저장된 값은 읽기 전용이며 변경 입력과 구분됩니다.</p>

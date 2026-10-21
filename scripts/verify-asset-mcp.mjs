@@ -36,7 +36,7 @@ try {
   const initialized=await call('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'toris-asset-verifier',version:'1.0.0'}});
   assert.equal(initialized.serverInfo.name,'toris-studio-assets');
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
-  const {tools}=await call('tools/list');assert.equal(tools.length,nativeBinary ? 12 : 8);
+  const {tools}=await call('tools/list');if(nativeBinary){assert.deepEqual(new Set(tools.map(t=>t.name)),new Set(['studio_connection_check','studio_asset_presets','studio_asset_list','studio_asset_request','studio_asset_receive','studio_asset_resize','studio_asset_create_3d','studio_asset_review','studio_asset_job_status','studio_publication_draft_receive','studio_motion_request_get','studio_motion_draft_receive','studio_creation_request_get','studio_creation_draft_receive']));}else assert.equal(tools.length,8);
   const presets=unpack(await call('tools/call',{name:'studio_asset_presets',arguments:{}}));
   assert.equal(presets.presets.length,31);
   assert.deepEqual(presets.presets.find(p=>p.id==='play-icon').size,[512,512]);
