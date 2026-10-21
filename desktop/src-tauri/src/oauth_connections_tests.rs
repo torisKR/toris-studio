@@ -10,6 +10,121 @@ fn account(id: &str) -> RemoteIdentity {
 fn sample(id: &str) -> Connection {
     Connection { id:uuid::Uuid::new_v4().to_string(), platform:"threads".into(), client:client(Provider::Threads), session:session_from_response(&json!({"access_token":"fixture-token","expires_in":10000,"scope":"threads_basic,threads_manage_insights"}),None,100000,true).unwrap(), identities:vec![account(id)], verified_at:100000, disconnected:false, audit:vec![], legacy_source:None }
 }
+
+#[derive(Default)]
+struct ValidatedVaultStore(crate::vault::tests::MemoryVault);
+impl CredentialStore for ValidatedVaultStore {
+    fn read(&self, account: &str) -> Result<Option<String>, String> {
+        self.0.read(account)
+    }
+    fn write(&self, account: &str, value: &str) -> Result<(), String> {
+        self.0.write(account, value)
+    }
+    fn delete(&self, account: &str) -> Result<(), String> {
+        self.0.delete(account)
+    }
+}
+
+#[tokio::test]
+async fn connection_lifecycle_uses_production_vault_validation_across_restart() {
+    let (_, _, transport, clock) = fixture();
+    let store = Arc::new(ValidatedVaultStore::default());
+    let service = OAuthService::new(store.clone(), transport.clone(), clock.clone());
+    assert_eq!(
+        connection_list_locked(&service).unwrap()["connections"],
+        json!([])
+    );
+    let first = sample("111");
+    let second = sample("222");
+    commit_connection(&service, &first).unwrap();
+    // A process interruption after the durable record, before the index commit.
+    verified_write(&service, COMMIT_INDEX, &json!([second.id]).to_string()).unwrap();
+    verified_write(
+        &service,
+        &connection_key(&second.id),
+        &serde_json::to_string(&second).unwrap(),
+    )
+    .unwrap();
+    let recovered = connection_list_locked(&service).unwrap();
+    assert_eq!(recovered["connections"].as_array().unwrap().len(), 2);
+    assert!(commit_ids(&service).unwrap().is_empty());
+    connection_audit(&service, &first.id, "fixture", "success").unwrap();
+    verified_write(
+        &service,
+        &format!("refresh-candidate:v2:{}", first.id),
+        &serde_json::to_string(&first.session).unwrap(),
+    )
+    .unwrap();
+    disconnect_connection(&service, &first.id).await.unwrap();
+    store.0.restart();
+    let restarted = OAuthService::new(store, transport, clock);
+    let restored = connection_list_locked(&restarted).unwrap();
+    let rows = restored["connections"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let disconnected = rows
+        .iter()
+        .find(|row| row["connectionId"] == first.id)
+        .unwrap();
+    let connected = rows
+        .iter()
+        .find(|row| row["connectionId"] == second.id)
+        .unwrap();
+    assert_eq!(disconnected["disconnected"], true);
+    assert_eq!(disconnected["cleanupPending"], true);
+    assert_eq!(connected["connected"], true);
+    assert!(read_connection(&restarted, &first.id)
+        .unwrap()
+        .session
+        .access_token
+        .is_empty());
+    assert_eq!(
+        read_connection(&restarted, &second.id)
+            .unwrap()
+            .session
+            .access_token,
+        "fixture-token"
+    );
+}
+
+#[tokio::test]
+async fn legacy_connection_copy_and_client_backup_use_production_vault_validation() {
+    let (_, _, transport, clock) = fixture();
+    let store = Arc::new(ValidatedVaultStore::default());
+    let service = OAuthService::new(store.clone(), transport.clone(), clock.clone());
+    let original = sample("111");
+    service
+        .write("client", Provider::Threads, &original.client)
+        .unwrap();
+    service
+        .write("session", Provider::Threads, &original.session)
+        .unwrap();
+    let original_session = store.read("session:threads").unwrap();
+    transport
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(Ok(json!({"id":"111","username":"Fixture"})));
+    let id = migrate_legacy(&service, Provider::Threads).await.unwrap();
+    service
+        .save_client(Provider::Threads, json!({"clientId":"changed-client"}))
+        .await
+        .unwrap();
+    assert_eq!(store.read("session:threads").unwrap(), original_session);
+    assert_eq!(
+        store
+            .read("legacy-client-changed:threads")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    store.0.restart();
+    let restarted = OAuthService::new(store, transport, clock);
+    let migrated = read_connection(&restarted, &id).unwrap();
+    assert_eq!(migrated.client.client_id, "example-client-id");
+    assert_eq!(migrated.session.access_token, "fixture-token");
+    assert_eq!(migrated.legacy_source.as_deref(), Some("threads"));
+}
+
 #[tokio::test]
 async fn separate_authorizations_use_independent_vault_keys_and_disconnect() {
     let (service, store, _, _) = fixture();
