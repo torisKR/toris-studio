@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS analytics_sources (
   label text NOT NULL, filename text, digest text NOT NULL,
   status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','replaced','removed')),
   metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now(), removed_at timestamptz,
+  authorization_verified_at timestamptz, authorization_expires_at timestamptz,
   UNIQUE(source_kind,platform,account_id,digest)
 );
 CREATE TABLE IF NOT EXISTS analytics_previews (
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS analytics_previews (
 CREATE TABLE IF NOT EXISTS analytics_observations (
   id uuid PRIMARY KEY, source_id uuid NOT NULL REFERENCES analytics_sources(id) ON DELETE CASCADE,
   record_key text NOT NULL, metric text NOT NULL, period_start date NOT NULL, period_end date NOT NULL,
-  payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(source_id,record_key),
+  payload jsonb NOT NULL, verification_expires_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(source_id,record_key),
   CHECK(period_start <= period_end)
 );
 CREATE INDEX IF NOT EXISTS analytics_observations_period ON analytics_observations(period_start,period_end);
@@ -29,4 +30,7 @@ CREATE TABLE IF NOT EXISTS analytics_jobs (
   lease_until timestamptz, lease_token uuid, updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(connection_id,platform,account_id)
 );
+ALTER TABLE analytics_sources ADD COLUMN IF NOT EXISTS authorization_verified_at timestamptz;
+ALTER TABLE analytics_sources ADD COLUMN IF NOT EXISTS authorization_expires_at timestamptz;
+ALTER TABLE analytics_observations ADD COLUMN IF NOT EXISTS verification_expires_at timestamptz;
 INSERT INTO social_schema_migrations(version) VALUES ('010_analytics') ON CONFLICT DO NOTHING;

@@ -31,6 +31,7 @@ async fn persisted_import_preview_commit_correction_filters_remove_and_pause() -
 {
     let _guard = TEST_LOCK.lock().await;
     let (config, url) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
     let account = format!("fixture-{}", Uuid::new_v4());
     let initial = analytics::dispatch(&config, json!({"action":"status"})).await?;
     assert_eq!(initial["schemaReady"], true);
@@ -167,6 +168,7 @@ async fn persisted_import_preview_commit_correction_filters_remove_and_pause() -
 async fn previews_expire_and_invalid_mapping_cannot_commit() -> Result<(), String> {
     let _guard = TEST_LOCK.lock().await;
     let (config, url) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
     let account = format!("fixture-{}", Uuid::new_v4());
     let mut input = report(&account, "date,views\n2026-10-01,1\n");
     input.as_object_mut().unwrap().remove("mapping");
@@ -209,6 +211,7 @@ async fn manual_report_cannot_bypass_retry_after_and_cache_deletion_clears_only_
 ) -> Result<(), String> {
     let _guard = TEST_LOCK.lock().await;
     let (config, url) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
     let id = Uuid::new_v4().to_string();
     let other = Uuid::new_v4().to_string();
     let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
@@ -254,6 +257,202 @@ async fn manual_report_cannot_bypass_retry_after_and_cache_deletion_clears_only_
         )
         .await
         .map_err(|_| "test cleanup")?;
+    task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable analytics test PostgreSQL database"]
+async fn removed_and_replaced_imports_are_reimportable_and_row_order_deduplicates(
+) -> Result<(), String> {
+    let _guard = TEST_LOCK.lock().await;
+    let (config, _) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
+    let account = format!("review-{}", Uuid::new_v4());
+    let a = "date,views\n2026-10-01,1\n2026-10-02,2\n";
+    let b = "date,views\n2026-10-01,10\n2026-10-02,20\n";
+    let a_reordered = "date,views\n2026-10-02,2\n2026-10-01,1\n";
+    let pa = analytics::dispatch(&config, report(&account, a)).await?;
+    let ca = analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":pa["previewId"]}),
+    )
+    .await?;
+    analytics::dispatch(
+        &config,
+        json!({"action":"importRemove","sourceId":ca["source"]["id"]}),
+    )
+    .await?;
+    let pa = analytics::dispatch(&config, report(&account, a)).await?;
+    let restored = analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":pa["previewId"]}),
+    )
+    .await?;
+    assert_eq!(restored["source"]["status"], "active");
+    assert_eq!(restored["idempotent"], false);
+    let pb = analytics::dispatch(&config, report(&account, b)).await?;
+    let cb=analytics::dispatch(&config,json!({"action":"importCommit","previewId":pb["previewId"],"replaceImportId":restored["source"]["id"]})).await?;
+    let pa = analytics::dispatch(&config, report(&account, a)).await?;
+    let back=analytics::dispatch(&config,json!({"action":"importCommit","previewId":pa["previewId"],"replaceImportId":cb["source"]["id"]})).await?;
+    assert_eq!(back["source"]["status"], "active");
+    assert_eq!(back["idempotent"], false);
+    let pr = analytics::dispatch(&config, report(&account, a_reordered)).await?;
+    let reordered = analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":pr["previewId"]}),
+    )
+    .await?;
+    assert_eq!(reordered["idempotent"], true);
+    assert_eq!(reordered["source"]["id"], back["source"]["id"]);
+    let q = analytics::dispatch(&config, json!({"action":"query","accountId":account})).await?;
+    assert_eq!(q["observations"].as_array().unwrap().len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable analytics test PostgreSQL database"]
+async fn expired_youtube_cache_is_hidden_and_deleted_even_when_paused_without_touching_imports(
+) -> Result<(), String> {
+    let _guard = TEST_LOCK.lock().await;
+    let (config, url) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
+    let account = format!("review-{}", Uuid::new_v4());
+    let source = Uuid::new_v4();
+    let obs = Uuid::new_v4();
+    let connection_id = Uuid::new_v4().to_string();
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .map_err(|_| "fixture connection")?;
+    let task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client.execute("INSERT INTO analytics_sources(id,source_kind,platform,account_id,connection_id,label,digest,metadata,created_at) VALUES($1,'api','youtube',$2,$3,'expired API',$4,$5,now()-interval '31 days')",&[&source,&account,&connection_id,&source.to_string(),&json!({"authorizationVerifiedAt":"2020-01-01T00:00:00Z","authorizationExpiresAt":"2020-01-31T00:00:00Z"})]).await.map_err(|_|"fixture source")?;
+    client.execute("INSERT INTO analytics_observations(id,source_id,record_key,metric,period_start,period_end,payload) VALUES($1,$2,'fixture','views','2026-10-01','2026-10-01',$3)",&[&obs,&source,&json!({"platform":"youtube","sourceKind":"api","accountId":account,"contentId":"","metric":"views","value":1})]).await.map_err(|_|"fixture observation")?;
+    client.execute("INSERT INTO analytics_jobs(connection_id,platform,account_id,status,next_sync_at,cursor) VALUES($1,'youtube',$2,'rate_limited',now()+interval '12 hours',$3)",&[&connection_id,&account,&json!({"reportIds":["old-report"]})]).await.map_err(|_|"fixture rate limit")?;
+    let mut manual = report(&account, "date,views\n2026-10-01,10\n");
+    manual["platform"] = json!("youtube");
+    let preview = analytics::dispatch(&config, manual).await?;
+    analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":preview["previewId"]}),
+    )
+    .await?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":true})).await?;
+    analytics::sync_due(&config).await?;
+    let api = analytics::dispatch(
+        &config,
+        json!({"action":"query","accountId":account,"sourceKind":"api"}),
+    )
+    .await?;
+    assert!(
+        api["observations"].as_array().unwrap().is_empty(),
+        "expired YouTube API facts must never be displayed"
+    );
+    let count = client
+        .query_one(
+            "SELECT count(*) FROM analytics_sources WHERE id=$1",
+            &[&source],
+        )
+        .await
+        .map_err(|_| "fixture count")?;
+    assert_eq!(count.get::<_, i64>(0), 0);
+    let waiting = client
+        .query_opt(
+            "SELECT status,cursor FROM analytics_jobs WHERE connection_id=$1",
+            &[&connection_id],
+        )
+        .await
+        .map_err(|_| "fixture waiting")?;
+    assert!(
+        waiting.is_some(),
+        "cache expiry must retain an active provider retry deadline"
+    );
+    let waiting = waiting.unwrap();
+    assert_eq!(waiting.get::<_, String>("status"), "rate_limited");
+    assert_eq!(waiting.get::<_, Value>("cursor"), json!({}));
+    let imported = analytics::dispatch(
+        &config,
+        json!({"action":"query","accountId":account,"sourceKind":"import"}),
+    )
+    .await?;
+    assert_eq!(imported["observations"].as_array().unwrap().len(), 1);
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
+    task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable analytics test PostgreSQL database"]
+async fn youtube_video_deadlines_and_revocation_preserve_manual_and_other_connections(
+) -> Result<(), String> {
+    let _guard = TEST_LOCK.lock().await;
+    let (config, url) = configured()?;
+    analytics::dispatch(&config, json!({"action":"pause","paused":false})).await?;
+    let account = format!("lifecycle-{}", Uuid::new_v4());
+    let conn = Uuid::new_v4().to_string();
+    let other_conn = Uuid::new_v4().to_string();
+    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .map_err(|_| "fixture connection")?;
+    let task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let source = Uuid::new_v4();
+    let other_source = Uuid::new_v4();
+    for (id, connection_id) in [(&source, &conn), (&other_source, &other_conn)] {
+        client.execute("INSERT INTO analytics_sources(id,source_kind,platform,account_id,connection_id,label,digest,authorization_verified_at,authorization_expires_at) VALUES($1,'api','youtube',$2,$3,'verified fixture',$4,now(),now()+interval '30 days')",&[id,&account,connection_id,&id.to_string()]).await.map_err(|_|"fixture source")?;
+    }
+    for (content, deadline) in [
+        ("expired-video", "2000-01-01T00:00:00Z"),
+        ("current-video", "2090-01-01T00:00:00Z"),
+    ] {
+        let id = Uuid::new_v4();
+        let expires = chrono::DateTime::parse_from_rfc3339(deadline)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        client.execute("INSERT INTO analytics_observations(id,source_id,record_key,metric,period_start,period_end,payload,verification_expires_at) VALUES($1,$2,$3,'views','2020-01-01','2020-01-01',$4,$5)",&[&id,&source,&content,&json!({"platform":"youtube","sourceKind":"api","accountId":account,"contentId":content,"metric":"views","value":1}),&expires]).await.map_err(|_|"fixture observation")?;
+    }
+    let q = analytics::dispatch(
+        &config,
+        json!({"action":"query","accountId":account,"sourceKind":"api"}),
+    )
+    .await?;
+    let observations = q["observations"].as_array().unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0]["contentId"], "current-video");
+    assert!(
+        observations[0]["expiresAt"].as_str().is_some(),
+        "effective lifecycle expiry must reach the frontend"
+    );
+    assert!(observations[0]["authorizationExpiresAt"].as_str().is_some());
+    assert!(observations[0]["verificationExpiresAt"].as_str().is_some());
+    let mut manual = report(&account, "date,views\n2026-10-01,10\n");
+    manual["platform"] = json!("youtube");
+    let preview = analytics::dispatch(&config, manual).await?;
+    analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":preview["previewId"]}),
+    )
+    .await?;
+    assert_eq!(
+        analytics::purge_youtube_connection(&config, &conn).await?,
+        1
+    );
+    let other = client
+        .query_one(
+            "SELECT count(*) FROM analytics_sources WHERE id=$1",
+            &[&other_source],
+        )
+        .await
+        .map_err(|_| "fixture verify")?;
+    assert_eq!(other.get::<_, i64>(0), 1);
+    let imported = analytics::dispatch(
+        &config,
+        json!({"action":"query","accountId":account,"sourceKind":"import"}),
+    )
+    .await?;
+    assert_eq!(imported["observations"].as_array().unwrap().len(), 1);
     task.abort();
     Ok(())
 }

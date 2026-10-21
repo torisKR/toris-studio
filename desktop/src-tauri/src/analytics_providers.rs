@@ -11,7 +11,7 @@ const REACH_TYPE: &str = "channel_reach_basic_a1";
 const MAX_PAGES: usize = 3;
 const MAX_REQUESTS: usize = 45;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Failure {
     pub status: String,
     pub message: String,
@@ -55,6 +55,9 @@ pub(crate) struct Batch {
     pub message: String,
     pub api_version: String,
     pub next_sync_secs: i64,
+    pub authorization_verified_at: Option<String>,
+    pub verified_content_ids: Vec<String>,
+    pub deleted_content_ids: Vec<String>,
 }
 pub(crate) fn supported(p: &str) -> bool {
     ["youtube", "instagram", "facebook", "threads", "tiktok"].contains(&p)
@@ -89,6 +92,7 @@ struct Transport {
     token: String,
     requests: usize,
     started: Instant,
+    halted: Option<Failure>,
     #[cfg(test)]
     fixture_origin: Option<String>,
 }
@@ -105,9 +109,22 @@ impl Transport {
             token: token.into(),
             requests: 0,
             started: Instant::now(),
+            halted: None,
             #[cfg(test)]
             fixture_origin: None,
         })
+    }
+    fn remember(&mut self, failure: Failure) -> Failure {
+        if failure.status == "rate_limited" || failure.status == "reconnect_required" {
+            let mut failure = failure;
+            if let Some(previous) = &self.halted {
+                failure.retry_after_secs = failure.retry_after_secs.max(previous.retry_after_secs);
+            }
+            self.halted = Some(failure.clone());
+            failure
+        } else {
+            failure
+        }
     }
     async fn bytes(
         &mut self,
@@ -116,6 +133,9 @@ impl Transport {
         params: &[(&str, String)],
         body: Option<Value>,
     ) -> Result<Vec<u8>, Failure> {
+        if let Some(failure) = &self.halted {
+            return Err(failure.clone());
+        }
         let mut url = Url::parse(endpoint).map_err(|_| Failure::malformed())?;
         if url.scheme() != "https"
             || !matches!(
@@ -191,18 +211,18 @@ impl Transport {
                 Utc::now(),
             );
             if status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(Failure::new(
+                return Err(self.remember(Failure::new(
                     "rate_limited",
                     "공급자 요청 한도에 도달했습니다. Retry-After 이후 다시 수집합니다.",
                     retry,
-                ));
+                )));
             }
             if status.is_server_error() && response.headers().get("retry-after").is_some() {
-                return Err(Failure::new(
+                return Err(self.remember(Failure::new(
                     "rate_limited",
                     "공급자가 일시 중단과 재시도 시점을 알렸습니다. Retry-After 이후 이어갑니다.",
                     retry,
-                ));
+                )));
             }
             if status.is_server_error() && attempt < 2 && retry_allowed {
                 tokio::time::sleep(StdDuration::from_millis(400 * (attempt + 1))).await;
@@ -225,7 +245,7 @@ impl Transport {
             }
             if !status.is_success() {
                 let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-                return Err(classify(status, &value, retry));
+                return Err(self.remember(classify(status, &value, retry)));
             }
             return Ok(bytes);
         }
@@ -246,7 +266,7 @@ impl Transport {
         if value["error"].is_object() {
             let code = value["error"]["code"].as_str().unwrap_or("");
             if !code.is_empty() && code != "ok" || value["error"]["code"].is_number() {
-                return Err(classify(StatusCode::BAD_REQUEST, &value, 900));
+                return Err(self.remember(classify(StatusCode::BAD_REQUEST, &value, 900)));
             }
         }
         Ok(value)
@@ -429,14 +449,24 @@ fn batch(version: &str, cursor: Value) -> Batch {
         message: "반환된 원본 값만 저장했습니다. 빈 날짜는 0으로 채우지 않습니다.".into(),
         api_version: version.into(),
         next_sync_secs: 21600,
+        authorization_verified_at: None,
+        verified_content_ids: vec![],
+        deleted_content_ids: vec![],
     }
 }
 fn partial(b: &mut Batch, failure: Failure, key: &str) {
     let retry = failure.retry_after_secs.clamp(60, 86400);
     if failure.status == "rate_limited" {
-        b.next_sync_secs = retry;
+        b.next_sync_secs = if b.status == "rate_limited" {
+            b.next_sync_secs.max(retry)
+        } else {
+            retry
+        };
         b.status = "rate_limited".into();
-    } else if b.status != "rate_limited" {
+    } else if failure.status == "reconnect_required" {
+        b.status = "reconnect_required".into();
+        b.next_sync_secs = 21600;
+    } else if b.status != "rate_limited" && b.status != "reconnect_required" {
         b.next_sync_secs = b.next_sync_secs.min(retry);
         b.status = "partial".into();
     }
@@ -476,6 +506,9 @@ pub(crate) async fn collect(
         "tiktok" => tiktok(&mut transport, account, cursor).await?,
         _ => return Err(Failure::malformed()),
     };
+    if platform == "youtube" {
+        verify_youtube_batch(&mut transport, account, &mut result).await?;
+    }
     actual_coverage(&mut result);
     Ok(result)
 }
@@ -493,18 +526,120 @@ fn window() -> (String, String) {
     ((end - Duration::days(89)).to_string(), end.to_string())
 }
 
+async fn verify_youtube_owner(t: &mut Transport, account: &str) -> Result<Value, Failure> {
+    let mut page = None;
+    for _ in 0..MAX_PAGES {
+        let mut params = vec![
+            ("part", "statistics".into()),
+            ("mine", "true".into()),
+            ("maxResults", "50".into()),
+        ];
+        if let Some(value) = page {
+            params.push(("pageToken", value));
+        }
+        let response = t
+            .get("https://www.googleapis.com/youtube/v3/channels", &params)
+            .await?;
+        if let Some(item) = response["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|item| item["id"] == account)
+        {
+            return Ok(item.clone());
+        }
+        page = response["nextPageToken"].as_str().map(str::to_string);
+        if page.is_none() {
+            break;
+        }
+    }
+    Err(Failure::new(
+        "reconnect_required",
+        "YouTube 채널의 현재 소유 권한을 확인할 수 없습니다. 해당 연결의 API 캐시를 제거합니다.",
+        21600,
+    ))
+}
+async fn verify_youtube_video_ids(
+    t: &mut Transport,
+    account: &str,
+    ids: &[String],
+) -> Result<(Vec<String>, Vec<String>), Failure> {
+    let mut valid = Vec::new();
+    let mut missing = Vec::new();
+    for chunk in ids.chunks(50) {
+        for id in chunk {
+            account_id(id)?;
+        }
+        let response = t
+            .get(
+                "https://www.googleapis.com/youtube/v3/videos",
+                &[("part", "snippet,status".into()), ("id", chunk.join(","))],
+            )
+            .await?;
+        let returned = response["items"]
+            .as_array()
+            .ok_or_else(Failure::malformed)?;
+        for id in chunk {
+            if returned
+                .iter()
+                .any(|item| item["id"] == *id && item["snippet"]["channelId"] == account)
+            {
+                valid.push(id.clone());
+            } else {
+                missing.push(id.clone());
+            }
+        }
+    }
+    Ok((valid, missing))
+}
+async fn verify_youtube_batch(
+    t: &mut Transport,
+    account: &str,
+    b: &mut Batch,
+) -> Result<(), Failure> {
+    let mut ids = b
+        .observations
+        .iter()
+        .filter(|o| !o.content_id.is_empty())
+        .map(|o| o.content_id.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let mut valid = b.verified_content_ids.clone();
+    ids.retain(|id| !valid.contains(id));
+    for chunk in ids.chunks(50) {
+        match verify_youtube_video_ids(t, account, chunk).await {
+            Ok((verified, missing)) => {
+                valid.extend(verified);
+                b.deleted_content_ids.extend(missing);
+            }
+            Err(failure) => {
+                if failure.status == "reconnect_required" {
+                    return Err(failure);
+                }
+                partial(b, failure, "contentVerification");
+                break;
+            }
+        }
+    }
+    let verified_at = Utc::now().to_rfc3339();
+    b.observations
+        .retain(|o| o.content_id.is_empty() || valid.contains(&o.content_id));
+    for o in &mut b.observations {
+        if !o.content_id.is_empty() {
+            o.provenance["contentVerifiedAt"] = json!(verified_at);
+        }
+    }
+    b.verified_content_ids = valid;
+    b.coverage["contentVerification"]["verifiedCount"] = json!(b.verified_content_ids.len());
+    b.coverage["contentVerification"]["deletedOrUnownedCount"] = json!(b.deleted_content_ids.len());
+    Ok(())
+}
+
 async fn youtube(t: &mut Transport, account: &str, cursor: Value) -> Result<Batch, Failure> {
     let mut b = batch("Data v3 / Analytics v2 / Reporting v1", cursor);
-    let data = t
-        .get(
-            "https://www.googleapis.com/youtube/v3/channels",
-            &[("part", "statistics".into()), ("id", account.into())],
-        )
-        .await?;
-    let item = data["items"]
-        .as_array()
-        .and_then(|v| v.iter().find(|v| v["id"] == account))
-        .ok_or_else(Failure::malformed)?;
+    let item = verify_youtube_owner(t, account).await?;
+    b.authorization_verified_at = Some(Utc::now().to_rfc3339());
     for metric in ["viewCount", "subscriberCount", "videoCount"] {
         let value =
             if metric == "subscriberCount" && item["statistics"]["hiddenSubscriberCount"] == true {
@@ -576,6 +711,7 @@ async fn youtube(t: &mut Transport, account: &str, cursor: Value) -> Result<Batc
             content: String::new(),
             breakdown: "country".into(),
             audience_metric: "follower_demographics".into(),
+            timeframe: String::new(),
             start_index: b.cursor["reportPagination"][report_type]["startIndex"]
                 .as_i64()
                 .unwrap_or(1),
@@ -592,7 +728,11 @@ async fn youtube(t: &mut Transport, account: &str, cursor: Value) -> Result<Batc
                 }
                 b.cursor["reportPagination"][report_type] = report.cursor;
                 if report.status != "ready" {
-                    b.status = "partial".into();
+                    partial(
+                        &mut b,
+                        Failure::new(&report.status, &report.message, report.next_sync_secs),
+                        report_type,
+                    );
                 }
             }
             Err(failure) => partial(&mut b, failure, report_type),
@@ -1022,6 +1162,9 @@ async fn meta(
                 }
             }
         }
+    }
+    if b.status == "rate_limited" {
+        return Ok(b);
     }
     if platform == "threads" {
         let endpoint = format!("{host}/{version}/{account}/threads_insights");
@@ -1458,6 +1601,7 @@ struct ReportRequest {
     breakdown: String,
     audience_metric: String,
     start_index: i64,
+    timeframe: String,
 }
 fn report_request(platform: &str, input: &Value) -> Result<ReportRequest, Failure> {
     let report = input["report"].as_str().unwrap_or("summary");
@@ -1547,6 +1691,19 @@ fn report_request(platform: &str, input: &Value) -> Result<ReportRequest, Failur
         content: content.into(),
         breakdown: breakdown.into(),
         audience_metric: audience_metric.into(),
+        timeframe: if platform == "instagram" && report == "audience" {
+            let timeframe = input["timeframe"].as_str().unwrap_or("last_30_days");
+            if !["this_week", "last_14_days", "last_30_days", "last_90_days"].contains(&timeframe) {
+                return Err(Failure::new(
+                    "unavailable",
+                    "Instagram 인구통계는 이번 주 또는 최근 14/30/90일 공급자 기간을 선택하세요.",
+                    21600,
+                ));
+            }
+            timeframe.into()
+        } else {
+            String::new()
+        },
         start_index: input["cursor"]["startIndex"]
             .as_i64()
             .unwrap_or(1)
@@ -1565,6 +1722,12 @@ pub(crate) async fn report(
     account_id(account)?;
     let request = report_request(platform, input)?;
     let mut t = Transport::new(token)?;
+    let owner_verified = if platform == "youtube" {
+        verify_youtube_owner(&mut t, account).await?;
+        Some(Utc::now().to_rfc3339())
+    } else {
+        None
+    };
     let mut b = match platform {
         "youtube" => youtube_report(&mut t, account, &request).await?,
         "instagram" | "facebook" | "threads" => {
@@ -1573,12 +1736,39 @@ pub(crate) async fn report(
         "tiktok" => tiktok(&mut t, account, json!({})).await?,
         _ => return Err(Failure::malformed()),
     };
+    b.authorization_verified_at = owner_verified;
+    if platform == "youtube" {
+        verify_youtube_batch(&mut t, account, &mut b).await?;
+    }
     b.coverage["report"] = json!(request.report);
-    b.coverage["requestedFrom"] = json!(request.start);
-    b.coverage["requestedTo"] = json!(request.end);
+    if platform == "instagram" && request.report == "audience" {
+        b.coverage["providerTimeframe"] = json!(request.timeframe);
+        b.coverage["exactBoundsReturned"] = json!(false);
+        b.coverage["calendarStartRule"] = json!(if request.timeframe == "this_week" {
+            "Monday"
+        } else {
+            "provider_rolling_timeframe"
+        });
+    } else {
+        b.coverage["requestedFrom"] = json!(request.start);
+        b.coverage["requestedTo"] = json!(request.end);
+    }
     for o in &mut b.observations {
         o.dimensions["report"] = json!(request.report);
-        o.provenance["requestedRange"] = json!({"from":request.start,"to":request.end});
+        if platform == "instagram" && request.report == "audience" {
+            o.provenance
+                .as_object_mut()
+                .unwrap()
+                .remove("requestedRange");
+            o.provenance["providerTimeframe"] = json!(request.timeframe);
+            o.provenance["calendarStartRule"] = json!(if request.timeframe == "this_week" {
+                "Monday"
+            } else {
+                "provider_rolling_timeframe"
+            });
+        } else {
+            o.provenance["requestedRange"] = json!({"from":request.start,"to":request.end});
+        }
     }
     actual_coverage(&mut b);
     Ok(b)
@@ -1590,6 +1780,17 @@ async fn youtube_report(
 ) -> Result<Batch, Failure> {
     let (dimensions,metrics)=match r.report.as_str(){"summary"=>("","views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost"),"daily"=>("day","views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost"),"content"=>("video","views,estimatedMinutesWatched,averageViewDuration,likes,comments,shares,subscribersGained,subscribersLost"),"traffic"=>("insightTrafficSourceType","views,estimatedMinutesWatched"),"country"=>("country","views,estimatedMinutesWatched"),"device"=>("deviceType,operatingSystem","views,estimatedMinutesWatched"),"demographics"=>("ageGroup,gender","viewerPercentage"),"retention"=>("elapsedVideoTimeRatio","audienceWatchRatio,relativeRetentionPerformance"),_=>return Err(Failure::malformed())};
     let mut b = batch("YouTube Analytics v2", json!({}));
+    if !r.content.is_empty() {
+        let (valid, deleted) = verify_youtube_video_ids(t, account, &[r.content.clone()]).await?;
+        b.verified_content_ids = valid;
+        b.deleted_content_ids = deleted;
+        if b.verified_content_ids.is_empty() {
+            b.status = "partial".into();
+            b.message="영상이 삭제되었거나 승인된 채널의 소유 콘텐츠가 아닙니다. 해당 API 캐시를 제거합니다.".into();
+            return Ok(b);
+        }
+    }
+
     let mut page = r.start_index;
     let mut more = false;
     for _ in 0..MAX_PAGES {
@@ -1618,7 +1819,13 @@ async fn youtube_report(
             .await
         {
             Ok(v) => {
-                let items = decode_youtube_analytics(account, &v, &r.start, &r.end)?;
+                let mut items = decode_youtube_analytics(account, &v, &r.start, &r.end)?;
+                if !r.content.is_empty() {
+                    for o in &mut items {
+                        o.content_id = r.content.clone();
+                        o.provenance["contentVerifiedAt"] = json!(Utc::now().to_rfc3339());
+                    }
+                }
                 let rows = v["rows"].as_array().map_or(0, Vec::len);
                 b.observations.extend(items);
                 more = rows == 200;
@@ -1780,18 +1987,7 @@ async fn meta_report(
                 params.extend([
                     ("period", "lifetime".into()),
                     ("metric_type", "total_value".into()),
-                    (
-                        "timeframe",
-                        match (NaiveDate::parse_from_str(&r.end, "%Y-%m-%d").unwrap()
-                            - NaiveDate::parse_from_str(&r.start, "%Y-%m-%d").unwrap())
-                        .num_days()
-                        {
-                            0..=6 => "last_7_days",
-                            7..=29 => "last_30_days",
-                            _ => "last_90_days",
-                        }
-                        .into(),
-                    ),
+                    ("timeframe", r.timeframe.clone()),
                     ("breakdown", r.breakdown.clone()),
                 ]);
             } else {
@@ -1857,7 +2053,11 @@ async fn meta_report(
                 b.observations.push(unavailable_meta(
                     platform, account, metric, &r.content, &r.start, &r.end, version, &f,
                 ));
+                let stop = f.status == "rate_limited";
                 partial(&mut b, f, metric);
+                if stop {
+                    break;
+                }
             }
         }
     }
@@ -2235,5 +2435,251 @@ mod wire_fixture_tests {
             .is_err());
         assert_eq!(state.calls.load(Ordering::SeqCst), 1);
         server.abort();
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::*;
+    use axum::{
+        body::Body,
+        extract::State,
+        http::{Request, Response},
+        routing::any,
+        Router,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    async fn start(router: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (origin, server)
+    }
+    fn transport(origin: &str) -> Transport {
+        let mut t = Transport::new("fixture-only").unwrap();
+        t.fixture_origin = Some(origin.into());
+        t
+    }
+    async fn retention_route(request: Request<Body>) -> Response<Body> {
+        let query = request.uri().query().unwrap_or("");
+        let id = if query.contains("video-A") {
+            "video-A"
+        } else {
+            "video-B"
+        };
+        let value = if request.uri().path().ends_with("videos") {
+            json!({"items":[{"id":id,"snippet":{"channelId":"owner"}}]})
+        } else {
+            json!({"columnHeaders":[{"name":"elapsedVideoTimeRatio","columnType":"DIMENSION"},{"name":"audienceWatchRatio","columnType":"METRIC"}],"rows":[[0.5,0.7]]})
+        };
+        Response::new(Body::from(value.to_string()))
+    }
+    #[tokio::test]
+    async fn retention_preserves_filtered_video_identity_and_distinct_storage_keys() {
+        let (origin, server) = start(Router::new().route("/{*path}", any(retention_route))).await;
+        let mut t = transport(&origin);
+        let a = report_request(
+            "youtube",
+            &json!({"report":"retention","range":"7d","contentId":"video-A"}),
+        )
+        .unwrap();
+        let b = report_request(
+            "youtube",
+            &json!({"report":"retention","range":"7d","contentId":"video-B"}),
+        )
+        .unwrap();
+        let a = youtube_report(&mut t, "owner", &a).await.unwrap();
+        let b = youtube_report(&mut t, "owner", &b).await.unwrap();
+        assert_eq!(a.observations[0].content_id, "video-A");
+        assert_eq!(b.observations[0].content_id, "video-B");
+        assert_ne!(
+            super::super::observation_key(&a.observations[0]),
+            super::super::observation_key(&b.observations[0])
+        );
+        server.abort();
+    }
+    async fn limited(State(count): State<Arc<AtomicUsize>>, _: Request<Body>) -> Response<Body> {
+        count.fetch_add(1, Ordering::SeqCst);
+        Response::builder()
+            .status(429)
+            .header("retry-after", "43200")
+            .body(Body::from("{}"))
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn meta_report_halts_after_first_429() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let (origin, server) = start(
+            Router::new()
+                .route("/{*path}", any(limited))
+                .with_state(count.clone()),
+        )
+        .await;
+        let mut t = transport(&origin);
+        let r = report_request("instagram", &json!({"report":"summary","range":"7d"})).unwrap();
+        let result = meta_report(&mut t, "instagram", "owner", &r).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(result.status, "rate_limited");
+        assert_eq!(result.next_sync_secs, 43200);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn meta_background_halts_before_content_after_429() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let (origin, server) = start(
+            Router::new()
+                .route("/{*path}", any(limited))
+                .with_state(count.clone()),
+        )
+        .await;
+        let mut t = transport(&origin);
+        let result = meta(&mut t, "instagram", "owner", json!({})).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(result.status, "rate_limited");
+        assert_eq!(result.next_sync_secs, 43200);
+        server.abort();
+    }
+    #[test]
+    fn nested_rate_limits_preserve_greatest_wait() {
+        let mut b = batch("v", json!({}));
+        partial(&mut b, Failure::new("rate_limited", "first", 43200), "a");
+        partial(&mut b, Failure::new("rate_limited", "second", 120), "b");
+        assert_eq!(b.next_sync_secs, 43200);
+    }
+    async fn audience_route(request: Request<Body>) -> Response<Body> {
+        let query = request.uri().query().unwrap_or("");
+        assert!(
+            query.contains("timeframe=this_week"),
+            "must use explicit calendar-week timeframe: {query}"
+        );
+        Response::new(Body::from(json!({"data":[{"name":"follower_demographics","period":"lifetime","total_value":{"breakdowns":[{"dimension_keys":["country"],"results":[{"dimension_values":["KR"],"value":1}]}]}}]}).to_string()))
+    }
+    #[tokio::test]
+    async fn instagram_audience_uses_explicit_supported_calendar_timeframe() {
+        let (origin, server) = start(Router::new().route("/{*path}", any(audience_route))).await;
+        let mut t = transport(&origin);
+        let r = report_request(
+            "instagram",
+            &json!({"report":"audience","range":"7d","timeframe":"this_week"}),
+        )
+        .unwrap();
+        let result = meta_report(&mut t, "instagram", "owner", &r).await.unwrap();
+        assert_eq!(
+            result.observations[0].provenance["timeframeParameters"]["timeframe"],
+            "this_week"
+        );
+        server.abort();
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_wire_tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        extract::State,
+        http::{Request, Response},
+        routing::any,
+        Router,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    async fn route(
+        State(count): State<Arc<AtomicUsize>>,
+        request: Request<Body>,
+    ) -> Response<Body> {
+        count.fetch_add(1, Ordering::SeqCst);
+        let path = request.uri().path();
+        let query = request.uri().query().unwrap_or("");
+        if path.ends_with("channels") {
+            return Response::new(Body::from(json!({"items":[{"id":"owner","statistics":{"viewCount":"1","subscriberCount":"1","videoCount":"1"}}]}).to_string()));
+        }
+        if query.contains("dimensions=day") || query.contains("dimensions=video") {
+            return Response::new(Body::from(
+                json!({"columnHeaders":[{"name":"views","columnType":"METRIC"}],"rows":[]})
+                    .to_string(),
+            ));
+        }
+        Response::builder()
+            .status(429)
+            .header("retry-after", "43200")
+            .body(Body::from("{}"))
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn nested_youtube_429_halts_wire_calls_and_preserves_account_wait() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let router = Router::new()
+            .route("/{*path}", any(route))
+            .with_state(count.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let mut t = Transport::new("fixture-only").unwrap();
+        t.fixture_origin = Some(origin);
+        let b = youtube(&mut t, "owner", json!({})).await.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 4);
+        assert_eq!(b.status, "rate_limited");
+        assert_eq!(b.next_sync_secs, 43200);
+        server.abort();
+    }
+    async fn videos(_: Request<Body>) -> Response<Body> {
+        Response::new(Body::from(
+            json!({"items":[{"id":"video-A","snippet":{"channelId":"owner"}}]}).to_string(),
+        ))
+    }
+    #[tokio::test]
+    async fn deleted_video_is_not_persisted_and_its_cached_id_is_marked_for_removal() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/{*path}", any(videos)))
+                .await
+                .unwrap();
+        });
+        let mut t = Transport::new("fixture-only").unwrap();
+        t.fixture_origin = Some(origin);
+        let mut b = batch("v2", json!({}));
+        for id in ["video-A", "deleted-B"] {
+            b.observations.push(observation(
+                "youtube",
+                "owner",
+                "views",
+                Some(1.),
+                "period",
+                "2026-01-01",
+                "2026-01-07",
+                "America/Los_Angeles",
+                id,
+                "v2",
+                "reports",
+            ));
+        }
+        verify_youtube_batch(&mut t, "owner", &mut b).await.unwrap();
+        assert_eq!(b.observations.len(), 1);
+        assert_eq!(b.observations[0].content_id, "video-A");
+        assert_eq!(b.deleted_content_ids, ["deleted-B"]);
+        assert!(b.observations[0].provenance["contentVerifiedAt"].is_string());
+        server.abort();
+    }
+    #[test]
+    fn nested_authentication_invalidation_cannot_be_downgraded_to_partial() {
+        let mut b = batch("v2", json!({}));
+        partial(
+            &mut b,
+            Failure::new("reconnect_required", "revoked", 21600),
+            "daily",
+        );
+        partial(&mut b, Failure::malformed(), "content");
+        assert_eq!(b.status, "reconnect_required");
     }
 }

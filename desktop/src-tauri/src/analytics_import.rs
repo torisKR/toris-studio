@@ -20,6 +20,214 @@ pub(crate) struct Preview {
 fn err(message: &str) -> String {
     format!("보고서: {message}")
 }
+fn worksheet_coordinate(raw: &str) -> Result<(usize, usize), String> {
+    let split = raw.bytes().take_while(u8::is_ascii_alphabetic).count();
+    if split == 0 || split == raw.len() {
+        return Err(err("XLSX 좌표 형식 오류"));
+    }
+    let mut column = 0usize;
+    for b in raw[..split].bytes() {
+        column = column
+            .checked_mul(26)
+            .and_then(|n| n.checked_add((b.to_ascii_uppercase() - b'A' + 1) as usize))
+            .ok_or_else(|| err("XLSX 좌표 제한 초과"))?;
+    }
+    let row = raw[split..]
+        .parse::<usize>()
+        .map_err(|_| err("XLSX 좌표 형식 오류"))?;
+    if column == 0 || column > MAX_COLUMNS || row == 0 || row > MAX_ROWS + 1 {
+        return Err(err("XLSX 행/열 좌표 제한 초과"));
+    }
+    Ok((column, row))
+}
+fn preflight_worksheet(bytes: &[u8]) -> Result<(), String> {
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut buffer = Vec::new();
+    let (mut row, mut column, mut cells, mut in_row) = (0usize, 0usize, 0usize, false);
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|_| err("XLSX XML 오류"))?
+        {
+            quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e) => {
+                let name = e.local_name();
+                if name.as_ref() == b"f" {
+                    return Err(err("수식 셀은 허용되지 않습니다. 값으로 내보내세요."));
+                }
+                let mut attributes = BTreeMap::new();
+                for a in e.attributes() {
+                    let a = a.map_err(|_| err("XLSX 셀 속성 오류"))?;
+                    attributes.insert(
+                        a.key.as_ref().to_vec(),
+                        a.decoded_and_normalized_value(
+                            quick_xml::XmlVersion::Implicit1_0,
+                            reader.decoder(),
+                        )
+                        .map_err(|_| err("XLSX 속성 오류"))?
+                        .into_owned(),
+                    );
+                }
+                if name.as_ref() == b"dimension" {
+                    if let Some(bounds) = attributes.get(b"ref".as_slice()) {
+                        for coordinate in bounds.split(':') {
+                            worksheet_coordinate(coordinate)?;
+                        }
+                    }
+                }
+                if name.as_ref() == b"row" {
+                    row = if let Some(raw) = attributes.get(b"r".as_slice()) {
+                        raw.parse::<usize>().map_err(|_| err("XLSX 행 좌표 오류"))?
+                    } else {
+                        row.checked_add(1).ok_or_else(|| err("XLSX 행 제한 초과"))?
+                    };
+                    if row == 0 || row > MAX_ROWS + 1 {
+                        return Err(err("XLSX 행 제한 초과"));
+                    }
+                    column = 0;
+                    in_row = true;
+                }
+                if name.as_ref() == b"c" {
+                    if !in_row {
+                        return Err(err("XLSX 행 밖의 셀은 허용되지 않습니다."));
+                    }
+                    column = if let Some(raw) = attributes.get(b"r".as_slice()) {
+                        let (c, r) = worksheet_coordinate(raw)?;
+                        if r != row {
+                            return Err(err("XLSX 셀/행 좌표 불일치"));
+                        }
+                        c
+                    } else {
+                        column + 1
+                    };
+                    cells += 1;
+                    if column > MAX_COLUMNS || cells > (MAX_ROWS + 1) * MAX_COLUMNS {
+                        return Err(err("XLSX 셀 수/열 제한 초과"));
+                    }
+                }
+            }
+            quick_xml::events::Event::End(e) if e.local_name().as_ref() == b"row" => in_row = false,
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(())
+}
+fn preflight_xlsx(bytes: &[u8]) -> Result<(), String> {
+    use std::io::Read;
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| err("XLSX 압축 형식 오류"))?;
+    if archive.len() > 2000 {
+        return Err(err("XLSX 항목 수 제한 초과"));
+    }
+    let mut expanded = 0u64;
+    let mut names = HashSet::new();
+    for i in 0..archive.len() {
+        let entry = archive
+            .by_index(i)
+            .map_err(|_| err("XLSX 압축 항목 오류"))?;
+        expanded = expanded
+            .checked_add(entry.size())
+            .ok_or_else(|| err("XLSX 크기 초과"))?;
+        if expanded > 30 * 1024 * 1024 || entry.size() > 20 * 1024 * 1024 {
+            return Err(err("XLSX 압축 해제 크기 제한 초과"));
+        }
+        let path = entry.name().to_string();
+        if !names.insert(path.clone()) {
+            return Err(err("XLSX 중복 항목은 허용되지 않습니다."));
+        }
+        let lower = path.to_lowercase();
+        if lower.contains("vbaproject")
+            || lower.contains("externallinks/")
+            || lower.contains("embeddings/")
+        {
+            return Err(err("매크로·외부 링크·포함 개체는 허용되지 않습니다."));
+        }
+    }
+    let mut rels = Vec::new();
+    archive
+        .by_name("xl/_rels/workbook.xml.rels")
+        .map_err(|_| err("XLSX 통합 문서 관계가 없습니다."))?
+        .read_to_end(&mut rels)
+        .map_err(|_| err("XLSX 관계 읽기 오류"))?;
+    let mut reader = quick_xml::Reader::from_reader(rels.as_slice());
+    let mut buffer = Vec::new();
+    let mut targets = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|_| err("XLSX 관계 XML 오류"))?
+        {
+            quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)
+                if e.local_name().as_ref() == b"Relationship" =>
+            {
+                let mut attrs = BTreeMap::new();
+                for a in e.attributes() {
+                    let a = a.map_err(|_| err("XLSX 관계 속성 오류"))?;
+                    attrs.insert(
+                        a.key.as_ref().to_vec(),
+                        a.decoded_and_normalized_value(
+                            quick_xml::XmlVersion::Implicit1_0,
+                            reader.decoder(),
+                        )
+                        .map_err(|_| err("XLSX 관계 속성 오류"))?
+                        .into_owned(),
+                    );
+                }
+                let kind = attrs
+                    .get(b"Type".as_slice())
+                    .map(String::as_str)
+                    .unwrap_or("");
+                // Calamine resolves sheet paths by relationship target and ignores Type.
+                // Preflight every target capable of resolving to its worksheets directory.
+                if kind.ends_with("/worksheet")
+                    || attrs
+                        .get(b"Target".as_slice())
+                        .is_some_and(|value| value.contains("worksheets/"))
+                {
+                    let target = attrs
+                        .get(b"Target".as_slice())
+                        .ok_or_else(|| err("XLSX 시트 대상이 없습니다."))?;
+                    let normalized = target
+                        .strip_prefix("/xl/")
+                        .or_else(|| target.strip_prefix("xl/"))
+                        .unwrap_or(target);
+                    let name = normalized
+                        .strip_prefix("worksheets/")
+                        .ok_or_else(|| err("XLSX 시트 대상은 표준 XML 경로여야 합니다."))?;
+                    if !name.ends_with(".xml")
+                        || name.contains("..")
+                        || !name
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                        || attrs
+                            .get(b"TargetMode".as_slice())
+                            .is_some_and(|s| s != "Internal")
+                    {
+                        return Err(err("XLSX 시트 대상은 표준 XML 경로여야 합니다."));
+                    }
+                    targets.push(format!("xl/{normalized}"));
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if targets.len() != 1 {
+        return Err(err("정확히 하나의 표준 XML 시트만 포함하세요."));
+    }
+    for target in targets {
+        let mut xml = Vec::new();
+        archive
+            .by_name(&target)
+            .map_err(|_| err("XLSX 시트 대상을 찾을 수 없습니다."))?
+            .read_to_end(&mut xml)
+            .map_err(|_| err("XLSX 시트 읽기 오류"))?;
+        preflight_worksheet(&xml)?;
+    }
+    Ok(())
+}
 pub(crate) fn parse_table(input: &Value) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let name = input["filename"]
         .as_str()
@@ -48,83 +256,7 @@ pub(crate) fn parse_table(input: &Value) -> Result<(Vec<String>, Vec<Vec<String>
         return Err(err("파일은 5 MiB 이하여야 합니다."));
     }
     let table = if name.ends_with(".xlsx") {
-        let mut zip =
-            zip::ZipArchive::new(Cursor::new(&bytes)).map_err(|_| err("XLSX 압축 형식 오류"))?;
-        if zip.len() > 2000 {
-            return Err(err("XLSX 항목 수 제한 초과"));
-        }
-        let mut expanded = 0u64;
-        for i in 0..zip.len() {
-            let mut entry = zip.by_index(i).map_err(|_| err("XLSX 압축 항목 오류"))?;
-            expanded = expanded
-                .checked_add(entry.size())
-                .ok_or_else(|| err("XLSX 크기 초과"))?;
-            let path = entry.name().to_lowercase();
-            if expanded > 30 * 1024 * 1024 || entry.size() > 20 * 1024 * 1024 {
-                return Err(err("XLSX 압축 해제 크기 제한 초과"));
-            }
-            if path.starts_with("xl/worksheets/") && path.ends_with(".xml") {
-                let mut xml = quick_xml::Reader::from_reader(std::io::BufReader::new(&mut entry));
-                let mut buffer = Vec::new();
-                loop {
-                    match xml
-                        .read_event_into(&mut buffer)
-                        .map_err(|_| err("XLSX XML 오류"))?
-                    {
-                        quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e) => {
-                            if e.local_name().as_ref() == b"f" {
-                                return Err(err("수식 셀은 허용되지 않습니다. 값으로 내보내세요."));
-                            }
-                            for attribute in e.attributes() {
-                                let attribute = attribute.map_err(|_| err("XLSX 셀 속성 오류"))?;
-                                if attribute.key.as_ref() == b"r"
-                                    || attribute.key.as_ref() == b"ref"
-                                {
-                                    let value = std::str::from_utf8(attribute.value.as_ref())
-                                        .map_err(|_| err("XLSX 좌표 오류"))?;
-                                    for coordinate in value.split(':') {
-                                        let letters = coordinate
-                                            .bytes()
-                                            .take_while(u8::is_ascii_alphabetic)
-                                            .collect::<Vec<_>>();
-                                        let digits = &coordinate[letters.len()..];
-                                        let mut column = 0usize;
-                                        for letter in letters {
-                                            column = column
-                                                .checked_mul(26)
-                                                .and_then(|n| {
-                                                    n.checked_add(
-                                                        (letter.to_ascii_uppercase() - b'A' + 1)
-                                                            as usize,
-                                                    )
-                                                })
-                                                .ok_or_else(|| err("XLSX 열 제한 초과"))?;
-                                        }
-                                        if column > MAX_COLUMNS
-                                            || digits
-                                                .parse::<usize>()
-                                                .is_ok_and(|n| n > MAX_ROWS + 1)
-                                        {
-                                            return Err(err("XLSX 행/열 좌표 제한 초과"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        quick_xml::events::Event::Eof => break,
-                        _ => {}
-                    }
-                    buffer.clear();
-                }
-            }
-            if path.contains("vbaproject")
-                || path.contains("externallinks/")
-                || path.contains("embeddings/")
-            {
-                return Err(err("매크로·외부 링크·포함 개체는 허용되지 않습니다."));
-            }
-        }
-        drop(zip);
+        preflight_xlsx(&bytes)?;
         let mut workbook: Xlsx<_> =
             Xlsx::new(Cursor::new(bytes)).map_err(|_| err("XLSX 문서를 읽을 수 없습니다."))?;
         if workbook.sheet_names().len() != 1 {
@@ -432,7 +564,7 @@ mod tests {
 mod workbook_tests {
     use super::*;
     use std::io::Write;
-    fn workbook(sheet: &str, extra: Option<(&str, &str)>) -> Value {
+    pub(super) fn workbook(sheet: &str, extra: Option<(&str, &str)>) -> Value {
         let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let entries = [
             (
@@ -494,5 +626,63 @@ mod workbook_tests {
             let input = workbook("<worksheet/>", Some((name, "inert fixture")));
             assert!(parse_table(&input).unwrap_err().contains("매크로"));
         }
+    }
+}
+
+#[cfg(test)]
+mod review_workbook_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    #[test]
+    fn reject_non_xml_relationship_target_before_calamine() {
+        let input = super::workbook_tests::workbook(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>metric</t></is></c></row><row r="2"><c r="A2"><v>1</v></c></row></sheetData></worksheet>"#,
+            None,
+        );
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(input["bytesBase64"].as_str().unwrap())
+            .unwrap();
+        let mut original = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..original.len() {
+            let mut entry = original.by_index(i).unwrap();
+            let mut text = String::new();
+            entry.read_to_string(&mut text).unwrap();
+            let name = entry.name().replace("sheet1.xml", "sheet1.bin");
+            text = text.replace("sheet1.xml", "sheet1.bin");
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(text.as_bytes()).unwrap();
+        }
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(archive.finish().unwrap().into_inner());
+        let input = json!({"filename":"renamed.xlsx","bytesBase64":encoded});
+        assert!(
+            parse_table(&input).is_err(),
+            "non-XML worksheet targets must be rejected before Calamine"
+        );
+    }
+}
+
+#[cfg(test)]
+mod implicit_coordinate_tests {
+    use super::*;
+    #[test]
+    fn implicit_rows_are_bounded_before_calamine_allocation() {
+        let mut xml = String::from("<worksheet><sheetData>");
+        for _ in 0..10_002 {
+            xml.push_str("<row><c><v>1</v></c></row>");
+        }
+        xml.push_str("</sheetData></worksheet>");
+        assert!(preflight_worksheet(xml.as_bytes()).is_err());
+    }
+    #[test]
+    fn implicit_columns_are_bounded_before_calamine_allocation() {
+        let xml = format!(
+            "<worksheet><sheetData><row>{}</row></sheetData></worksheet>",
+            "<c><v>1</v></c>".repeat(101)
+        );
+        assert!(preflight_worksheet(xml.as_bytes()).is_err());
     }
 }
