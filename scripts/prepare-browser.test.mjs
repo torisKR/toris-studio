@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32 } from 'node:zlib';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 function zip(entries) {
     const locals = [], centrals = [];
     let offset = 0;
@@ -71,6 +72,45 @@ test('installer verification refuses ambiguous candidates and ignores signatures
     assert.equal(module.installerCandidate(['app.exe', 'app.exe.sig'], 'x86_64-pc-windows-msvc'), 'app.exe');
     for (const files of [[], ['a.dmg', 'b.dmg']])
         assert.throws(() => module.installerCandidate(files, 'aarch64-apple-darwin'));
+});
+const startupReceipt = () => ({ check: 'native-tauri-startup', ok: true, reason: 'passed', version: '0.3.1', platform: 'macos', userDataAccessed: false, providerExecution: false, checks: ['packaged-index', 'four-destinations', 'iso-date-fields', 'loaded-settings', 'no-startup-error', 'read-only-ipc-fixtures'] });
+async function startupFixture(source, overrides = {}) {
+    const { verifyStartupSmoke } = await import('./prepare-browser-installer.mjs');
+    return verifyStartupSmoke('/fixture/extracted-app', {
+        expectedVersion: '0.3.1', expectedPlatform: 'macos', ...overrides,
+        spawnProcess: (command, args, options) => {
+            assert.equal(command, '/fixture/extracted-app');
+            assert.deepEqual(args, ['--startup-smoke']);
+            assert.equal(options.shell, false);
+            assert.equal(options.env.PATH, '');
+            assert.deepEqual(Object.keys(options.env).filter(key => key.toUpperCase() === 'PATH'), ['PATH']);
+            return spawn(process.execPath, ['-e', source], options);
+        }
+    });
+}
+test('extracted app startup requires an isolated successful receipt from the expected version and platform', async () => {
+    const valid = startupReceipt();
+    assert.deepEqual(await startupFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(valid))})`), valid);
+    for (const change of [{ ok: false }, { ok: 'true' }, { reason: 'render-failed' }, { userDataAccessed: true }, { userDataAccessed: undefined }, { providerExecution: true }, { version: '0.2.0' }, { platform: 'windows' }, { check: 'other-check' }, { checks: [] }, { checks: valid.checks.filter(check => check !== 'loaded-settings') }]) {
+        const invalid = { ...valid, ...change };
+        await assert.rejects(startupFixture(`process.stdout.write(${JSON.stringify(JSON.stringify(invalid))})`), /required checks/);
+    }
+});
+test('extracted app startup rejects blank, malformed, extra JSON, noisy and oversized output', async () => {
+    for (const text of ['', 'not JSON', 'null', '[]', '{}', `startup log\n${JSON.stringify(startupReceipt())}`, `${JSON.stringify(startupReceipt())}\n{}`])
+        await assert.rejects(startupFixture(`process.stdout.write(${JSON.stringify(text)})`), /JSON receipt|required checks/);
+    await assert.rejects(startupFixture(`process.stdout.write('x'.repeat(65537))`), /output exceeded/);
+});
+test('extracted app startup fails closed on process failure and kills a hung app', async () => {
+    const success = JSON.stringify(startupReceipt());
+    await assert.rejects(startupFixture(`process.stdout.write(${JSON.stringify(success)}); process.exitCode=1`), /exited unsuccessfully/);
+    const started = Date.now();
+    await assert.rejects(startupFixture('setInterval(() => {}, 1000)', { timeout: 100 }), /timed out/);
+    assert.ok(Date.now() - started < 5000, 'Hung native app must not hold the installer verification open');
+});
+test('extracted app startup rejects a missing executable', async () => {
+    const { verifyStartupSmoke } = await import('./prepare-browser-installer.mjs');
+    await assert.rejects(verifyStartupSmoke(path.join(process.cwd(), 'missing-startup-fixture-executable'), { expectedVersion: '0.3.1', expectedPlatform: 'macos' }), /could not launch/);
 });
 test('deployed Playwright Library excludes CLIs and platform installer scripts', async () => {
     const { playwrightLibraryFile } = await import('./prepare-browser.mjs');

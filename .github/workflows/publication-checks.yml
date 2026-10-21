@@ -55,6 +55,8 @@ jobs:
         run: node scripts/verify-publication-ui.mjs
       - name: Verify SNS account isolation, report review and RDC handoff UI
         run: node scripts/verify-sns-workspace.mjs
+      - name: Verify startup recovery without exposing errors or clearing storage
+        run: node scripts/verify-startup-error.mjs
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         if: always()
         with:

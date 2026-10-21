@@ -16,7 +16,9 @@ export function analyticsApi<T>(input:Record<string,unknown>):Promise<T>{return 
 export function connectionApi<T>(input:Record<string,unknown>):Promise<T>{return invoke<T>("oauth_connection_dispatch",{input});}
 export function accountKey(platform:string,accountId:string){return `${platform}:${accountId}`;}
 export function dateRange(days:number,now=new Date()){
- const to=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit"}).format(now);
+ const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",calendar:"gregory",numberingSystem:"latn",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(now);
+ const part=(type:string)=>parts.find(value=>value.type===type)?.value??"";
+ const to=`${part("year")}-${part("month")}-${part("day")}`;
  const end=new Date(`${to}T00:00:00Z`);end.setUTCDate(end.getUTCDate()-(days-1));return{from:end.toISOString().slice(0,10),to};
 }
 export function metricValue(row:Observation){return row.status!=="available"||row.value===null?"—":new Intl.NumberFormat("ko-KR",{maximumFractionDigits:2}).format(row.value);}

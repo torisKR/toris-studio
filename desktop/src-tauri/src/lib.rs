@@ -43,6 +43,8 @@ pub mod publishing;
 pub mod publishing_adapters;
 pub mod scheduler;
 pub mod social;
+#[cfg(any(feature = "desktop", test))]
+mod startup_smoke;
 #[cfg(feature = "desktop")]
 mod tray;
 pub mod trends;
@@ -906,6 +908,15 @@ mod state_tests {
 
 pub fn run() {
     let action = std::env::args().nth(1);
+    if action.as_deref() == Some("--startup-smoke") {
+        #[cfg(feature = "desktop")]
+        std::process::exit(startup_smoke::run());
+        #[cfg(not(feature = "desktop"))]
+        {
+            eprintln!("Native startup smoke requires a packaged desktop build.");
+            std::process::exit(1);
+        }
+    }
     if action.as_deref() == Some("--motion-smoke") {
         let runtime = tokio::runtime::Runtime::new().expect("Rust runtime unavailable");
         match runtime.block_on(graphics_export::smoke()) {

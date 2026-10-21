@@ -9,19 +9,12 @@ import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
 
 export type PublicSettings = {
   databaseConfigured: boolean;
-  opencodexBaseUrl: string;
-  opencodexModel: string;
-  opencodexAllowedModels: string[];
-  teamclaudeBaseUrl?: string | null;
-  teamclaudeModel?: string | null;
-  teamclaudeAllowedModels?: string[];
+  creationMode: "remote-desktop-commander";
   youtubeConfigured: boolean;
   naverConfigured: boolean;
   savedCollectionKeys?: { youtubeApiKey: boolean; naverClientId: boolean; naverClientSecret: boolean };
   configPath: string;
   schedulerEnabled: boolean;
-  claudeCliEnabled?: boolean;
-  claudeCliPath?: string | null;
 };
 type SchedulerStatus = {
   enabled: boolean;
@@ -32,18 +25,9 @@ type SchedulerStatus = {
 };
 type SettingsForm = {
   databaseUrl: string;
-  opencodexBaseUrl: string;
-  opencodexModel: string;
-  opencodexAllowedModels: string;
-  opencodexApiKey: string;
-  teamclaudeBaseUrl: string;
-  teamclaudeModel: string;
-  teamclaudeAllowedModels: string;
-  teamclaudeApiKey: string;
   youtubeApiKey: string;
   naverClientId: string;
   naverClientSecret: string;
-  claudeCliEnabled: boolean;
 };
 type CollectionSecretKey = "youtubeApiKey" | "naverClientId" | "naverClientSecret";
 type KeychainStatus = { blocked: boolean };
@@ -112,13 +96,7 @@ function CollectionSecretField({ secretKey, id, label, value, configured, locked
 
 function makeForm(settings: PublicSettings): SettingsForm {
   return {
-    databaseUrl: "", opencodexBaseUrl: settings.opencodexBaseUrl,
-    opencodexModel: settings.opencodexModel,
-    opencodexAllowedModels: settings.opencodexAllowedModels.join(", "),
-    opencodexApiKey: "", teamclaudeBaseUrl: settings.teamclaudeBaseUrl ?? "",
-    teamclaudeModel: settings.teamclaudeModel ?? "", teamclaudeAllowedModels: (settings.teamclaudeAllowedModels ?? []).join(", "), teamclaudeApiKey: "",
-    youtubeApiKey: "", naverClientId: "", naverClientSecret: "",
-    claudeCliEnabled: settings.claudeCliEnabled ?? false
+    databaseUrl: "", youtubeApiKey: "", naverClientId: "", naverClientSecret: ""
   };
 }
 function failure(error: unknown) {
@@ -211,17 +189,9 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
     setBusy(true);
     setSecretResetToken((current) => current + 1);
     try {
-      const input: Record<string, unknown> = {
-        opencodexBaseUrl: form.opencodexBaseUrl.trim(),
-        opencodexModel: form.opencodexModel.trim(),
-        opencodexAllowedModels: form.opencodexAllowedModels.split(",").map((model) => model.trim()).filter(Boolean),
-        teamclaudeBaseUrl: form.teamclaudeBaseUrl.trim(),
-        teamclaudeModel: form.teamclaudeModel.trim(),
-        teamclaudeAllowedModels: form.teamclaudeAllowedModels.split(",").map((model) => model.trim()).filter(Boolean),
-        claudeCliEnabled: form.claudeCliEnabled
-      };
+      const input: Record<string, unknown> = {};
       // Unfilled secret fields are omitted; Rust preserves the saved values.
-      for (const key of ["databaseUrl", "opencodexApiKey", "teamclaudeApiKey", "youtubeApiKey", "naverClientId", "naverClientSecret"] as const) {
+      for (const key of ["databaseUrl", "youtubeApiKey", "naverClientId", "naverClientSecret"] as const) {
         const value = form[key].trim();
         if (value) input[key] = value;
       }

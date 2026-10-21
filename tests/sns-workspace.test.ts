@@ -17,6 +17,20 @@ test("date range uses calendar dates and exported values cannot become spreadshe
  assert.match(csv,/api/);
 });
 
+test("calendar ranges do not parse locale display dates and cross KST year and leap-day boundaries", (t) => {
+ const DateTimeFormat = Intl.DateTimeFormat;
+ t.mock.method(Intl, "DateTimeFormat", function (locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
+  const formatter = new DateTimeFormat(locales, options);
+  // Locale display formatting is not an ISO serialization contract. Exercise
+  // slash-separated display output without changing the actual calendar parts.
+  Object.defineProperty(formatter, "format", { value: () => "01/01/2020" });
+  return formatter;
+ });
+ assert.deepEqual(dateRange(7,new Date("2019-12-31T15:00:00Z")),{from:"2019-12-26",to:"2020-01-01"});
+ assert.deepEqual(dateRange(1,new Date("2019-12-31T14:59:59Z")),{from:"2019-12-31",to:"2019-12-31"});
+ assert.deepEqual(dateRange(2,new Date("2024-02-28T15:00:00Z")),{from:"2024-02-28",to:"2024-02-29"});
+});
+
 test("selected channel and source never expose another account, while report ownership survives binding",async()=>{
  const {scopedObservations}=await import("../desktop/src/sns/model");
  const channels=[{id:"local-a",platform:"youtube"},{id:"local-b",platform:"youtube"}];

@@ -17,7 +17,7 @@ await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
   calls.push({ command, args });
   if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: 'fixture' } };
   if (command === 'ai_status') return { providers: [], defaultProvider: null };
-  if (command === 'get_settings') return { databaseConfigured: false, opencodexBaseUrl: '', opencodexModel: '', opencodexAllowedModels: [], youtubeConfigured: false, naverConfigured: false, configPath: '/fixture/settings.json', schedulerEnabled: false };
+  if (command === 'get_settings') return { databaseConfigured: false, creationMode: 'remote-desktop-commander', youtubeConfigured: false, naverConfigured: false, savedCollectionKeys: { youtubeApiKey: false, naverClientId: false, naverClientSecret: false }, configPath: '/fixture/settings.json', schedulerEnabled: false };
   if (command === 'get_scheduler_status') return { enabled: false, lastSuccessAt: null, nextRunAt: null, lastError: null, running: false };
   if (command === 'get_keychain_status') return { blocked: false };
   if (command === 'get_update_status') return { currentVersion: '0.1.24', configured: true, phase: 'idle', availableVersion: null, notes: null, publishedAt: null, downloadedBytes: 0, totalBytes: null, canCancel: false, message: 'fixture' };

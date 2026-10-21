@@ -1,6 +1,6 @@
 {
   "name": "toris-studio",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -62,7 +62,9 @@
     "motion:verify:ui": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --example motion_qa_bridge && node scripts/verify-motion-ui.mjs",
     "motion:verify:media": "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test graphics_media_contract -- --ignored",
     "motion:verify:mcp": "cargo build --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --bin toris-studio-desktop --example motion_qa_bridge && node scripts/verify-motion-mcp.mjs",
-    "sns:verify:ui": "node scripts/verify-sns-workspace.mjs"
+    "sns:verify:ui": "node scripts/verify-sns-workspace.mjs",
+    "startup:verify:recovery": "node scripts/verify-startup-error.mjs",
+    "startup:verify:webkit": "node scripts/verify-webkit-startup.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/express": "2.0.2",
