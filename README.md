@@ -2,7 +2,7 @@
 
 ## 데스크톱 시작
 
-설치 프로그램은 [macOS · Windows 다운로드](https://toriskr.github.io/toris-studio/) 또는 [공식 GitHub 릴리스](https://github.com/torisKR/toris-studio/releases/latest)에서 받을 수 있습니다. macOS는 Apple Silicon과 Intel 파일을 구분하고, Windows는 x64 설치 프로그램을 선택하세요. 설치 후 **연결 설정 → 앱 업데이트**에서 새 버전을 확인하고 설치할 수 있습니다. 같은 배포 파일은 개발자용 [GitHub Packages](https://github.com/torisKR?tab=packages)에도 보관합니다.
+설치 프로그램은 [macOS · Windows 다운로드](https://toriskr.github.io/toris-studio/) 또는 [공식 GitHub 릴리스](https://github.com/torisKR/toris-studio/releases/latest)에서 받을 수 있습니다. macOS는 Apple Silicon과 Intel 파일을 구분하고, Windows는 x64 설치 프로그램을 선택하세요. 설치 후 **설정 → 앱 업데이트**에서 새 버전을 확인하고 설치할 수 있습니다. 같은 배포 파일은 개발자용 [GitHub Packages](https://github.com/torisKR?tab=packages)에도 보관합니다.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -24,7 +24,7 @@ pnpm desktop:build
 
 ## 데스크톱 시작
 
-설치 프로그램은 [macOS · Windows 다운로드](https://toriskr.github.io/toris-studio/) 또는 [공식 GitHub 릴리스](https://github.com/torisKR/toris-studio/releases/latest)에서 받을 수 있습니다. macOS는 Apple Silicon과 Intel 파일을 구분하고, Windows는 x64 설치 프로그램을 선택하세요. 설치 후 **연결 설정 → 앱 업데이트**에서 새 버전을 확인하고 설치할 수 있습니다. 같은 배포 파일은 개발자용 [GitHub Packages](https://github.com/torisKR?tab=packages)에도 보관합니다.
+설치 프로그램은 [macOS · Windows 다운로드](https://toriskr.github.io/toris-studio/) 또는 [공식 GitHub 릴리스](https://github.com/torisKR/toris-studio/releases/latest)에서 받을 수 있습니다. macOS는 Apple Silicon과 Intel 파일을 구분하고, Windows는 x64 설치 프로그램을 선택하세요. 설치 후 **설정 → 앱 업데이트**에서 새 버전을 확인하고 설치할 수 있습니다. 같은 배포 파일은 개발자용 [GitHub Packages](https://github.com/torisKR?tab=packages)에도 보관합니다.
 
 ```bash
 pnpm install --frozen-lockfile
