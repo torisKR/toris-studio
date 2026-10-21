@@ -1,0 +1,71 @@
+name: Resume verified desktop publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Original successful native build run with an unpublished release draft'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'torisKR/toris-studio' && github.ref == 'refs/heads/main'
+    concurrency:
+      group: desktop-publish-toris-studio
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Scan committed history for exposed credentials
+        run: bash scripts/release-security.sh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Validate original source, native jobs and artifact provenance
+        id: source
+        env:
+          RESUME_RUN_ID: ${{ inputs.run_id }}
+        run: node scripts/verify-release-resume.mjs "$RESUME_RUN_ID"
+      - name: Test publication transport and recovery contracts
+        run: |
+          node --test scripts/release-assets.test.mjs scripts/verify-release-resume.test.mjs scripts/publication-release-contract.test.mjs
+          python3 scripts/download-verified-release.test.py
+      - name: Download exact native archives and require official ZIP SHA256
+        run: python3 scripts/download-verified-release.py
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.96.0'
+      - name: Verify original signatures, versions, targets and all SHA256 sums
+        run: cargo run --locked --manifest-path scripts/release-verify/Cargo.toml -- release-assets desktop/src-tauri/tauri.conf.json "$RELEASE_VERSION" "$RELEASE_COMMIT"
+      - name: Assemble download instructions
+        run: node scripts/release-assets.mjs notes release-assets
+      - uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          url: https://github.com/oras-project/oras/releases/download/v1.3.4/oras_1.3.4_linux_amd64.tar.gz
+          checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+      - name: Resume same-source draft and versioned GitHub Package
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: node scripts/release-assets.mjs publish release-assets
+      - name: Confirm public updater feed and download checksums
+        run: node scripts/release-assets.mjs verify-live release-assets
+      - name: Remove a failed release from latest downloads
+        if: failure() && steps.source.outcome == 'success'
+        run: node scripts/release-assets.mjs quarantine
+      - name: Release summary
+        if: always() && steps.source.outcome == 'success'
+        run: node scripts/release-assets.mjs summary release-assets

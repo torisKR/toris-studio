@@ -119,6 +119,7 @@ async function api(resource, { allowMissing = false, method = 'GET', body } = {}
   const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/${resource}`, { method,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), headers: {
     Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+    Connection: 'close',
     ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
   } });
   if (allowMissing && response.status === 404) return null;
@@ -159,6 +160,7 @@ export function assertCompleteDraft(release, tag, source, id, assetNames) {
 async function packageDoesNotExist() {
   const response = await fetch('https://api.github.com/users/torisKR/packages/container/toris-studio%2Fdesktop', { headers: {
     Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+    Connection: 'close',
   } });
   if (response.status === 404) return true;
   if (!response.ok) fail(`Cannot inspect GitHub Package visibility: HTTP ${response.status}.`);

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { Socket } from 'node:net';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { assertCompleteDraft, assertReleaseIdentity, collect, findRelease, hashResponse, PLATFORMS, preflight, publish, quarantine, version } from './release-assets.mjs';
 
@@ -160,6 +162,90 @@ test('publisher refuses public releases and incomplete drafts before registry mu
   const draft = { ...published, draft: true, assets: assetNames.slice(1).map(name => ({ name, size: 13 })) };
   assert.throws(() => assertCompleteDraft(draft, 'v0.1.10', source, 417, assetNames), /incomplete/);
   assert.throws(() => assertCompleteDraft({ ...draft, draft: false }, 'v0.1.10', source, 417, assetNames), /already public/);
+})));
+
+test('publisher REST reads survive idle socket closure during synchronous upload and registry push', { timeout: 15000 }, async t => temporary(async root => publicationFixture(root, async (directory, assetNames) => {
+  // A separate process must keep serving and expire its sockets while the
+  // publisher's event loop is blocked by its synchronous CLI commands.
+  const server = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { createServer } from 'node:net';
+    let release = { id: 417, tag_name: 'v0.1.10', target_commitish: ${JSON.stringify(source)}, draft: true, prerelease: false, assets: ${JSON.stringify(assetNames.map(name => ({ name, size: 13 })))} };
+    let connection = 0;
+    const server = createServer(socket => {
+      const id = ++connection;
+      let input = Buffer.alloc(0);
+      socket.on('error', () => {});
+      socket.on('data', chunk => {
+        input = Buffer.concat([input, chunk]);
+        const end = input.indexOf('\\r\\n\\r\\n');
+        if (end < 0) return;
+        const lines = input.subarray(0, end).toString().split('\\r\\n');
+        const [method, resource] = lines.shift().split(' ');
+        const headers = Object.fromEntries(lines.map(line => { const colon = line.indexOf(':'); return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()]; }));
+        const length = Number(headers['content-length'] || 0);
+        if (input.length < end + 4 + length) return;
+        const body = input.subarray(end + 4, end + 4 + length).toString();
+        input = input.subarray(end + 4 + length);
+        let status = 200, result;
+        if (resource === '/repos/torisKR/toris-studio/releases/tags/v0.1.10') result = release;
+        else if (resource === '/repos/torisKR/toris-studio/releases/latest' || resource === '/users/torisKR/packages/container/toris-studio%2Fdesktop') { status = 404; result = {}; }
+        else if (resource === '/repos/torisKR/toris-studio/git/ref/tags/v0.1.10') result = { object: { type: 'commit', sha: ${JSON.stringify(source)} } };
+        else if (resource === '/repos/torisKR/toris-studio/releases/417') { if (method === 'PATCH') release = { ...release, ...JSON.parse(body) }; result = release; }
+        else { status = 500; result = {}; }
+        const content = JSON.stringify(result), close = headers.connection === 'close';
+        socket.write('HTTP/1.1 ' + status + ' Fixture\\r\\nContent-Type: application/json\\r\\nContent-Length: ' + Buffer.byteLength(content) + '\\r\\nConnection: ' + (close ? 'close' : 'keep-alive') + '\\r\\n\\r\\n' + content);
+        process.send({ event: 'request', method, resource, connection: id, close });
+        if (close) socket.end();
+        else socket.setTimeout(250, () => socket.end());
+      });
+    });
+    server.listen(0, '127.0.0.1', () => process.send({ event: 'ready', port: server.address().port }));
+  `], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], shell: false });
+  const requests = [];
+  const originalToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = 'fixture-api-token';
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Local publication server did not start')), 5000);
+      server.once('error', error => { clearTimeout(timer); reject(error); });
+      server.on('message', message => {
+        if (message.event === 'ready') { clearTimeout(timer); resolve(message.port); }
+        else requests.push(message);
+      });
+    });
+    // Optional QoS on this macOS runtime can reject a fresh loopback socket.
+    // Leave fetch and its HTTP connection pool intact for this regression.
+    if (process.platform === 'darwin' && typeof Socket.prototype.setTypeOfService === 'function') t.mock.method(Socket.prototype, 'setTypeOfService', () => {});
+    const nativeFetch = globalThis.fetch;
+    t.mock.method(globalThis, 'fetch', (input, options) => {
+      const url = new URL(input);
+      assert.equal(url.origin, 'https://api.github.com');
+      assert.equal(options.headers.Authorization, 'Bearer fixture-api-token');
+      return nativeFetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, options);
+    });
+    let pushed = false;
+    const block = () => assert.equal(spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { stdio: 'ignore', shell: false }).status, 0);
+    const command = (program, args) => {
+      if (program === 'gh') { assert.deepEqual(args.slice(0, 3), ['release', 'upload', 'v0.1.10']); block(); }
+      else if (program === 'oras' && args[0] === 'push') { pushed = true; block(); }
+      else if (program === 'oras' && args[0] === 'manifest') return JSON.stringify({ layers: assetNames.map(name => ({ annotations: { 'org.opencontainers.image.title': name } })) });
+      else assert.ok(program === 'oras' && ['login', 'logout'].includes(args[0]));
+      return '';
+    };
+    await publish(directory, { command, spawn: () => ({ status: 1, stderr: 'denied' }) });
+    assert.equal(pushed, true);
+    assert.ok(requests.some(request => request.resource.startsWith('/users/torisKR/packages/')), 'Exercise the actual package visibility fetch too');
+    assert.ok(requests.every(request => request.close), 'Short REST calls must not leave reusable sockets across blocking CLI commands');
+    assert.equal(requests.filter(request => request.method === 'PATCH').length, 1, 'Publication mutations must not be retried');
+    assert.equal(JSON.parse(await readFile(path.join(root, 'toris-release-fixture.json'), 'utf8')).promoted, true);
+  } finally {
+    originalToken === undefined ? delete process.env.GH_TOKEN : process.env.GH_TOKEN = originalToken;
+    if (server.exitCode === null && server.signalCode === null) {
+      const closed = new Promise(resolve => server.once('exit', resolve));
+      server.kill();
+      await closed;
+    }
+  }
 })));
 
 test('repository desktop versions agree with the requested release', async () => {
