@@ -34,6 +34,10 @@ tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_j
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+csv = "1.3"
+calamine = { version = "0.31", features = ["dates"] }
+zip = { version = "4.6", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 unicode-normalization = "0.1"
