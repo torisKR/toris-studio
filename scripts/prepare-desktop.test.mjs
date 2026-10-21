@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { crc32, gzipSync } from 'node:zlib';
-import { buildInvocation, cloudflaredBuild, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, MANIFEST, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-codexify.mjs';
+import { buildInvocation, cloudflaredBuild, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-desktop.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function tar(entries) {
@@ -33,7 +33,7 @@ function zip(entries) {
     const file = Buffer.from(data), filename = Buffer.from(name);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4);
-    local.writeUInt32LE(crc32(file), 14); local.writeUInt32LE(file.length, 18); local.writeUInt32LE(file.length, 22); local.writeUInt16LE(filename.length, 26);
+    local.writeUInt32LE(crc32(file), 14); local.writeUInt32LE(file.length, 15); local.writeUInt32LE(file.length, 22); local.writeUInt16LE(filename.length, 26);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(0x0314, 4); central.writeUInt16LE(20, 6);
     central.writeUInt32LE(crc32(file), 16); central.writeUInt32LE(file.length, 20); central.writeUInt32LE(file.length, 24);
@@ -52,8 +52,7 @@ async function temporary(task) {
 }
 
 test('release targets are exact and desktop builds always include the runtime overlay', () => {
-  for (const target of Object.keys(MANIFEST.targets)) {
-    assert.match(targetSpec(target).url, /^https:\/\/github\.com\/devnoname120\/codexify\/releases\/download\/v1\.7\.0\//);
+  for (const target of Object.keys(CLOUDFLARED_MANIFEST.targets)) {
     assert.match(targetSpec(target, 'cloudflared').url, /^https:\/\/github\.com\/cloudflare\/cloudflared\/releases\/download\/2026\.10\.0\//);
     assert.equal(targetSpec(target).sha256.length, 64);
   }
@@ -69,11 +68,11 @@ test('release targets are exact and desktop builds always include the runtime ov
   for (const args of [['--config', 'unsafe.json'], ['--config={}'], ['-c', 'unsafe.json'], ['-cunsafe.json'], ['--target'], ['--target=x86_64-apple-darwin', '--target=aarch64-apple-darwin']]) assert.throws(() => buildInvocation(args));
 });
 
-test('official preview preserves both runtimes and licenses while disabling only updater artifact generation', () => {
+test('official preview preserves shared runtime and licenses while disabling only updater artifact generation', () => {
   const invocation = buildInvocation(['--ci', '--target', 'aarch64-apple-darwin'], { preview: true });
   const overlay = JSON.parse(invocation.args[2]);
-  assert.deepEqual(overlay.bundle.externalBin, ['binaries/codexify', 'binaries/cloudflared']);
-  assert.equal(Object.keys(overlay.bundle.resources).length, 18);
+  assert.deepEqual(overlay.bundle.externalBin, ['binaries/cloudflared']);
+  assert.equal(Object.keys(overlay.bundle.resources).length, 15);
   const binaries = new Set(overlay.bundle.externalBin.map(file => path.basename(file)));
   for (const [source, destination] of Object.entries(overlay.bundle.resources)) {
     const runtime = source.split('/')[1];
@@ -89,12 +88,12 @@ test('official preview preserves both runtimes and licenses while disabling only
 test('archive paths reject traversal, absolute Windows paths, controls, and links', () => {
   assert.equal(validateArchivePath('release/docs/reference.md'), 'release/docs/reference.md');
   for (const name of ['../file', 'release/../../file', '/file', 'C:/file', '\\server\\file', 'release/./file', 'release\\file', 'release/\0file', 'release/\nfile']) assert.throws(() => validateArchivePath(name), /Unsafe/);
-  const spec = targetSpec('aarch64-apple-darwin');
+  const spec = { ...targetSpec('aarch64-apple-darwin'), directory: 'runtime-fixture', licenseRequired: true };
   assert.throws(() => extractTar(tar([{ name: 'outside', type: 50 }, ...required(spec)]), spec), /regular files/);
 });
 
 test('tar extracts only the exact executable and LICENSE and rejects missing/duplicate/traversal entries', () => {
-  const spec = targetSpec('aarch64-apple-darwin');
+  const spec = { ...targetSpec('aarch64-apple-darwin'), directory: 'runtime-fixture', licenseRequired: true };
   const entries = [...required(spec), { name: `${spec.directory}/README.md`, data: 'not shipped' }];
   const result = extractTar(tar(entries), spec);
   assert.deepEqual(Object.keys(result), ['binary', 'license']);
@@ -109,7 +108,7 @@ test('tar extracts only the exact executable and LICENSE and rejects missing/dup
 });
 
 test('ZIP checks the exact local names, CRC, links, duplicate and ignored traversal entries', () => {
-  const spec = targetSpec('x86_64-pc-windows-msvc');
+  const spec = { ...targetSpec('x86_64-pc-windows-msvc'), directory: 'runtime-fixture', licenseRequired: true };
   const entries = required(spec);
   assert.equal(extractZip(zip(entries), spec).binary.toString(), 'binary fixture');
   assert.throws(() => extractZip(zip([...entries, entries[0]]), spec), /Duplicate/);
@@ -122,7 +121,7 @@ test('ZIP checks the exact local names, CRC, links, duplicate and ignored traver
 });
 
 test('archive pin fails before extraction and oversized compressed content stays bounded', () => {
-  const spec = targetSpec('aarch64-apple-darwin'), bytes = tar(required(spec));
+  const spec = { ...targetSpec('aarch64-apple-darwin'), directory: 'runtime-fixture', licenseRequired: true }, bytes = tar(required(spec));
   assert.throws(() => extractArchive(bytes, spec), /SHA256/);
   assert.equal(extractArchive(bytes, { ...spec, sha256: digest(bytes) }).license.toString(), 'license fixture');
   assert.throws(() => extractArchive(bytes, { ...spec, maxBytes: bytes.length - 1 }), /allowed size/);
@@ -205,11 +204,11 @@ test('source and toolchain extraction reject files outside the exact pinned pref
 });
 
 test('cached archive tampering and symlink outputs fail before any executable is written', async () => temporary(async root => {
-  const target = 'aarch64-apple-darwin', directory = path.join(root, 'desktop/src-tauri/binaries');
+  const target = 'x86_64-pc-windows-msvc', directory = path.join(root, 'desktop/src-tauri/binaries');
   await mkdir(path.join(directory, '.cache'), { recursive: true });
   await writeFile(path.join(directory, '.cache', targetSpec(target).archive), 'tampered cache');
   await assert.rejects(prepareTarget(target, { root, fetcher: () => assert.fail('Do not replace a failed pin silently') }), /Cached.*SHA256/);
-  await assert.rejects(readFile(path.join(directory, `codexify-${target}`)), /ENOENT/);
+  await assert.rejects(readFile(path.join(directory, `cloudflared-${target}.exe`)), /ENOENT/);
   if (process.platform === 'win32') return; // Windows symlink creation requires an elevated privilege.
   await rm(directory, { recursive: true }); await mkdir(path.join(root, 'elsewhere'));
   await symlink(path.join(root, 'elsewhere'), directory);
@@ -219,6 +218,6 @@ test('cached archive tampering and symlink outputs fail before any executable is
 test('release validation fails if the bundled executable or license/manifest is missing', async () => temporary(async root => {
   await assert.rejects(verifyStaged('x86_64-pc-windows-msvc', root), /ENOENT/);
   const pe = Buffer.alloc(128); pe.write('MZ'); pe.writeUInt32LE(64, 60); pe.writeUInt32LE(0x4550, 64); pe.writeUInt16LE(0x8664, 68);
-  await writeFile(path.join(root, 'codexify.exe'), pe);
+  await writeFile(path.join(root, 'cloudflared.exe'), pe);
   await assert.rejects(verifyStaged('x86_64-pc-windows-msvc', root), /ENOENT/);
 }));

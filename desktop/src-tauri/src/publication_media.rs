@@ -420,7 +420,7 @@ impl Drop for MediaLease {
     }
 }
 pub async fn lease(video: &str, thumbnail: Option<&str>) -> Result<MediaLease, String> {
-    let executable = crate::codexify_proxy::cloudflared_binary()
+    let executable = crate::shared_binary::cloudflared_binary()
         .ok_or("앱에 포함된 cloudflared 실행 파일을 찾을 수 없습니다.")?;
     let configuration = tempfile::NamedTempFile::new().map_err(|_| "미디어 터널 설정 준비 실패")?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());

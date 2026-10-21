@@ -101,7 +101,14 @@ fn request_at(root: &Path, input: Value) -> Result<Value, String> {
     if publication_id.is_some_and(|id| Uuid::parse_str(id).is_err()) {
         return Err("콘텐츠 ID 형식 오류".into());
     }
-    let value = json!({"id":Uuid::new_v4().to_string(),"publicationId":publication_id,"revision":input["revision"].as_u64(),"topic":topic,"context":context,"status":"waiting","createdAt":Utc::now().to_rfc3339()});
+    let revision = input["revision"].as_u64();
+    if (publication_id.is_some() && revision.is_none())
+        || (!input["revision"].is_null() && revision.is_none())
+        || revision.is_some_and(|v| v > i32::MAX as u64)
+    {
+        return Err("저장된 SNS 콘텐츠 버전을 확인하세요.".into());
+    }
+    let value = json!({"id":Uuid::new_v4().to_string(),"publicationId":publication_id,"revision":revision,"topic":topic,"context":context,"status":"waiting","createdAt":Utc::now().to_rfc3339()});
     access(root, |requests| {
         if requests.len() >= 200 {
             let index = requests
@@ -209,16 +216,52 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
     access(root, |requests| {
         if !requests.iter().any(|r| r["id"] == id) {
             if let Some(item) = archived(root, id)? {
+                if item["revision"]
+                    .as_u64()
+                    .is_some_and(|revision| input["revision"].as_u64() != Some(revision))
+                {
+                    return Err("요청한 SNS 콘텐츠 버전과 초안 버전이 다릅니다.".into());
+                }
                 if item["draft"] == draft {
                     return Ok(item);
                 }
                 return Err("이미 수신한 초안을 덮어쓸 수 없습니다. 새 요청을 등록하세요.".into());
             }
         }
+        if let Some(index) = requests.iter().position(|r| r["id"] == id) {
+            let existing = &requests[index];
+            if let Some(revision) = existing["revision"].as_u64() {
+                if input["revision"].as_u64() != Some(revision) {
+                    return Err(
+                        "요청한 SNS 콘텐츠 버전과 초안 버전이 다릅니다. 새 요청을 읽으세요.".into(),
+                    );
+                }
+            }
+            if existing["status"] == "received" && existing["draft"] == draft {
+                return Ok(existing.clone());
+            }
+            if let Some(publication) = existing["publicationId"].as_str() {
+                if requests[index + 1..]
+                    .iter()
+                    .any(|r| r["publicationId"] == publication)
+                {
+                    return Err(
+                        "더 새로운 SNS 콘텐츠 초안 요청이 있습니다. 최신 요청을 사용하세요.".into(),
+                    );
+                }
+            }
+        }
         let item = requests
             .iter_mut()
             .find(|r| r["id"] == id)
             .ok_or("앱에서 등록한 초안 요청이 없습니다.")?;
+        if let Some(revision) = item["revision"].as_u64() {
+            if input["revision"].as_u64() != Some(revision) {
+                return Err(
+                    "요청한 SNS 콘텐츠 버전과 초안 버전이 다릅니다. 새 요청을 읽으세요.".into(),
+                );
+            }
+        }
         if item["status"] == "received" {
             if item["draft"] == draft {
                 return Ok(item.clone());
@@ -233,6 +276,30 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sns_revision_and_superseded_request_reject_stale_receipts() {
+        let root = tempfile::tempdir().unwrap();
+        let publication = Uuid::new_v4().to_string();
+        let first = request_at(
+            root.path(),
+            json!({"topic":"첫 요청","publicationId":publication,"revision":1}),
+        )
+        .unwrap();
+        let reply = json!({"requestId":first["id"],"revision":2,"title":"제목","description":"본문","tags":[],"hashtags":[]});
+        assert!(receive_at(root.path(), reply).is_err());
+        let mut correct = json!({"requestId":first["id"],"revision":1,"title":"제목","description":"본문","tags":[],"hashtags":[]});
+        assert!(receive_at(root.path(), correct.clone()).is_ok());
+        assert!(receive_at(root.path(), correct.clone()).is_ok());
+        request_at(
+            root.path(),
+            json!({"topic":"두 번째 요청","publicationId":publication,"revision":2}),
+        )
+        .unwrap();
+        assert!(receive_at(root.path(), correct.clone()).is_ok());
+        correct["title"] = json!("늦은 초안");
+        assert!(receive_at(root.path(), correct).is_err());
+    }
+
     use super::*;
     #[test]
     fn received_draft_requires_registered_request_and_is_idempotent() {

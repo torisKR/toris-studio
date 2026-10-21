@@ -117,8 +117,8 @@ jobs:
           pnpm motion:verify:mcp
           pnpm ai:test
           pnpm integrations:verify:mcp
-          node --test scripts/release-assets.test.mjs scripts/prepare-codexify.test.mjs scripts/prepare-browser.test.mjs scripts/prepare-media.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
-      - name: Prepare pinned Codexify and Cloudflare runtimes
+          node --test scripts/release-assets.test.mjs scripts/prepare-desktop.test.mjs scripts/prepare-browser.test.mjs scripts/prepare-media.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs scripts/publication-release-contract.test.mjs
+      - name: Prepare pinned desktop and Cloudflare media runtimes
         run: pnpm desktop:prepare '${{ matrix.target }}'
       - name: Build and sign updater bundles
         env:
@@ -143,9 +143,9 @@ jobs:
       - name: Verify bundled runtimes and redistribution licenses
         run: |
           if [[ '${{ runner.os }}' == 'macOS' ]]; then
-            node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toris Studio.app'
+            node scripts/prepare-desktop.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toris Studio.app'
           else
-            node scripts/prepare-codexify.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
+            node scripts/prepare-desktop.mjs verify '${{ matrix.target }}' 'desktop/src-tauri/target/${{ matrix.target }}/release'
           fi
       - name: Verify motion editor with real Rust compositor and fixture ChatGPT drafts
         env:

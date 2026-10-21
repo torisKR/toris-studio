@@ -7,15 +7,25 @@ use url::Url;
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct AppConfig {
     pub database_url: Option<String>,
+    #[serde(skip_serializing)]
     pub opencodex_base_url: String,
+    #[serde(skip_serializing)]
     pub opencodex_model: String,
+    #[serde(skip_serializing)]
     pub opencodex_allowed_models: Vec<String>,
+    #[serde(skip_serializing)]
     pub opencodex_api_key: Option<String>,
+    #[serde(skip_serializing)]
     pub teamclaude_base_url: Option<String>,
+    #[serde(skip_serializing)]
     pub teamclaude_model: Option<String>,
+    #[serde(skip_serializing)]
     pub teamclaude_allowed_models: Vec<String>,
+    #[serde(skip_serializing)]
     pub teamclaude_api_key: Option<String>,
+    #[serde(skip_serializing)]
     pub claude_cli_enabled: bool,
+    #[serde(skip_serializing)]
     pub claude_cli_path: String,
     pub youtube_api_key: Option<String>,
     pub naver_client_id: Option<String>,
@@ -179,30 +189,6 @@ impl AppConfig {
         let get = |key: &str| values.get(key).filter(|v| !v.trim().is_empty()).cloned();
         let mut config = Self::default();
         config.database_url = get("DATABASE_URL");
-        config.opencodex_base_url = get("OPENCODEX_BASE_URL").unwrap_or(config.opencodex_base_url);
-        config.opencodex_model = get("OPENCODEX_MODEL").unwrap_or(config.opencodex_model);
-        config.opencodex_allowed_models = get("OPENCODEX_ALLOWED_MODELS")
-            .map(|v| {
-                v.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or(config.opencodex_allowed_models);
-        config.opencodex_api_key = get("OPENCODEX_API_KEY");
-        config.teamclaude_base_url = get("TEAMCLAUDE_BASE_URL");
-        config.teamclaude_model = get("TEAMCLAUDE_MODEL");
-        config.teamclaude_api_key = get("TEAMCLAUDE_API_KEY");
-        config.teamclaude_allowed_models = get("TEAMCLAUDE_ALLOWED_MODELS")
-            .map(|v| {
-                v.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
-        config.claude_cli_enabled = get("CLAUDE_CLI_ENABLED").as_deref() == Some("true");
-        config.claude_cli_path = get("CLAUDE_CLI_PATH").unwrap_or(config.claude_cli_path);
         config.youtube_api_key = get("YOUTUBE_DATA_API_KEY");
         config.naver_client_id = get("NAVER_CLIENT_ID");
         config.naver_client_secret = get("NAVER_CLIENT_SECRET");
@@ -214,54 +200,13 @@ impl AppConfig {
         if let Some(raw) = &self.database_url {
             validate_database_url(raw)?;
         }
-        for raw in [
-            Some(&self.opencodex_base_url),
-            self.teamclaude_base_url.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let url = Url::parse(raw).map_err(|_| "AI 연결 주소 형식을 확인하세요.")?;
-            if !["http", "https"].contains(&url.scheme())
-                || !["127.0.0.1", "localhost", "[::1]"].contains(&url.host_str().unwrap_or(""))
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.query().is_some()
-                || url.fragment().is_some()
-                || url.path().trim_end_matches('/') != "/v1"
-            {
-                return Err("AI 연결 주소는 localhost의 /v1만 허용됩니다.".into());
-            }
-        }
-        if self.opencodex_allowed_models.is_empty()
-            || self.opencodex_allowed_models.len() > 30
-            || !self
-                .opencodex_allowed_models
-                .contains(&self.opencodex_model)
-        {
-            return Err("기본 모델을 모델 허용 목록에 포함하세요.".into());
-        }
-        if self
-            .opencodex_allowed_models
-            .iter()
-            .chain(self.teamclaude_allowed_models.iter())
-            .any(|v| v.is_empty() || v.len() > 120 || v.chars().any(char::is_control))
-        {
-            return Err("모델 이름 형식을 확인하세요.".into());
-        }
-        if self.claude_cli_path.len() > 2048 || self.claude_cli_path.chars().any(char::is_control) {
-            return Err("Claude CLI 경로 형식을 확인하세요.".into());
-        }
         Ok(())
     }
 
     pub fn public(&self) -> Value {
         json!({
-            "databaseConfigured": self.database_url.is_some(), "opencodexBaseUrl": self.opencodex_base_url,
-            "opencodexModel": self.opencodex_model, "opencodexAllowedModels": self.opencodex_allowed_models,
-            "teamclaudeBaseUrl": self.teamclaude_base_url, "teamclaudeModel": self.teamclaude_model,
-            "teamclaudeAllowedModels": self.teamclaude_allowed_models, "claudeCliEnabled": self.claude_cli_enabled,
-            "claudeCliPath": self.claude_cli_path, "youtubeConfigured": self.youtube_api_key.is_some(),
+            "databaseConfigured": self.database_url.is_some(), "creationMode":"remote-desktop-commander",
+            "youtubeConfigured": self.youtube_api_key.is_some(),
             "naverConfigured": self.naver_client_id.is_some() && self.naver_client_secret.is_some(),
             "savedCollectionKeys": {
                 "youtubeApiKey": self.youtube_api_key.is_some(),
@@ -364,6 +309,43 @@ pub fn validate_database_url(raw: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_model_settings_load_but_are_never_exposed_or_saved_as_active_configuration() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({
+            "claudeCliEnabled":true,"claudeCliPath":"/old/custom/claude",
+            "opencodexBaseUrl":"https://old-removed-provider.invalid/v1",
+            "opencodexApiKey":"legacy-private-token","opencodexModel":"old-model",
+            "opencodexAllowedModels":[],"teamclaudeApiKey":"old-team-token",
+            "youtubeApiKey":"saved-collection-key","schedulerEnabled":true
+        }))
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(
+            config.youtube_api_key.as_deref(),
+            Some("saved-collection-key")
+        );
+        assert!(config.scheduler_enabled);
+        let public = config.public();
+        assert_eq!(public["creationMode"], "remote-desktop-commander");
+        for key in [
+            "claudeCliEnabled",
+            "claudeCliPath",
+            "opencodexBaseUrl",
+            "opencodexModel",
+            "opencodexApiKey",
+            "teamclaudeApiKey",
+        ] {
+            assert!(public.get(key).is_none());
+            assert!(serde_json::to_value(&config).unwrap().get(key).is_none());
+        }
+        assert!(config
+            .updated(&serde_json::json!({"claudeCliEnabled":true}))
+            .is_err());
+        assert!(config
+            .updated(&serde_json::json!({"opencodexBaseUrl":"http://127.0.0.1:10100/v1"}))
+            .is_err());
+    }
+
     use super::*;
     #[test]
     fn portable_migration_preserves_existing_destination_and_originals() {

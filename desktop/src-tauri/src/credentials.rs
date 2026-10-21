@@ -4,10 +4,8 @@ use serde_json::{Map, Value};
 
 const SERVICE: &str = "kr.toris.studio.settings";
 const ACCOUNT: &str = "connection-secrets-v1";
-const FIELDS: [&str; 6] = [
+const FIELDS: [&str; 4] = [
     "databaseUrl",
-    "opencodexApiKey",
-    "teamclaudeApiKey",
     "youtubeApiKey",
     "naverClientId",
     "naverClientSecret",
@@ -143,6 +141,7 @@ mod tests {
         assert!(FIELDS.iter().all(|field| public[*field].is_null()));
         assert_eq!(secrets["youtubeApiKey"], "fake-test-key");
         assert!(!public.to_string().contains("fake-test-key"));
-        assert_eq!(public["opencodexModel"], "gpt-6.1-sol");
+        assert!(public.get("opencodexModel").is_none());
+        assert!(public.get("claudeCliEnabled").is_none());
     }
 }

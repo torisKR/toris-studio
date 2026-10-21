@@ -1,7 +1,7 @@
-//! Topic/category planning is AI-only and produces editable, unverified prose.
+//! Topic/category requests use user-driven RDC handoff; pure native plan validators are retained.
 //! Only literal text and fixed motion preset identifiers enter the project;
 //! generated commands, code, URLs, credentials and filesystem paths do not.
-use crate::{ai, config::AppConfig, keyword, media};
+use crate::config::AppConfig;
 use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -249,21 +249,19 @@ fn finish_generation(
     Ok(json!({"project":project,"provider":input.provider,"warnings":warnings}))
 }
 
-pub async fn create(config: &AppConfig, input: CreateInput) -> Result<Value, String> {
+/// Validate a received structured planner result into an editable native draft.
+/// This API never invokes a provider or writes a project.
+pub fn validate_received_plan(input: CreateInput, plan: Value) -> Result<Value, String> {
     let input = validate_input(input)?;
-    let _update_guard = keyword::lock_for_update()
-        .map_err(|_| "키워드 탐색 또는 업데이트 작업이 끝난 뒤 영상 기획을 생성하세요.")?;
-    let _video_guard = media::lock_for_video_activity()?;
-    let request = ai::VideoIdeaRequest {
-        topic: &input.topic,
-        category: &input.category,
-        format: &input.format,
-        language: &input.language,
-        scene_count: input.scene_count,
-        duration_sec: input.duration_sec,
-    };
-    let generated = ai::generate_video_idea(config, &input.provider, &request).await;
-    finish_generation(&input, generated, media::save_project)
+    finish_generation(&input, Ok(json!({"text":plan.to_string()})), Ok)
+}
+
+pub async fn create(_config: &AppConfig, input: CreateInput) -> Result<Value, String> {
+    let input = validate_input(input)?;
+    crate::creation::create(
+        json!({"kind":"video","title":input.topic,"prompt":format!("주제 {}. 카테고리 {}. {}개 장면, {}초 영상 초안을 작성하세요. 토리스의 네이티브 모션 프리셋만 사용하세요.",input.topic,input.category,input.scene_count,input.duration_sec),
+        "context":{"topic":input.topic,"category":input.category,"format":input.format,"language":input.language,"sceneCount":input.scene_count,"durationSec":input.duration_sec}}),
+    )
 }
 
 #[cfg(test)]

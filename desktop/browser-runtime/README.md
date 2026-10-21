@@ -26,7 +26,7 @@ The app's existing macOS 12 floor is preserved, with runtime OS gating in Rust.
 Run packaging/policy contracts with:
 
 ```sh
-node --test scripts/prepare-browser.test.mjs scripts/prepare-codexify.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs
+node --test scripts/prepare-browser.test.mjs scripts/prepare-desktop.test.mjs desktop/browser-runtime/policy.test.mjs desktop/browser-runtime/worker.test.mjs
 ```
 
 Run the headed local fixture after preparing the host runtime:
@@ -40,7 +40,7 @@ extracted installer's `Contents/Resources/studio-browser` (macOS) or `studio-bro
 (Windows), and `STUDIO_BROWSER_TEST_TARGET` to select its target manifest.
 The fixture infers macOS native Helpers from the Resources root;
 `STUDIO_BROWSER_TEST_NATIVE_RUNTIME` can supply the native directory explicitly.
-`prepare-codexify.mjs verify <target> <app-or-stage>` verifies browser sources,
+`prepare-desktop.mjs verify <target> <app-or-stage>` verifies browser sources,
 licenses, versions, architecture, relative links and macOS signatures alongside
-the pre-existing Codexify/cloudflared checks. Cross-target archive validation is
+the shared cloudflared checks. Cross-target archive validation is
 separate from execution evidence on each supported OS.

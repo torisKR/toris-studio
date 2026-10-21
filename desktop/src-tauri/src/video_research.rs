@@ -1,7 +1,7 @@
 //! Create editable video drafts from selected, already saved research records.
-//! No source media is downloaded. AI may select source excerpts, never introduce
-//! new factual prose, URLs, file paths, shell commands, or project identifiers.
-use crate::{ai, config::AppConfig, keyword, media, social, video_templates};
+//! No source media is downloaded and no model is executed. Source excerpt validators
+//! remain available for deterministic local drafts and receipt review.
+use crate::{config::AppConfig, keyword, media, social, video_templates};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -342,7 +342,7 @@ fn checked_excerpt(value: &str, source: &ResearchSource, limit: usize, required:
         && (value.is_empty() || source.title.contains(value) || source.description.contains(value))
 }
 
-fn validate_ai_script(text: &str, sources: &[ResearchSource]) -> Result<Vec<Value>, String> {
+pub fn validate_ai_script(text: &str, sources: &[ResearchSource]) -> Result<Vec<Value>, String> {
     if text.len() > 16_000 {
         return Err("AI 결과 크기를 확인하세요.".into());
     }
@@ -368,16 +368,10 @@ fn validate_ai_script(text: &str, sources: &[ResearchSource]) -> Result<Vec<Valu
     }).collect()
 }
 
-fn ai_sources(preview: &ResearchPreview) -> Vec<ai::ResearchExcerptSource<'_>> {
-    preview
-        .sources
-        .iter()
-        .map(|source| ai::ResearchExcerptSource {
-            source_id: &source.trend_id,
-            title: &source.title,
-            description: &source.description,
-        })
-        .collect()
+/// Closed, credential-free projection suitable for a user-reviewed RDC prompt.
+#[allow(dead_code)]
+fn source_excerpts(preview: &ResearchPreview) -> Vec<Value> {
+    preview.sources.iter().map(|source|json!({"sourceId":source.trend_id,"title":source.title,"description":source.description})).collect()
 }
 
 fn assemble_project(
@@ -412,25 +406,11 @@ pub async fn create(config: &AppConfig, input: CreateInput) -> Result<ResearchRe
     let sources = load_sources(config, &preview_input.trend_ids).await?;
     let preview = make_preview(&preview_input, sources)?;
     let requested_provider = input.provider.as_deref().unwrap_or("local");
-    let mut provider = "local".to_string();
+    let provider = "local".to_string();
     let mut warnings = preview.warnings.clone();
-    let mut scenes = local_scenes(&preview.sources);
+    let scenes = local_scenes(&preview.sources);
     if requested_provider != "local" {
-        let generated = ai::generate_research_script(
-            config,
-            requested_provider,
-            &preview.topic,
-            &ai_sources(&preview),
-        )
-        .await;
-        match generated.and_then(|result| {
-            validate_ai_script(result.get("text").and_then(Value::as_str).ok_or("AI 대본 응답을 확인하세요.")?, &preview.sources)
-        }) {
-            Ok(ai_scenes) => { scenes = ai_scenes; provider = requested_provider.to_owned(); }
-            // Provider error text can contain server-derived content. Use a fixed
-            // safe status; never copy provider responses or credentials into IPC.
-            Err(_) => warnings.push("AI 대본 생성 또는 출처 검증에 실패해 로컬 초안을 저장했습니다. AI 연결·사용량을 확인하거나 원문을 직접 편집하세요.".into()),
-        }
+        warnings.push("자동 모델 실행은 제거되었습니다. 저장된 자료 발췌 초안을 직접 검토하거나 제작 요청 안내를 ChatGPT에 붙여넣으세요.".into());
     }
     let mut project = assemble_project(&preview, &input.format, &provider, scenes);
     if let Some(template_id) = &input.template_id {
@@ -654,7 +634,7 @@ mod tests {
             })
             .collect();
         let preview = make_preview(&input(5), sources).unwrap();
-        let data = serde_json::to_string(&ai_sources(&preview)).unwrap();
+        let data = serde_json::to_string(&source_excerpts(&preview)).unwrap();
         assert!(data.chars().count() <= 6_000);
         assert!(!data.contains("https://"));
         let data: Value = serde_json::from_str(&data).unwrap();
