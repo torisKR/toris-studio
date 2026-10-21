@@ -1,0 +1,311 @@
+{
+  "adapter": "Actual React application in headless Chromium with explicit sanitized IPC fixtures; native/provider/real RDC execution is separate",
+  "checks": [
+    "Actual Vite worktree policy serves app and rejects a user-home credential path before content exposure",
+    "Four primary destinations, eight platform navigation, original definition/timezone, and zero versus unavailable are distinct",
+    "Pending or rejected B-account reads clear A rows and CSV actions; recovery exports only the exact B account",
+    "Same-name accounts remain independently keyed; exact connectionId + accountId binds channel and detailed reports",
+    "A late B API result cannot render or export after changing the selected channel to X",
+    "X has manual channel/report guidance and no OAuth or native API query controls",
+    "Deferred mapped previews stay invalid after changing target, timezone or metric mapping; review and commit never revive",
+    "X report import requires explicit column mapping, original metric definition/timezone and preview before commit; provenance remains user-file based",
+    "Keyboard navigation and remembered section context preserve unsaved work; RDC copy stays saved-only and platform or topic changes make received prose stale without overwriting edited context"
+  ],
+  "screenshots": [
+    "overview-1380.png",
+    "channel-820.png",
+    "report-preview-820.png",
+    "creation-820.png",
+    "creation-1380.png"
+  ],
+  "errors": [],
+  "passed": true,
+  "calls": [
+    {
+      "command": "creation_request_list"
+    },
+    {
+      "command": "publication_list"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "asset_command"
+    },
+    {
+      "command": "motion_request_list"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "creation_request_list"
+    },
+    {
+      "command": "publication_list"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "asset_command"
+    },
+    {
+      "command": "motion_request_list"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "get_dashboard"
+    },
+    {
+      "command": "creation_bridge_info"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "search_keywords"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "oauth_connection_dispatch",
+      "action": "bindChannel"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "get_dashboard"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "workspace_export_report"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "reportQuery"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importCommit"
+    },
+    {
+      "command": "get_dashboard"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "creation_request_list"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "creation_request_create"
+    },
+    {
+      "command": "set_main_activity"
+    },
+    {
+      "command": "copy_text"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "creation_request_list"
+    },
+    {
+      "command": "creation_request_list"
+    }
+  ]
+}

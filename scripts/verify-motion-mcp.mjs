@@ -1,11 +1,12 @@
+import { nativeBinary } from './ui-fixture-helpers.mjs';
 import assert from 'node:assert/strict';
 import { spawn,execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtemp,rm,readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-const home=await mkdtemp(path.join(tmpdir(),'studio-motion-mcp-')),suffix=process.platform==='win32'?'.exe':'';
-const binary=path.resolve('desktop/src-tauri/target/debug/toris-studio-desktop'+suffix),helper=path.resolve('desktop/src-tauri/target/debug/examples/motion_qa_bridge'+suffix);
+const home=await mkdtemp(path.join(tmpdir(),'studio-motion-mcp-'));
+const binary=nativeBinary('toris-studio-desktop'),helper=nativeBinary('motion_qa_bridge',{example:true});
 const project={id:crypto.randomUUID(),title:'MCP 모션 검증',format:'shorts',template:'reference-briefing',language:'ko',privateMetadata:'never expose this',motionGraphics:{version:1,description:'fixture only',tables:[],images:[]},scenes:[{id:'s',headline:'제목',body:'',narration:'',durationSec:9,graphics:{version:1,background:'#101820',elements:[]}}]};
 const seeded=JSON.parse(execFileSync(helper,[],{input:JSON.stringify({action:'request',args:{input:{project,instruction:'장면을 12초로',mode:'edit',sceneIds:['s'],elementIds:[]}}}),env:{...process.env,TORIS_MOTION_QA_HOME:home},encoding:'utf8'}));assert.equal(seeded.ok,true);const request=seeded.result;
 const child=spawn(binary,['--studio-mcp'],{env:{...process.env,TORIS_STUDIO_MOTION_TEST_HOME:home,TORIS_STUDIO_ASSET_HOME:home},stdio:['pipe','pipe','pipe']});child.stderr.resume();

@@ -1,9 +1,10 @@
+import { createFixtureServer, shellFixture, unhandled, fixtureBridge } from './ui-fixture-helpers.mjs';
 import assert from 'node:assert/strict';
+import {buildCreationFixture,receiveCreationFixture} from './creation-native-fixture.mjs';
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { createServer } from 'vite';
 import { chromium } from 'playwright';
 
 // Node 24. Isolated local UI checks using the real, pure Rust template output.
@@ -29,6 +30,7 @@ const keyOf = input => JSON.stringify([
 ]);
 const previews = new Map(fixtures.cases.map(item => [keyOf(item.input), item.result]));
 const clone = value => structuredClone(value);
+const creations=[];let receivedVideoProject;buildCreationFixture();
 const calls = [], errors = [], unexpected = [];
 const savedProjects = new Map();
 const library = { version: 1, favorites: [], recent: [] };
@@ -36,23 +38,19 @@ const knownRecipe = id => fixtures.catalog.some(item => item.id === id);
 let releaseOldPreview;
 let holdOldPreview = true;
 let cancelExport = true;
-const profile = {
-  mcpUrl: 'https://isolated.invalid/mcp', pluginUrl: 'https://chatgpt.com/plugins/qa-studio',
-  conversationUrl: '', projectRoot: `${output}/fixture-project`, conversationId: 'qa-conversation',
-};
-const server = await createServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
+const server = await createFixtureServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
 await server.listen();
 let browser, page;
 try {
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage({ viewport: { width: 1380, height: 960 }, reducedMotion: 'no-preference' });
   page.setDefaultTimeout(15_000);
+  page.on('dialog',dialog=>dialog.accept());
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args: clone(args) });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 템플릿 UI 검증' } };
-    if (command === 'codexify_connection_get') return clone(profile);
     if (command === 'video_list_projects') return clone([...savedProjects.values()]);
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false, ttsConfigured: false, dataPath: '격리된 메모리 프로젝트 저장소', renderer: 'fixture only' };
     if (command === 'set_main_activity') return null;
@@ -81,7 +79,7 @@ try {
     }
     if (command === 'video_save_project') {
       assert.equal(typeof args.input.id, 'string');
-      assert.ok(args.input.templateRecipe?.id, 'saved draft retains its recipe');
+      if(receivedVideoProject&&args.input.title===receivedVideoProject.title){assert.deepEqual(args.input.scenes,receivedVideoProject.scenes);assert.equal(args.input.templateRecipe,undefined);}else assert.ok(args.input.templateRecipe?.id, 'saved template draft retains its recipe');
       savedProjects.set(args.input.id, clone(args.input));
       return clone(args.input);
     }
@@ -91,9 +89,9 @@ try {
       if (cancelExport) { cancelExport = false; return null; }
       return `${output}/fixture-export.${args.format === 'markdown' ? 'md' : 'json'}`;
     }
-    if (command === 'codexify_chats') return { chats: [{ id: profile.conversationId, title: 'Isolated fixture chat', workspace: 'fixture-project', projectMatches: true }], serverTimeMs: Date.now() };
-    if (command === 'codexify_chat_read') return { messages: [], revision: 'qa', delivered_through: 0, read_through: 0, agent_waiting_until_ms: null, server_time_ms: Date.now(), has_more: false, before: null, unchanged: false };
-    if (command === 'codexify_chat_send') return { sent: { id: 'qa-receipt', end: 1, created_at_ms: Date.now(), tool_call_count: 0 } };
+    if(command==='creation_request_list')return {requests:clone(creations)};
+    if(command==='creation_request_create'){const request={id:'fixture-video-request',...args.input,revision:'fixture-revision',status:'saved',createdAt:new Date().toISOString()};return {request,prompt:`Remote Desktop Commander ${JSON.stringify({command:fixtureBridge.mcpExecutable,args:['--studio-mcp']})} ${args.input.prompt}`};}
+    const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
     unexpected.push(command);
     throw new Error(`Unexpected native operation in isolated template UI test: ${command}`);
   });
@@ -258,7 +256,7 @@ try {
   assert.equal(await gallery.getByRole('button', { name: '일시정지', exact: true }).count(), 0);
   await page.evaluate(() => window.__qaSetVisibility('visible'));
   await play.click();
-  await navigate('오버뷰');
+  await navigate('SNS 관리');
   await page.waitForFunction(() => window.__qaResources().raf === 0);
   await navigate('영상'); await ready();
   assert.equal(await gallery.getByRole('button', { name: '일시정지', exact: true }).count(), 0, 'returning to the video tab must not resume playback');
@@ -310,10 +308,13 @@ try {
   await selectCard(2).click(); await ready(); await topic.fill(newTopic); await ready();
   const saveCount = calls.filter(call => call.command === 'video_save_project').length;
   await page.getByRole('button', { name: 'ChatGPT에 영상 초안 요청', exact: true }).click();
-  await page.getByText('요청을 저장했습니다. ChatGPT 대화에서 시작·재개한 뒤 응답 JSON을 가져오세요.', { exact: true }).waitFor();
-  const send = calls.findLast(call => call.command === 'codexify_chat_send');
-  assert.ok(send?.args.input.message.includes(fixtures.catalog[2].id), 'mock ChatGPT request carries the selected recipe id');
-  assert.ok(send.args.input.message.includes(newTopic));
+  await page.getByText('영상 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.', { exact: true }).waitFor();
+  const send = calls.findLast(call => call.command === 'creation_request_create');
+  assert.ok(send,'UI creates a saved video request');
+  const promptPreview=calls.findLast(call=>call.command==='video_template_preview');assert.equal(promptPreview.args.input.templateId,fixtures.catalog[2].id,'RDC request is prepared from the selected real recipe');
+  const generatedDraft=JSON.parse(send.args.input.prompt.slice(send.args.input.prompt.lastIndexOf('\n\n')+2));
+  const preparedProject=previews.get(keyOf(promptPreview.args.input)).project;assert.equal(generatedDraft.project.title,preparedProject.title);assert.deepEqual(generatedDraft.project.scenes,preparedProject.scenes.map(({id,headline,body,narration,durationSec,motion})=>({id,headline,body,narration,durationSec,motion})), 'Closed prompt contains the selected recipe scenes and motion');
+  assert.ok(send.args.input.prompt.includes(newTopic));
   assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'chat receipt must not be presented as a newly generated or saved project');
   assert.equal(savedProjects.size, 1);
   assert.equal(await editorTitle.inputValue(), newTopic);
@@ -342,6 +343,16 @@ try {
   assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'duplicate remains an editable unsaved draft');
   assert.deepEqual(savedProjects.get(saved.id), saved, 'duplicate must retain the original saved project');
   console.log('Template QA: latest edited export snapshot, cancelled/successful export, and duplicate protection passed');
+  assert.deepEqual(Object.keys(generatedDraft.project).sort(),['format','language','scenes','template','title']);
+  assert.deepEqual(Object.keys(generatedDraft.project.scenes[0]).sort(),['body','durationSec','headline','id','motion','narration']);
+  receivedVideoProject={...generatedDraft.project,title:'네이티브 수신 검토 영상 QA'};
+  const nativeReceipt=await receiveCreationFixture(send.args.input,{project:receivedVideoProject});
+  creations.push(nativeReceipt);const inbox=page.getByRole('region',{name:'제작 요청과 수신 초안',exact:true});
+  await inbox.getByRole('button',{name:'새로고침',exact:true}).click();await inbox.getByRole('button',{name:'초안 검토',exact:true}).click();
+  const importDialog=page.getByRole('dialog',{name:'영상 프로젝트 JSON 가져오기',exact:true});await importDialog.waitFor();assert.deepEqual(JSON.parse(await importDialog.getByLabel('VideoProject JSON',{exact:true}).inputValue()),receivedVideoProject);
+  assert.equal(savedProjects.size,1,'Native receipt and user review do not save a video project');
+  await importDialog.getByRole('button',{name:'가져와 저장',exact:true}).click();await page.getByText('JSON을 새 영상 프로젝트로 가져와 저장했습니다.',{exact:true}).waitFor();assert.equal(await editorTitle.inputValue(),receivedVideoProject.title);assert.equal(savedProjects.size,2,'Only explicit import saves to the memory IPC fixture');assert.deepEqual(savedProjects.get(saved.id),saved,'Receipt import preserves the original saved template');
+  console.log('Template QA: actual UI prompt -> compiled native MCP get/receive -> reviewed JSON import passed (save fixture only)');
   await page.setViewportSize({ width: 820, height: 720 });
   await gallery.scrollIntoViewIfNeeded();
   await page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
@@ -363,14 +374,14 @@ try {
   assert.deepEqual(unexpected, []);
   assert.deepEqual(errors, []);
   const report = {
-    mode: 'Chromium with pure Rust catalog/preview data and isolated IPC; native OS, real AI, real persistence, and MP4 are not exercised',
-    templates: fixtures.catalog.map(item => item.id), templateCycles: 20,
+    mode: 'Chromium with pure Rust catalog/preview data and isolated IPC; compiled native creation receipt and media validation; native OS, real AI, real project persistence and MP4 are not exercised',
+    templates: fixtures.catalog.map(item => item.id), nativeFixtureCases:fixtures.cases.length,templateCycles: 20,
     filterAndEmptyRestore: true, favoriteToggleAndRestore: 'memory fixture only', recentOnlyAfterUseAndRestore: 'memory fixture only',
     previewControls: { category: 'tech', format: 'youtube-landscape', language: 'en', sceneCount: 6, durationSec: 60 },
     latePreviewIgnored: true, timelineSelection: true,
     playbackStoppedWhenHiddenOrInactive: true, hiddenMode: 'simulated visibilitychange',
     dirtyDraftProtected: true, explicitSaveAndReload: 'memory fixture only',
-    chatRecipeIncluded: true, chatReceiptIsNotGeneration: true,
+    selectedRecipeProjectionIncluded: true, chatReceiptIsNotGeneration: true, nativeCreationReceipt:'actual compiled stdio get/receive with native media validation in an isolated home',reviewedJsonImport:'actual dialog, explicit save to memory IPC fixture only',
     exportEditedSnapshotAndCancellation: 'memory mock IPC only; native picker and file write are not exercised',
     duplicateProtectedOriginal: true,
     baseline, after, stageGeometry, errors, unexpected, screenshots: [`${output}/gallery.png`, `${output}/gallery-820.png`, `${output}/stage-wide.png`],

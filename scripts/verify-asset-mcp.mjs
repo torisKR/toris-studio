@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { nativeBinary as resolveNativeBinary } from './ui-fixture-helpers.mjs';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -7,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const home = await mkdtemp(resolve(tmpdir(),'toris-mcp-verify-'));
-const executable = resolve(`desktop/src-tauri/target/debug/toris-studio-desktop${process.platform==='win32'?'.exe':''}`);
+const executable = resolveNativeBinary('toris-studio-desktop');
 const nativeBinary = process.env.TORIS_TEST_NATIVE_MCP_BINARY ?? (process.argv.includes('--native') ? executable : undefined);
 const child = spawn(nativeBinary ?? process.execPath,nativeBinary ? ['--studio-mcp'] : ['--import','tsx','mcp/asset-stdio.ts'],{
   env:{HOME:process.env.HOME,PATH:process.env.PATH,NODE_ENV:'test',TORIS_STUDIO_ASSET_HOME:home},

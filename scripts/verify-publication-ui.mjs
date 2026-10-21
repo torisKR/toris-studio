@@ -1,8 +1,8 @@
 #!/usr/bin/env node
+import { createFixtureServer, shellFixture, unhandled, openCreation, fixtureBridge } from './ui-fixture-helpers.mjs';
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createServer } from "vite";
 import { chromium } from "playwright";
 
 const out = process.env.TORIS_PUBLICATION_UI_ARTIFACTS || "/private/tmp/toris-publication-ui";
@@ -10,23 +10,21 @@ await mkdir(out, { recursive: true });
 const now = "2026-10-10T08:00:00Z";
 const report = { adapter: "Chromium with explicit native IPC fixtures; no OAuth, AI, upload or publishing network calls", checks: [], errors: [] };
 const calls = [];
-const profile = { mcpUrl: "http://127.0.0.1:21228/mcp", pluginUrl: "https://chatgpt.com/plugins/plugin_qa", conversationUrl: "", projectRoot: "/tmp/qa-studio", conversationId: "qa-chat" };
 const capabilities = { video: true, title: true, description: true, tags: true, hashtags: true, thumbnail: true, thumbnailFrame: true, draft: true, direct: true, directPublicSupported: false };
-const accounts = ["youtube", "instagram", "facebook", "threads", "tiktok"].map(platform => ({ platform, accountId: `${platform}-account`, name: `${platform} 검증 계정`, publishingAuthorized: true, capabilities, creatorInfo: platform === "tiktok" ? { privacyLevelOptions: ["SELF_ONLY", "PUBLIC_TO_EVERYONE"], commentDisabled: false, duetDisabled: true, stitchDisabled: false, maxVideoPostDurationSec: 180, checkedAt: now } : null }));
+const accounts = ["youtube", "instagram", "facebook", "threads", "tiktok"].map(platform => ({ platform, connectionId:`${platform}-connection`, accountId: `${platform}-account`, name: `${platform} 검증 계정`, publishingAuthorized: true, capabilities, creatorInfo: platform === "tiktok" ? { privacyLevelOptions: ["SELF_ONLY", "PUBLIC_TO_EVERYONE"], commentDisabled: false, duetDisabled: true, stitchDisabled: false, maxVideoPostDurationSec: 180, checkedAt: now } : null }));
 const media = [];
 let fixturePublicationSequence = 0;
-let saved, aiRequest, submits = 0, draftToolReady = true;
-const server = await createServer({ configFile: resolve("desktop/vite.config.ts"), server: { port: 0, strictPort: false } });
+let saved, aiRequest, submits = 0, clipboard="";
+const server = await createFixtureServer({ configFile: resolve("desktop/vite.config.ts"), server: { port: 0, strictPort: false } });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1380, height: 1000 }, reducedMotion: "reduce" });
   page.on("pageerror", error => report.errors.push(error.message));
+  page.on("dialog",dialog=>dialog.accept());
   await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     calls.push({ command, args });
     if (command === "get_dashboard") return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: "QA" } };
-    if (command === "codexify_connection_get") return profile;
-    if (command === "codexify_connection_check") return { reachable: true, studioTools: draftToolReady ? ["studio_publication_draft_receive"] : [] };
     if (command === "publication_list") return { publications: saved ? [saved] : [], media, scheduler: { paused: false, running: false, message: "QA" } };
     if (command === "publication_media_sources") return { renders: [{ id: "render-qa", title: "기존 렌더 검증" }], assets: [{ id: "asset-qa", title: "ChatGPT 썸네일 검증" }] };
     if (command === "publication_preview_media") return { path: `qa://${args.id}`, kind: "thumbnail", mimeType: "image/png" };
@@ -85,7 +83,7 @@ try {
         return {
           id: prior?.id || `job-${saved.id}-${saved.revision}-${target.id}`,
           targetId: target.id, revision: saved.revision, platform: target.platform,
-          accountId: target.accountId, accountTitle: target.accountTitle,
+          connectionId:target.connectionId, accountId: target.accountId, accountTitle: target.accountTitle,
           status, mode: target.mode, scheduledAt: target.scheduledAt,
           warnings: [], error: null, updatedAt: now, retryable: false,
           url: target.platform === "youtube" && status === "published" ? "https://www.youtube.com/watch?v=abcdefghijk" : null,
@@ -115,22 +113,21 @@ try {
     }
     if (command === "publication_ai_request") { aiRequest = { id: "qa-ai-request", ...args.input, status: "waiting", createdAt: now }; return aiRequest; }
     if (command === "publication_ai_drafts") return { requests: aiRequest ? [aiRequest] : [] };
-    if (command === "codexify_chats") return { chats: [{ id: "qa-chat", title: "QA", workspace: "qa-studio", projectMatches: true }], serverTimeMs: 1000 };
-    if (command === "codexify_chat_read") return { messages: [{ id: "qa-reply", role: "agent", markdown: "ChatGPT에서 받은 검증 응답", start: 1, end: 10, created_at_ms: 1000 }], agent_waiting_until_ms: null, server_time_ms: 1000, delivered_through: 0, read_through: 0 };
-    if (command === "codexify_chat_send") return { sent: { id: "qa-sent", end: 20, created_at_ms: 1000 } };
-    if (command === "copy_text" || command === "open_external" || command === "publication_set_paused" || command.startsWith("plugin:event|")) return 0;
+    if(command==="copy_text"){clipboard=args.text;return null;}
+    if ( command === "open_external" || command === "publication_set_paused" || command.startsWith("plugin:event|")) return 0;
     if (command === "ai_generate" || command === "ai_status" || command.startsWith("open_webui")) throw new Error(`Forbidden old AI path ${command}`);
-    throw new Error(`Unsupported QA IPC ${command}`);
+    const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
+    report.errors.push(`Unsupported fixture IPC ${command}`);throw new Error(`Unsupported QA IPC ${command}`);
   });
   await page.addInitScript(() => {
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__TAURI_INTERNALS__ = { invoke: (command, args) => window.__qaInvoke(command, args), transformCallback: () => 1, convertFileSrc: () => "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", unregisterCallback: () => {} };
   });
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "SNS 일괄 게시", exact: true }).click();
+  await page.getByRole("navigation",{name:"주 메뉴",exact:true}).getByRole("button",{name:"게시",exact:true}).click();
   const studio = page.locator(".publication-studio");
   await studio.getByRole("heading", { name: "한 번 작성하고 채널별로 확인" }).waitFor();
-  assert.equal(await studio.getByRole("button", { name: /네이버|^X$/ }).count(), 0);
+  assert.equal(await studio.getByRole("button", { name: "X · 수동 인계",exact:true }).count(), 1);
   await studio.getByRole("button", { name: "MP4 가져오기", exact: true }).click();
   await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
   await studio.getByRole("button", { name: "썸네일 가져오기", exact: true }).click();
@@ -142,14 +139,14 @@ try {
   await studio.getByRole("button", { name: "YouTube", exact: true }).click();
   await studio.getByRole("button", { name: "TikTok", exact: true }).click();
   await studio.getByRole("button", { name: "Instagram Reels", exact: true }).click();
-  await studio.getByLabel("YouTube 게시 계정", { exact: true }).selectOption("youtube-account");
-  await studio.getByLabel("TikTok 게시 계정", { exact: true }).selectOption("tiktok-account");
-  await studio.getByLabel("Instagram Reels 게시 계정", { exact: true }).selectOption("instagram-account");
+  await studio.getByLabel("YouTube 게시 계정", { exact: true }).selectOption(JSON.stringify(["youtube-connection","youtube-account"]));
+  await studio.getByLabel("TikTok 게시 계정", { exact: true }).selectOption(JSON.stringify(["tiktok-connection","tiktok-account"]));
+  await studio.getByLabel("Instagram Reels 게시 계정", { exact: true }).selectOption(JSON.stringify(["instagram-connection","instagram-account"]));
   const instagram = studio.getByRole("region", { name: "Instagram Reels 게시 설정", exact: true });
   const instagramConsent = instagram.getByLabel("선택한 계정에 콘텐츠를 공개 게시하는 것을 확인했습니다.", { exact: true });
   assert.equal(await instagramConsent.isChecked(), false);
   assert.equal(await studio.getByLabel("TikTok 공개 범위", { exact: true }).inputValue(), "");
-  await studio.getByText(/미심사 앱은 비공개 계정의 SELF_ONLY/).waitFor({ timeout: 5000 });
+  await studio.getByText(/공개 심사 확인 전에는 SELF_ONLY/).waitFor({ timeout: 5000 });
   assert.equal(await studio.getByLabel("댓글 허용", { exact: true }).isChecked(), false);
   assert.equal(await studio.getByLabel("Duet 허용 · 계정에서 비활성", { exact: true }).isDisabled(), true);
   await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
@@ -206,22 +203,21 @@ try {
   report.checks.push("Uncertain result reconciles with explicit external publication URL without resending");
 
   await studio.getByRole("button", { name: "초안 열기·수정", exact: true }).click();
-  draftToolReady = false;
-  await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
-  await studio.getByText(/SNS 초안 수신 도구가 연결되지 않았습니다/).waitFor();
-  assert.equal(calls.filter(item => item.command === "publication_ai_request" || item.command === "codexify_chat_send").length, 0);
-  draftToolReady = true;
-  report.checks.push("Missing SNS draft MCP tool prevents sending and shows reconnection instructions");
+  const beforeRequests=calls.filter(item=>item.command==="publication_ai_request").length;
   await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
   await studio.getByText("요청 저장 · 실제 수신 대기", { exact: true }).waitFor();
-  await studio.getByText("요청을 저장했습니다. 종료된 ChatGPT 대화에서 시작·재개한 뒤 응답을 확인하세요.", { exact: true }).waitFor();
-  assert.match(calls.find(item => item.command === "codexify_chat_send").args.input.message, /studio_publication_draft_receive/);
+  await studio.getByText("SNS 문구 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.", { exact: true }).waitFor();
+  assert.equal(calls.filter(item=>item.command==="publication_ai_request").length,beforeRequests+1);
+  await studio.getByRole("button",{name:"전달문 복사",exact:true}).click();
+  assert.match(clipboard,/Remote Desktop Commander/);assert.match(clipboard,/studio_publication_draft_receive/);assert.match(clipboard,new RegExp(`revision=${saved.revision}`));
+  assert.equal(aiRequest.revision,saved.revision);
+  report.checks.push("Saved SNS draft request uses RDC copy with immutable publication revision and no automatic chat/API send");
   aiRequest.status = "received"; aiRequest.receivedAt = now; aiRequest.draft = { title: "수신한 ChatGPT 제목", description: "사용자가 적용해야 하는 초안", tags: ["검증"], hashtags: ["초안"] };
   await page.getByRole("button", { name: "워크스페이스 새로고침", exact: true }).click();
   await studio.getByRole("button", { name: "초안 적용", exact: true }).click();
   assert.equal(await studio.getByLabel("게시 공통 제목", { exact: true }).inputValue(), "수신한 ChatGPT 제목");
   assert.equal(submits, 1);
-  report.checks.push("Actual ChatGPT request path uses request-bound draft receiver; explicit draft apply remains editable and unapproved");
+  report.checks.push("Request-bound SNS receipt fixture requires explicit apply and remains editable and unapproved");
   const checkbox = studio.getByLabel("이 채널의 문구를 따로 편집", { exact: true }).first();
   assert.equal(await checkbox.locator("..").evaluate(element => getComputedStyle(element).display), "flex");
   await studio.getByLabel("YouTube 게시 방식", { exact: true }).selectOption("scheduled");
@@ -235,7 +231,7 @@ try {
   await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
   for (const [label, platform] of [["Instagram Reels", "instagram"], ["Facebook Page", "facebook"], ["Threads", "threads"]]) {
     await studio.getByRole("button", { name: label, exact: true }).click();
-    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(JSON.stringify([`${platform}-connection`,`${platform}-account`]));
   }
   const batch = studio.getByRole("region", { name: "채널 일괄 예약", exact: true });
   await batch.waitFor({ timeout: 5000 });
@@ -274,17 +270,17 @@ try {
   await studio.getByLabel("게시 공통 설명", { exact: true }).fill("영상 없는 본문");
   for (const [label, platform] of [["Facebook Page", "facebook"], ["Threads", "threads"]]) {
     await studio.getByRole("button", { name: label, exact: true }).click();
-    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(JSON.stringify([`${platform}-connection`,`${platform}-account`]));
   }
   for (const consent of await studio.getByLabel("선택한 계정에 콘텐츠를 공개 게시하는 것을 확인했습니다.", { exact: true }).all()) await consent.check();
   await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
   assert.equal(saved.contentKind, "text"); assert.equal(saved.videoMediaId, null);
   report.checks.push("Text content offers Page/Threads without video controls and persists its content kind with no MP4");
   await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
-  await studio.getByText("요청을 저장했습니다. 종료된 ChatGPT 대화에서 시작·재개한 뒤 응답을 확인하세요.", { exact: true }).waitFor();
+  await studio.getByText("SNS 문구 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.", { exact: true }).waitFor();
   assert.equal(JSON.parse(aiRequest.context).contentKind, "text");
   assert.deepEqual(JSON.parse(aiRequest.context).targets, ["facebook", "threads"]);
-  assert.match(calls.filter(item => item.command === "codexify_chat_send").at(-1).args.input.message, /콘텐츠 종류.*선택된 채널/);
+  assert.equal(aiRequest.revision,saved.revision);
   assert.equal(submits, 1);
   report.checks.push("ChatGPT draft requests carry the current content kind and selected channels without assuming video or approving publication");
   await studio.getByRole("button", { name: "새 초안", exact: true }).click();
@@ -292,8 +288,8 @@ try {
   await studio.getByLabel("게시 공통 제목", { exact: true }).fill("블로그 인계 검증");
   await studio.getByLabel("게시 공통 설명", { exact: true }).fill("직접 게시할 블로그 원고");
   await studio.getByRole("button", { name: "네이버 블로그 · 수동 인계", exact: true }).click();
-  await studio.getByLabel("네이버 블로그 ID", { exact: true }).fill("my_blog");
-  const handoffConsent = studio.getByLabel("자동 게시가 아닌 네이버 수동 게시 인계임을 확인했습니다.", { exact: true });
+  await studio.getByLabel("공식 계정 ID·핸들", { exact: true }).fill("my_blog");
+  const handoffConsent = studio.getByLabel("공식 화면에서 직접 게시하는 수동 인계임을 확인했습니다.", { exact: true });
   assert.equal(await handoffConsent.isChecked(), false);
   await studio.getByRole("button", { name: "블로그 이미지 가져오기", exact: true }).click();
   await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
@@ -328,7 +324,7 @@ try {
   await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
   for (const [label, platform] of [["YouTube", "youtube"], ["TikTok", "tiktok"]]) {
     await studio.getByRole("button", { name: label, exact: true }).click();
-    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(JSON.stringify([`${platform}-connection`,`${platform}-account`]));
   }
   assert.deepEqual(await studio.getByLabel("TikTok 공개 범위", { exact: true }).locator("option").evaluateAll(options => options.map(option => option.value)), ["", "SELF_ONLY"]);
   await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
@@ -374,7 +370,7 @@ try {
   await studio.getByLabel("등록한 게시 영상", { exact: true }).selectOption(media[0].id);
   for (const [label, platform] of [["YouTube", "youtube"], ["Instagram Reels", "instagram"], ["TikTok", "tiktok"]]) {
     await studio.getByRole("button", { name: label, exact: true }).click();
-    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(`${platform}-account`);
+    await studio.getByLabel(`${label} 게시 계정`, { exact: true }).selectOption(JSON.stringify([`${platform}-connection`,`${platform}-account`]));
   }
   await studio.getByLabel("TikTok 게시 방식", { exact: true }).selectOption("tiktok_inbox");
   await studio.getByLabel("TikTok 음악 사용 확인", { exact: false }).check();
@@ -436,15 +432,12 @@ try {
   assert.equal(new Set(saved.jobs.map(job => job.id)).size, saved.jobs.length);
   report.checks.push("Second subset approval adds only TikTok inbox while preserving prior YouTube job identity/status and leaving Instagram untouched");
   await page.screenshot({ path: resolve(out, "publication-partial-approval.png"), fullPage: true });
-  await page.getByRole("button", { name: "AI 작업실", exact: true }).click();
+  await openCreation(page,"문구");
   assert.equal(await page.getByRole("button", { name: "AI로 작성", exact: true }).count(), 0);
-  assert.equal(await page.getByText("직접 작성에 사용할 로컬 AI 제공자", { exact: false }).count(), 0);
-  await page.getByRole("button", { name: "ChatGPT 최근 응답 가져오기", exact: true }).click();
-  // This textarea gets its accessible name from <label htmlFor>, not aria-label.
-  await page.waitForFunction(() => document.getElementById("social-ai-manual-output")?.value === "ChatGPT에서 받은 검증 응답");
-  assert.equal(await page.getByLabel("ChatGPT 결과 붙여넣기·편집", { exact: true }).inputValue(), "ChatGPT에서 받은 검증 응답");
+  await page.getByLabel("문구 · 직접 편집",{exact:true}).fill("사용자가 직접 붙여넣은 검토용 응답");
+  assert.equal(await page.getByLabel("문구 · 직접 편집",{exact:true}).inputValue(),"사용자가 직접 붙여넣은 검토용 응답");
   assert.equal(calls.some(item => item.command === "ai_generate" || item.command === "ai_status" || item.command.startsWith("open_webui")), false);
-  report.checks.push("Desktop AI path never calls local providers/Open WebUI; ChatGPT response can be imported and edited");
+  report.checks.push("Desktop AI path never calls local providers/Open WebUI; literal user-pasted response can be edited without chat execution");
   assert.deepEqual(report.errors, []);
   report.passed = true;
   console.log(JSON.stringify(report, null, 2));

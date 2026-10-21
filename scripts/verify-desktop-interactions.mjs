@@ -1,14 +1,14 @@
+import { createFixtureServer, shellFixture, unhandled } from './ui-fixture-helpers.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { createServer } from 'vite';
 import { chromium } from 'playwright';
 
 // UI interaction checks with isolated IPC fixtures. No vault/account/provider call.
 const output = '/private/tmp/toris-desktop-interactions';
 await mkdir(output, { recursive: true });
 const calls = [], errors = [];
-const server = await createServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
+const server = await createFixtureServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
 await server.listen();
 let browser;
 try {
@@ -18,11 +18,15 @@ try {
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 UI 검증' } };
-    if (command === 'codexify_connection_get') return { mcpUrl: '', pluginUrl: '', conversationUrl: '', projectRoot: '', conversationId: '' };
     if (command === 'video_list_projects') return [];
+    if (command === 'video_template_library_get') return {version:1,favorites:[],recent:[]};
+    // This lifecycle fixture deliberately exercises unavailable catalog recovery.
+    // verify-video-templates.mjs covers every real Rust recipe separately.
+    if (command === 'video_template_catalog') throw new Error('격리된 탐색 fixture의 템플릿 읽기 오류');
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false };
     if (command === 'set_main_activity') return null;
-    throw new Error(`Unexpected native operation in isolated UI test: ${command}`);
+    const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
+    errors.push(`Unexpected fixture IPC ${command}`);throw new Error(`Unexpected native operation in isolated UI test: ${command}`);
   });
   await page.addInitScript(() => {
     const intervals = new Set(), keyListeners = new Set();
@@ -45,7 +49,8 @@ try {
   const search = menu.getByRole('combobox', { name: '화면 이름 검색' });
   await search.fill('영상');
   await page.keyboard.press('Enter');
-  await page.getByRole('heading', { name: '영상 제작', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '영상·모션', exact: true }).waitFor();
+  await page.getByText('격리된 탐색 fixture의 템플릿 읽기 오류',{exact:true}).waitFor();
   await page.keyboard.press('Meta+k');
   await menu.waitFor();
   await search.fill('없는 화면');
@@ -55,7 +60,7 @@ try {
   const baseline = await page.evaluate(() => window.__qaResources());
   for (let iteration = 0; iteration < 20; iteration++) {
     await page.keyboard.press('Control+k');
-    await search.fill(iteration % 2 ? '영상' : '오버뷰');
+    await search.fill(iteration % 2 ? '영상' : 'SNS 관리');
     await page.keyboard.press('Enter');
   }
   await page.waitForFunction(() => !document.querySelector('.desktop-native-activity'));
@@ -66,7 +71,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'minimum desktop width must not overflow');
   await page.screenshot({ path: `${output}/desktop.png`, fullPage: false });
   assert.deepEqual(errors, []);
-  assert.equal(calls.some(call => /upload|submit|oauth|keychain/.test(call.command)), false);
+  assert.equal(calls.some(call => /upload|submit|keychain/.test(call.command)||call.command==='oauth_connection_dispatch'), false);
   const report = { mode: 'Chromium with isolated IPC fixtures; native OS window/progress is not exercised', menuCycles: 20, strictModeSnapshotCalls: calls.filter(call => call.command === 'get_dashboard').length, baseline, after, errors, screenshot: `${output}/desktop.png` };
   await writeFile(`${output}/report.json`, JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));

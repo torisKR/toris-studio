@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createFixtureServer, nativeBinary, shellFixture, unhandled, openCreation } from './ui-fixture-helpers.mjs';
 /** Real asset-engine integration with a browser-hosted Tauri IPC test adapter.
  * Native file dialogs are represented by explicit fixture selections. No user
  * library, credentials, ChatGPT endpoint, or existing application is modified.
@@ -9,12 +10,11 @@ import { mkdtemp, readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { validateBytes } from 'gltf-validator';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const binary = resolve(root, 'desktop/src-tauri/target/debug/toris-studio-desktop');
+const binary = nativeBinary('toris-studio-desktop');
 const scratch = await mkdtemp(resolve(tmpdir(), 'toris-assets-qa-'));
 const artifacts = resolve(root, 'docs/review/asset-studio');
 await mkdir(artifacts, { recursive: true });
@@ -62,7 +62,7 @@ try {
   await writeFile(fixturePath, logo);
   pickerPaths = [fixturePath];
 
-  server = await createServer({ configFile: resolve(root,'desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
+  server = await createFixtureServer({ configFile: resolve(root,'desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
   await server.listen();
   const address = server.httpServer.address();
   assert.ok(address && typeof address === 'object');
@@ -74,7 +74,7 @@ try {
       // small test bridge executable for those commands, not a mocked result.
       if (['import_paths','settings','thumbnail','payload'].includes(args.action)) {
         return new Promise((accept,reject)=>{
-          const child=spawn(resolve(root,'desktop/src-tauri/target/debug/examples/asset_qa_bridge'),[],{env:{...process.env,TORIS_STUDIO_ASSET_HOME:scratch},stdio:['pipe','pipe','pipe']});
+          const child=spawn(nativeBinary('asset_qa_bridge',{example:true}),[],{env:{...process.env,TORIS_STUDIO_ASSET_HOME:scratch},stdio:['pipe','pipe','pipe']});
           const chunks=[];child.stdout.on('data',b=>chunks.push(b));child.stderr.resume();child.on('error',reject);
           child.on('close',()=>{try{const value=JSON.parse(Buffer.concat(chunks).toString());if(value.ok)accept(value.result);else reject(new Error(value.error));}catch(e){reject(e);}});
           child.stdin.end(JSON.stringify({action:args.action,input:args.input}));
@@ -88,12 +88,13 @@ try {
     if (command === 'copy_text') { clipboard = args.text; return; }
     if (command === 'get_dashboard') return { channels:[],content:[],trends:[],integrations:[],database:{connected:false,message:'QA: DB 미사용'} };
     if (command === 'ai_status') return { providers:[],defaultProvider:null };
-    throw new Error(`Unexpected IPC call: ${command}`);
+    const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
+    reports.errors.push(`Unexpected fixture IPC ${command}`);throw new Error(`Unexpected IPC call: ${command}`);
   });
   await page.addInitScript(() => { window.__TAURI_INTERNALS__ = { invoke:(command,args)=>window.__assetQaInvoke(command,args) }; });
   page.on('pageerror',error=>reports.errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/`,{waitUntil:'networkidle'});
-  await page.getByRole('button',{name:'이미지 생성기',exact:true}).click();
+  await openCreation(page,'이미지·에셋');
   await page.getByRole('button',{name:'요청 큐에 추가',exact:true}).waitFor({state:'visible'});
   await page.getByLabel('에셋 이름',{exact:true}).fill('작업 큐 검증');
   await page.getByLabel('이미지 프롬프트',{exact:true}).fill('검증용 요청입니다. 실제 이미지 생성은 호출하지 않습니다.');
@@ -103,9 +104,9 @@ try {
   await page.getByRole('button',{name:'요청 큐에 추가',exact:true}).click();
   await page.getByText('2개 요청을 저장했습니다.',{exact:false}).waitFor();
   assert.equal((await worker('snapshot')).jobs.length,2);
-  await page.getByRole('button',{name:'대기 요청 복사',exact:true}).click();
-  await page.getByText('2개 요청을 복사했습니다.',{exact:false}).waitFor();
-  assert.match(clipboard,/studio_asset_receive/);
+  await page.getByRole('button',{name:'ChatGPT에 전달할 요청 복사',exact:true}).click();
+  await page.getByText('전달문을 복사했습니다.',{exact:false}).waitFor();
+  assert.match(clipboard,/studio_asset_receive/);assert.match(clipboard,/--studio-mcp/);for(const job of (await worker('snapshot')).jobs)assert.ok(clipboard.includes(job.id));
   reports.checks.push('Create two persistent queued requests and copy actionable ChatGPT handoff');
   await page.screenshot({path:resolve(artifacts,'02-queue.png'),fullPage:true});
   reports.screenshots.push('02-queue.png');

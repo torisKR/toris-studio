@@ -1,11 +1,11 @@
+import { createFixtureServer, shellFixture, unhandled } from './ui-fixture-helpers.mjs';
 import assert from 'node:assert/strict';
-import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { resolve } from 'node:path';
 
 // A wrong persisted choice, lost draft, duplicate save, stale status or OAuth
 // browser override must fail through the real rendered desktop components.
-const server = await createServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false, watch: { ignored: ['**/src-tauri/**'] } } });
+const server = await createFixtureServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false, watch: { ignored: ['**/src-tauri/**'] } } });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 960 }, reducedMotion: 'reduce' });
@@ -38,10 +38,10 @@ await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     preference = args.input.browser;
     return runtimeStatus();
   }
-  if (command === 'oauth_status') return { providers: [{ platform: 'youtube', label: 'YouTube', clientConfigured: true, connected: false, expiresAt: null, refreshable: false, needsReconnect: false, detail: 'fixture', redirectUri: 'http://127.0.0.1:38471/oauth/youtube/callback', pending: false, publishingAuthorized: false, publishingScopes: [], tiktokAuditDeclared: false }] };
-  if (command === 'oauth_begin_login') { assert.deepEqual(args, { platform: 'youtube' }); return null; }
   if (command === 'open_external') return null;
-  throw new Error(`Unexpected fixture command: ${command}`);
+  if(command==='oauth_connection_dispatch'){assert.deepEqual(args.input,{action:'beginLogin',platform:'youtube',purpose:'read'});return {connectionId:'11111111-1111-4111-8111-111111111111',manualCallback:false};}
+  const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
+  errors.push(`Unexpected fixture IPC ${command}`);throw new Error(`Unexpected fixture command: ${command}`);
 });
 await page.addInitScript(() => {
   const callbacks = new Map(), events = new Map(); let nextCallback = 1;
@@ -127,10 +127,11 @@ try {
   failRead = false;
   await page.setViewportSize({ width: 820, height: 720 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
-  await page.getByRole('button', { name: 'SNS 로그인', exact: true }).click();
-  await page.getByRole('button', { name: '브라우저에서 로그인', exact: true }).click();
-  await page.getByText('시스템 기본 브라우저에서 로그인을 완료하세요.', { exact: false }).waitFor();
-  assert.equal(calls.filter(call => call.command === 'oauth_begin_login').length, 1);
+  await page.getByRole('navigation',{name:'주 메뉴',exact:true}).getByRole('button',{name:'SNS 관리',exact:true}).click();
+  await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).getByRole('button',{name:'채널',exact:true}).click();
+  await page.getByRole('button',{name:'계정 추가',exact:true}).click();
+  await page.getByText('시스템 브라우저에서 공식 로그인을 완료하세요.',{exact:false}).waitFor();
+  assert.equal(calls.filter(call=>call.command==='oauth_connection_dispatch').length,1);
   assert.equal(await page.getByRole('button', { name: 'Aside로 로그인', exact: true }).count(), 0);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks: ['Playwright default', 'saved and effective choices', 'preserved draft on refresh', 'save failure and redacted error', 'serialized save with disabled controls', 'persisted preference after reload', 'unsupported OS fallback', 'recovery state', 'read failure', '820px no overflow', 'OAuth system-only IPC'], adapter: 'Chromium real desktop UI; native IPC fixture only' }, null, 2));
