@@ -9,16 +9,21 @@
     "X has manual channel/report guidance and no OAuth or native API query controls",
     "Deferred mapped previews stay invalid after changing target, timezone or metric mapping; review and commit never revive",
     "X report import requires explicit column mapping, original metric definition/timezone and preview before commit; provenance remains user-file based",
+    "A remote-A legacy report remains visible under its stable local channel after binding account B; import reads and history use channelId once",
+    "Changing the correction selection while mapped preview is deferred never revives review or commit",
+    "Reselected correction preview and commit pin the original report owner/replacement; reviewed 17 replaces imported 11 while B API 72 remains separate",
     "Keyboard navigation and remembered section context preserve unsaved work; RDC copy stays saved-only and platform or topic changes make received prose stale without overwriting edited context"
   ],
   "screenshots": [
     "overview-1380.png",
     "channel-820.png",
     "report-preview-820.png",
+    "legacy-correction-820.png",
     "creation-820.png",
     "creation-1380.png"
   ],
   "errors": [],
+  "node": "v24.16.0",
   "passed": true,
   "calls": [
     {
@@ -101,16 +106,8 @@
       "action": "query"
     },
     {
-      "command": "analytics_dispatch",
-      "action": "query"
-    },
-    {
       "command": "oauth_connection_dispatch",
       "action": "bindChannel"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "query"
     },
     {
       "command": "analytics_dispatch",
@@ -126,10 +123,6 @@
     {
       "command": "analytics_dispatch",
       "action": "status"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "query"
     },
     {
       "command": "analytics_dispatch",
@@ -180,18 +173,6 @@
     },
     {
       "command": "analytics_dispatch",
-      "action": "query"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "importHistory"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "importHistory"
-    },
-    {
-      "command": "analytics_dispatch",
       "action": "importHistory"
     },
     {
@@ -229,10 +210,6 @@
     {
       "command": "analytics_dispatch",
       "action": "importPreview"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "importHistory"
     },
     {
       "command": "analytics_dispatch",
@@ -258,7 +235,57 @@
     },
     {
       "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
       "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importPreview"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importCommit"
+    },
+    {
+      "command": "get_dashboard"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "importHistory"
+    },
+    {
+      "command": "oauth_connections"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "status"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
+    },
+    {
+      "command": "analytics_dispatch",
+      "action": "query"
     },
     {
       "command": "oauth_connections"
@@ -285,10 +312,6 @@
     },
     {
       "command": "copy_text"
-    },
-    {
-      "command": "analytics_dispatch",
-      "action": "importHistory"
     },
     {
       "command": "oauth_connections"

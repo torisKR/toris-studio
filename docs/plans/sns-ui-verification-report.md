@@ -4,7 +4,7 @@
 
 | Gate | Evidence |
 |---|---|
-| `node scripts/verify-sns-workspace.mjs` | 9 groups: actual React UI, four primary destinations, eight platforms, exact connection/account pair, zero/null, definitions/timezone, X manual-only controls, mapped report preview/provenance, delayed account and import races, context/keyboard/focus preservation, platform/topic stale protection, RDC copy, 1380×900 and 820×620 without horizontal overflow |
+| `node scripts/verify-sns-workspace.mjs` | 12 groups: actual React UI, four primary destinations, eight platforms, exact connection/account pair, zero/null, definitions/timezone, X manual-only controls, mapped report preview/provenance, stable report alias after account rebind, legacy correction ownership, delayed account and import races, context/keyboard/focus preservation, platform/topic stale protection, RDC copy, 1380×900 and 820×620 without horizontal overflow |
 | `node scripts/verify-ai-workspace.mjs` | 7 groups: real-shaped discovery, evidence deduplication, manual context preservation, bounded RDC request, editable received fixture, delayed DB disconnect/reconnect, trend brief |
 | `node scripts/verify-publication-ui.mjs` | 19 groups: destination consent, subset approval, partial retry, uncertain reconciliation, KST scheduling, revision-bound saved RDC copy, explicit draft apply, manual Naver handoff, TikTok draft/direct distinctions, 820px layout |
 | `node scripts/verify-browser-ui.mjs` | 11 groups: preference persistence, serialized save, redacted failure/recovery, 820px layout, system-browser-only OAuth dispatch |
@@ -17,10 +17,14 @@
 
 Native verifiers honor `CARGO_TARGET_DIR`. This run used `/Users/toris/projects/toris_studio/desktop/src-tauri/target`. The video gate builds the native bin and isolated `creation_qa_bridge` example. Existing asset/motion package commands build their helpers. Media staging was copied from the installed bundle only after `verifyMedia` verified pinned manifest SHA, architecture and FFmpeg 9.0.2; the installed app was neither launched nor changed.
 
+Final alias/correction rerun: `/tmp/toris-sns-node24/node scripts/verify-sns-workspace.mjs` passed on Node v24.16.0 after the final analytics UI changes. Other gates above retain their previously recorded evidence. The initial old fixture failed at report-history lookup because it still expected `accountId`; the updated fixture now requires `channelId` and preserves source/observation `reportChannelId`.
+
 ## Regressions exercised
 
 - A pending or rejected account-B query immediately hides account-A rows and CSV controls. Recovery exports B only. A late B response after switching to X cannot render or export API rows.
 - Three deferred mapped previews separately change target, timezone and metric mapping before resolution. Stale review and save controls never revive. Paste uses `.txt` delimiter detection; comma CSV cannot be forced into TSV.
+- A legacy imported source keeps remote-A as its original owner and a stable local `reportChannelId` after channel rebind to B. API reads carry channel ID plus remote account; import/history use one channel query. The legacy report remains visible.
+- Corrections must be selected before preview. The fixture requires original owner A and the selected `replaceImportId` in preview; changing the replacement while a mapped preview is pending prevents revived review/commit. Reselecting and reviewing commits the captured source, replaces imported 11 with 17, marks the original replaced, and leaves B API 72 unchanged. This is browser/IPC-fixture evidence; native persistence is covered separately by the analytics contract tests.
 - Mapped preview shows the actual two reviewed observations, including original definition, `0`, unavailable `—`, timezone and user-report provenance before commit.
 - A received text fixture remains user reviewed. Changing platform or topic makes it stale without replacing edited prose; background polling preserves textarea focus after navigation settles.
 - Saving and reloading a video catches the StrictMode selection-version race. The source fix resets initialization on cleanup and ignores unmounted responses; the preserved regression passes.
@@ -30,7 +34,7 @@ The shared fixture server uses the actual production Vite config, disables devel
 
 ## Artifacts and limits
 
-Committed SNS captures: [overview](../review/sns/overview-1380.png), [channel](../review/sns/channel-820.png), [mapped import preview](../review/sns/report-preview-820.png), [creation narrow](../review/sns/creation-820.png), [creation wide](../review/sns/creation-1380.png), [machine report](../review/sns/verification.json). Set `TORIS_SNS_UI_ARTIFACTS` to redirect CI output. Captures were inspected visually.
+Committed SNS captures: [overview](../review/sns/overview-1380.png), [channel](../review/sns/channel-820.png), [mapped import preview](../review/sns/report-preview-820.png), [legacy correction preview](../review/sns/legacy-correction-820.png), [creation narrow](../review/sns/creation-820.png), [creation wide](../review/sns/creation-1380.png), [machine report](../review/sns/verification.json). Set `TORIS_SNS_UI_ARTIFACTS` to redirect CI output. Captures were inspected visually.
 
 Other local reports/captures: `docs/review/asset-studio/verification.json`, `docs/review/motion/report.json`, `/private/tmp/toris-ai-workspace-ui`, `/private/tmp/toris-publication-ui`, `/private/tmp/toris-desktop-interactions`, `/private/tmp/toris-video-templates`.
 
