@@ -110,6 +110,16 @@ fn request_at(root: &Path, input: Value) -> Result<Value, String> {
     }
     let value = json!({"id":Uuid::new_v4().to_string(),"publicationId":publication_id,"revision":revision,"topic":topic,"context":context,"status":"waiting","createdAt":Utc::now().to_rfc3339()});
     access(root, |requests| {
+        // Persist the guard on every older waiting request itself. Archiving a
+        // later completed request can no longer remove supersession evidence.
+        if let Some(publication) = publication_id {
+            for older in requests
+                .iter_mut()
+                .filter(|r| r["publicationId"] == publication && r["status"] != "received")
+            {
+                older["supersededBy"] = value["id"].clone();
+            }
+        }
         if requests.len() >= 200 {
             let index = requests
                 .iter()
@@ -173,6 +183,59 @@ fn archived(root: &Path, id: &str) -> Result<Option<Value>, String> {
         .map(Some)
         .map_err(|_| "보관 초안 형식 오류".into())
 }
+/// Earlier releases did not persist supersession on the waiting request. Inspect
+/// preserved archived receipts for these legacy records before accepting a first
+/// draft; never rewrite or delete archived user data during this check.
+fn newer_archived_request(root: &Path, request: &Value) -> Result<bool, String> {
+    let Some(publication) = request["publicationId"].as_str() else {
+        return Ok(false);
+    };
+    let directory = root.join("archive");
+    if !directory.exists() {
+        return Ok(false);
+    }
+    let directory = archive_dir(root)?;
+    for entry in fs::read_dir(directory).map_err(|_| "보관 초안 폴더 읽기 실패")? {
+        let path = entry.map_err(|_| "보관 초안 폴더 읽기 실패")?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(raw) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if Uuid::parse_str(raw).is_err() {
+            continue;
+        }
+        let Some(candidate) = archived(root, raw)? else {
+            continue;
+        };
+        if candidate["publicationId"] != publication || candidate["id"] == request["id"] {
+            continue;
+        }
+        let higher_revision = match (candidate["revision"].as_u64(), request["revision"].as_u64()) {
+            (Some(new), Some(old)) => new > old,
+            _ => false,
+        };
+        let later_time = match (
+            candidate["createdAt"].as_str(),
+            request["createdAt"].as_str(),
+        ) {
+            (Some(new), Some(old)) => match (
+                chrono::DateTime::parse_from_rfc3339(new),
+                chrono::DateTime::parse_from_rfc3339(old),
+            ) {
+                (Ok(new), Ok(old)) => new > old,
+                _ => false,
+            },
+            _ => false,
+        };
+        if higher_revision || later_time {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn list() -> Result<Value, String> {
     list_at(&root_dir()?)
 }
@@ -240,6 +303,15 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
             if existing["status"] == "received" && existing["draft"] == draft {
                 return Ok(existing.clone());
             }
+            if existing
+                .get("supersededBy")
+                .is_some_and(|value| !value.is_null())
+                || newer_archived_request(root, existing)?
+            {
+                return Err(
+                    "더 새로운 SNS 콘텐츠 초안 요청이 있습니다. 최신 요청을 사용하세요.".into(),
+                );
+            }
             if let Some(publication) = existing["publicationId"].as_str() {
                 if requests[index + 1..]
                     .iter()
@@ -276,6 +348,43 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn supersession_is_persisted_on_waiting_request_before_newer_receipt_is_archived() {
+        let root = tempfile::tempdir().unwrap();
+        let publication = Uuid::new_v4().to_string();
+        let first = request_at(
+            root.path(),
+            json!({"topic":"A","publicationId":publication,"revision":1}),
+        )
+        .unwrap();
+        let newer = request_at(
+            root.path(),
+            json!({"topic":"B","publicationId":publication,"revision":2}),
+        )
+        .unwrap();
+        let retained = list_at(root.path()).unwrap();
+        assert_eq!(retained["requests"][0]["supersededBy"], newer["id"]);
+        let reply = json!({"requestId":newer["id"],"revision":2,"title":"새 제목","description":"새 본문","tags":[],"hashtags":[]});
+        let receipt = receive_at(root.path(), reply.clone()).unwrap();
+        access(root.path(), |requests| {
+            for _ in 0..198 {
+                requests.push(json!({"id":Uuid::new_v4().to_string(),"status":"waiting"}));
+            }
+            Ok(())
+        })
+        .unwrap();
+        request_at(root.path(), json!({"topic":"archive trigger"})).unwrap();
+        assert_eq!(
+            archived(root.path(), newer["id"].as_str().unwrap()).unwrap(),
+            Some(receipt.clone())
+        );
+        assert_eq!(receive_at(root.path(), reply).unwrap(), receipt);
+        assert!(receive_at(root.path(),json!({"requestId":first["id"],"revision":1,"title":"늦은 제목","description":"늦은 본문","tags":[],"hashtags":[]})).is_err());
+        let retained = list_at(root.path()).unwrap();
+        assert_eq!(retained["requests"][0]["status"], "waiting");
+        assert_eq!(retained["requests"][0]["supersededBy"], newer["id"]);
+    }
+
     #[test]
     fn sns_revision_and_superseded_request_reject_stale_receipts() {
         let root = tempfile::tempdir().unwrap();

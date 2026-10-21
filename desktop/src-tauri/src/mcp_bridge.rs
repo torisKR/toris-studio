@@ -11,6 +11,11 @@ use std::{
     time::Duration,
 };
 
+// Creation accepts at most 300 KiB of receipt arguments (including a 256 KiB
+// closed draft). Leave room for the JSON-RPC envelope while retaining a strict
+// streaming cap before parsing; discard oversize lines and resume on the next.
+const MAX_MCP_LINE_BYTES: usize = 512 * 1024;
+
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
 }
@@ -289,7 +294,7 @@ pub fn run() {
                 .position(|b| *b == b'\n')
                 .map_or(buffer.len(), |i| i + 1);
             let done = buffer[n - 1] == b'\n';
-            if line.len() + n > 128 * 1024 {
+            if line.len() + n > MAX_MCP_LINE_BYTES {
                 too_large = true;
             } else if !too_large {
                 line.extend_from_slice(&buffer[..n]);
@@ -304,7 +309,7 @@ pub fn run() {
         }
         let response = if too_large {
             Some(
-                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Request exceeds 128 KiB"}}),
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":format!("Request exceeds {} KiB",MAX_MCP_LINE_BYTES/1024)}}),
             )
         } else {
             match serde_json::from_slice(&line) {

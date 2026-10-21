@@ -30,3 +30,14 @@ Backend and packaging owner; frontend, lib.rs lifecycle/registrations, OAuth/pub
 ## Limits
 
 The inbox keeps at most 200 requests and 16 MiB; overflow is rejected without dropping existing user records. This task has no automatic archive/delete behavior. Real ChatGPT/RDC interaction, provider OAuth and physical packaging/install verification are not claimed. Debug builds alone can select an absolute isolated `TORIS_STUDIO_CREATION_TEST_HOME` for actual native stdio fixtures; release builds ignore it.
+
+## Review follow-up: durable SNS supersession and MCP size alignment
+
+The scoped review found two correctness failures, both reproduced with failing regressions before the fixes:
+
+- A waiting SNS request could accept its first late receipt after the newer received request was archived, because the supersession check examined only the active inbox. New request creation now records `supersededBy` on every older waiting request for the same publication. The receipt guard remains after newer records leave the inbox. Existing legacy inboxes without the marker also inspect preserved archived receipts for a higher revision or later creation time. Existing received drafts and exact duplicate retries retain their receipts; no archived content is rewritten or deleted by this check.
+- The native receipt validator accepted a closed draft up to 256 KiB (receipt arguments up to 300 KiB), while the stdio reader rejected lines above 128 KiB. The incremental pre-parse cap is now 512 KiB, allowing the largest accepted receipt plus its JSON-RPC envelope. Oversize lines are discarded without parsing, followed by normal handling of the next complete message. Application limits remain unchanged.
+
+RED: all three initial compiled-stdio regressions failed: archived B allowed A's late receipt; valid 40,000-character emoji text and a maximum bounded 12-scene emoji video hit the 128 KiB cap; oversize diagnostics still reported 128 KiB.
+
+GREEN: the creation integration suite now passes 11 tests. It verifies the archived legacy bypass through the actual compiled `--studio-mcp` executable, successful exact receipt storage for 40,000 Unicode characters and a 12-scene/180-second bounded video larger than 128 KiB, application rejection at 40,001 characters, and transport rejection above 512 KiB followed by successful processing of the next message. A dedicated SNS unit regression verifies the durable marker before/after actual archival and continued idempotence of the archived newer receipt. Focused `--no-default-features --lib chatgpt_drafts::tests` also passes all 5 tests. `git diff --check` passes. All homes are temporary fixtures; this is native stdio evidence, not a real ChatGPT/RDC session.
