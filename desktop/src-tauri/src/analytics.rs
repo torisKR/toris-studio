@@ -131,7 +131,7 @@ fn observation_key(o: &Observation) -> String {
     ]))
 }
 async fn schema_ready(client: &Client) -> Result<bool, String> {
-    let row=db(client.query_one("SELECT to_regclass('analytics_sources') IS NOT NULL AND to_regclass('analytics_jobs') IS NOT NULL AND to_regclass('analytics_previews') IS NOT NULL AND to_regclass('analytics_settings') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='analytics_sources' AND column_name='authorization_expires_at') AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='analytics_observations' AND column_name='verification_expires_at') AS ready",&[]).await)?;
+    let row=db(client.query_one("SELECT to_regclass('analytics_sources') IS NOT NULL AND to_regclass('analytics_jobs') IS NOT NULL AND to_regclass('analytics_previews') IS NOT NULL AND to_regclass('analytics_settings') IS NOT NULL AND to_regclass('analytics_report_owners') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='analytics_sources' AND column_name='authorization_expires_at') AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='analytics_observations' AND column_name='verification_expires_at') AS ready",&[]).await)?;
     Ok(row.get("ready"))
 }
 async fn ensure(client: &Client) -> Result<(), String> {
@@ -139,6 +139,71 @@ async fn ensure(client: &Client) -> Result<(), String> {
         Ok(())
     } else {
         Err(SCHEMA_ERROR.into())
+    }
+}
+/// Preserve manual-report owner identities in the same transaction as a verified binding.
+/// The migration is explicit; a missing alias table must abort the binding transaction.
+pub async fn remember_report_owners(
+    tx: &tokio_postgres::Transaction<'_>,
+    channel_id: &Uuid,
+    platform: &str,
+    next_account_id: &str,
+) -> Result<(), String> {
+    let ready: bool = db(tx
+        .query_one(
+            "SELECT to_regclass('analytics_report_owners') IS NOT NULL",
+            &[],
+        )
+        .await)?
+    .get(0);
+    if !ready {
+        return Err(SCHEMA_ERROR.into());
+    }
+    // Also serializes competing initial binds to the same local channel.
+    db(tx
+        .query_opt(
+            "SELECT id FROM social_channels WHERE id=$1 AND platform=$2 FOR UPDATE",
+            &[channel_id, &platform],
+        )
+        .await)?
+    .ok_or("채널과 플랫폼을 확인하세요.")?;
+    let previous = db(tx
+        .query_opt(
+            "SELECT account_id FROM social_channel_connections WHERE channel_id=$1 AND platform=$2",
+            &[channel_id, &platform],
+        )
+        .await)?
+    .map(|r| r.get::<_, String>(0));
+    for owner in [
+        Some(channel_id.to_string()),
+        previous,
+        Some(next_account_id.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        db(tx.execute("INSERT INTO analytics_report_owners(platform,account_id,channel_id) VALUES($1,$2,$3) ON CONFLICT(platform,account_id) DO NOTHING", &[&platform,&owner,channel_id]).await)?;
+    }
+    Ok(())
+}
+fn channel_filter(input: &Value) -> Result<Option<Uuid>, String> {
+    input["channelId"]
+        .as_str()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| "채널 ID 오류".into())
+}
+async fn validate_report_owner<C: tokio_postgres::GenericClient + Sync>(
+    client: &C,
+    channel: &Uuid,
+    platform: &str,
+    account: &str,
+) -> Result<(), String> {
+    let valid: bool = db(client.query_one("SELECT EXISTS(SELECT 1 FROM social_channels c WHERE c.id=$1 AND c.platform=$2 AND (c.id::text=$3 OR EXISTS(SELECT 1 FROM analytics_report_owners r WHERE r.channel_id=c.id AND r.platform=$2 AND r.account_id=$3)))", &[channel,&platform,&account]).await)?.get(0);
+    if valid {
+        Ok(())
+    } else {
+        Err("이 보고서 소유자는 선택한 채널에 속하지 않습니다.".into())
     }
 }
 async fn cleanup_expired_youtube(client: &Client) -> Result<(), String> {
@@ -189,7 +254,7 @@ async fn apply_youtube_verification(
     Ok(())
 }
 fn source(row: &Row) -> Value {
-    json!({"id":row.get::<_,Uuid>("id").to_string(),"sourceKind":row.get::<_,String>("source_kind"),"platform":row.get::<_,String>("platform"),"accountId":row.get::<_,String>("account_id"),"connectionId":row.get::<_,Option<String>>("connection_id"),"label":row.get::<_,String>("label"),"filename":row.get::<_,Option<String>>("filename"),"digest":row.get::<_,String>("digest"),"status":row.get::<_,String>("status"),"metadata":row.get::<_,Value>("metadata"),"createdAt":row.get::<_,DateTime<Utc>>("created_at").to_rfc3339(),"removedAt":row.get::<_,Option<DateTime<Utc>>>("removed_at").map(|t|t.to_rfc3339()),"authorizationVerifiedAt":row.get::<_,Option<DateTime<Utc>>>("authorization_verified_at").map(|t|t.to_rfc3339()),"authorizationExpiresAt":row.get::<_,Option<DateTime<Utc>>>("authorization_expires_at").map(|t|t.to_rfc3339())})
+    json!({"id":row.get::<_,Uuid>("id").to_string(),"sourceKind":row.get::<_,String>("source_kind"),"platform":row.get::<_,String>("platform"),"accountId":row.get::<_,String>("account_id"),"connectionId":row.get::<_,Option<String>>("connection_id"),"label":row.get::<_,String>("label"),"filename":row.get::<_,Option<String>>("filename"),"digest":row.get::<_,String>("digest"),"status":row.get::<_,String>("status"),"metadata":row.get::<_,Value>("metadata"),"createdAt":row.get::<_,DateTime<Utc>>("created_at").to_rfc3339(),"removedAt":row.get::<_,Option<DateTime<Utc>>>("removed_at").map(|t|t.to_rfc3339()),"authorizationVerifiedAt":row.get::<_,Option<DateTime<Utc>>>("authorization_verified_at").map(|t|t.to_rfc3339()),"authorizationExpiresAt":row.get::<_,Option<DateTime<Utc>>>("authorization_expires_at").map(|t|t.to_rfc3339()),"reportChannelId":row.try_get::<_,Option<Uuid>>("report_channel_id").ok().flatten().map(|id|id.to_string())})
 }
 fn job(row: &Row) -> Value {
     json!({"connectionId":row.get::<_,String>("connection_id"),"platform":row.get::<_,String>("platform"),"accountId":row.get::<_,String>("account_id"),"status":row.get::<_,String>("status"),"lastSyncAt":row.get::<_,Option<DateTime<Utc>>>("last_sync_at").map(|t|t.to_rfc3339()),"nextSyncAt":row.get::<_,DateTime<Utc>>("next_sync_at").to_rfc3339(),"cursor":row.get::<_,Value>("cursor"),"coverage":row.get::<_,Value>("coverage"),"message":row.get::<_,String>("message")})
@@ -223,12 +288,13 @@ async fn sources(config: &AppConfig, input: &Value, history: bool) -> Result<Val
     ensure(&session.client).await?;
     let p = input["platform"].as_str();
     let a = input["accountId"].as_str();
+    let channel = channel_filter(input)?;
     let kind = if history {
         Some("import")
     } else {
         input["sourceKind"].as_str()
     };
-    let rows=db(session.client.query("SELECT * FROM analytics_sources WHERE ($1::text IS NULL OR platform=$1) AND ($2::text IS NULL OR account_id=$2) AND ($3::text IS NULL OR source_kind=$3) AND ($4 OR status='active') ORDER BY created_at DESC LIMIT 500",&[&p,&a,&kind,&history]).await)?;
+    let rows=db(session.client.query("SELECT s.*,r.channel_id AS report_channel_id FROM analytics_sources s LEFT JOIN analytics_report_owners r ON s.source_kind='import' AND r.platform=s.platform AND r.account_id=s.account_id WHERE ($1::text IS NULL OR s.platform=$1) AND ($2::text IS NULL OR s.account_id=$2) AND ($3::text IS NULL OR s.source_kind=$3) AND ($4 OR s.status='active') AND ($5::uuid IS NULL OR (s.source_kind='import' AND (s.account_id=$5::text OR r.channel_id=$5))) ORDER BY s.created_at DESC LIMIT 500",&[&p,&a,&kind,&history,&channel]).await)?;
     Ok(if history {
         json!({"imports":rows.iter().map(source).collect::<Vec<_>>()})
     } else {
@@ -241,6 +307,7 @@ async fn query(config: &AppConfig, input: &Value) -> Result<Value, String> {
     let p = input["platform"].as_str();
     let a = input["accountId"].as_str();
     let c = input["connectionId"].as_str();
+    let channel = channel_filter(input)?;
     let k = input["sourceKind"].as_str();
     let s = input["sourceId"]
         .as_str()
@@ -262,7 +329,7 @@ async fn query(config: &AppConfig, input: &Value) -> Result<Value, String> {
     }
     let limit = input["limit"].as_i64().unwrap_or(300).clamp(1, 1000);
     let offset = input["offset"].as_i64().unwrap_or(0).clamp(0, 1_000_000);
-    let rows=db(session.client.query("SELECT o.id,o.source_id,o.payload,s.authorization_expires_at,o.verification_expires_at FROM analytics_observations o JOIN analytics_sources s ON s.id=o.source_id WHERE s.status='active' AND (s.source_kind<>'api' OR s.platform<>'youtube' OR (s.authorization_expires_at>now() AND (COALESCE(o.payload->>'contentId','')='' OR o.verification_expires_at>now()))) AND ($1::text IS NULL OR s.platform=$1) AND ($2::text IS NULL OR s.account_id=$2) AND ($3::text IS NULL OR s.connection_id=$3) AND ($4::text IS NULL OR s.source_kind=$4) AND ($5::uuid IS NULL OR s.id=$5) AND ($6::text IS NULL OR o.metric=$6) AND ($7::date IS NULL OR o.period_end >= $7) AND ($8::date IS NULL OR o.period_start <= $8) ORDER BY o.period_start DESC,o.updated_at DESC,o.id LIMIT $9 OFFSET $10",&[&p,&a,&c,&k,&s,&m,&from,&to,&(limit+1),&offset]).await)?;
+    let rows=db(session.client.query("SELECT o.id,o.source_id,o.payload,s.authorization_expires_at,o.verification_expires_at,r.channel_id AS report_channel_id FROM analytics_observations o JOIN analytics_sources s ON s.id=o.source_id LEFT JOIN analytics_report_owners r ON s.source_kind='import' AND r.platform=s.platform AND r.account_id=s.account_id WHERE s.status='active' AND (s.source_kind<>'api' OR s.platform<>'youtube' OR (s.authorization_expires_at>now() AND (COALESCE(o.payload->>'contentId','')='' OR o.verification_expires_at>now()))) AND ($1::text IS NULL OR s.platform=$1) AND ($2::text IS NULL OR s.account_id=$2) AND ($3::text IS NULL OR s.connection_id=$3) AND ($4::text IS NULL OR s.source_kind=$4) AND ($5::uuid IS NULL OR s.id=$5) AND ($6::text IS NULL OR o.metric=$6) AND ($7::date IS NULL OR o.period_end >= $7) AND ($8::date IS NULL OR o.period_start <= $8) AND ($11::uuid IS NULL OR (s.source_kind='import' AND (s.account_id=$11::text OR r.channel_id=$11)) OR (s.source_kind='api' AND EXISTS(SELECT 1 FROM social_channel_connections b WHERE b.channel_id=$11 AND b.platform=s.platform AND b.account_id=s.account_id AND b.connection_id::text=s.connection_id))) ORDER BY o.period_start DESC,o.updated_at DESC,o.id LIMIT $9 OFFSET $10",&[&p,&a,&c,&k,&s,&m,&from,&to,&(limit+1),&offset,&channel]).await)?;
     let observations = rows
         .iter()
         .take(limit as usize)
@@ -270,6 +337,9 @@ async fn query(config: &AppConfig, input: &Value) -> Result<Value, String> {
             let mut v = r.get::<_, Value>("payload");
             v["id"] = json!(r.get::<_, Uuid>("id").to_string());
             v["sourceId"] = json!(r.get::<_, Uuid>("source_id").to_string());
+            v["reportChannelId"] = json!(r
+                .get::<_, Option<Uuid>>("report_channel_id")
+                .map(|id| id.to_string()));
             with_deadlines(
                 &mut v,
                 r.get("authorization_expires_at"),
@@ -278,11 +348,23 @@ async fn query(config: &AppConfig, input: &Value) -> Result<Value, String> {
             v
         })
         .collect::<Vec<_>>();
+    let bound = if let Some(channel) = channel {
+        db(session.client.query_opt("SELECT connection_id::text,platform,account_id FROM social_channel_connections WHERE channel_id=$1", &[&channel]).await)?
+            .map(|r| (r.get::<_,String>(0), r.get::<_,String>(1), r.get::<_,String>(2)))
+    } else {
+        None
+    };
     let coverage = jobs(&session.client)
         .await?
         .into_iter()
         .filter(|j| {
-            p.is_none_or(|v| j["platform"] == v)
+            channel.is_none_or(|_| {
+                bound.as_ref().is_some_and(|(conn, platform, account)| {
+                    j["connectionId"] == *conn
+                        && j["platform"] == *platform
+                        && j["accountId"] == *account
+                })
+            }) && p.is_none_or(|v| j["platform"] == v)
                 && a.is_none_or(|v| j["accountId"] == v)
                 && c.is_none_or(|v| j["connectionId"] == v)
         })
@@ -292,6 +374,22 @@ async fn query(config: &AppConfig, input: &Value) -> Result<Value, String> {
     )
 }
 async fn import_preview(config: &AppConfig, input: &Value) -> Result<Value, String> {
+    let channel = channel_filter(input)?;
+    let replacement = input["replaceImportId"]
+        .as_str()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| "교체 출처 ID 오류")?;
+    let session = social::database(config).await?;
+    ensure(&session.client).await?;
+    if let Some(channel) = channel {
+        let p = platform(input)?;
+        let a = required(input, "accountId", 256)?;
+        validate_report_owner(&session.client, &channel, &p, &a).await?;
+        if let Some(replacement) = replacement {
+            db(session.client.query_opt("SELECT id FROM analytics_sources WHERE id=$1 AND source_kind='import' AND status='active' AND platform=$2 AND account_id=$3", &[&replacement,&p,&a]).await)?.ok_or("교체할 활성 수동 보고서가 없습니다.")?;
+        }
+    }
     let preview = import::preview(input)?;
     let can_commit = !preview.observations.is_empty() && preview.errors.is_empty();
     let id = Uuid::new_v4();
@@ -311,9 +409,7 @@ async fn import_preview(config: &AppConfig, input: &Value) -> Result<Value, Stri
     let hash = digest(
         &json!({"platform":input["platform"],"accountId":input["accountId"],"metadata":metadata,"observations":normalized}),
     );
-    let payload = json!({"platform":input["platform"],"accountId":input["accountId"],"label":input["label"].as_str().unwrap_or("가져온 보고서"),"filename":input["filename"],"metadata":metadata,"observations":preview.observations});
-    let session = social::database(config).await?;
-    ensure(&session.client).await?;
+    let payload = json!({"platform":input["platform"],"accountId":input["accountId"],"label":input["label"].as_str().unwrap_or("가져온 보고서"),"filename":input["filename"],"metadata":metadata,"observations":preview.observations,"channelId":channel.map(|id|id.to_string()),"replaceImportId":replacement.map(|id|id.to_string())});
     db(session
         .client
         .execute(
@@ -374,10 +470,22 @@ async fn import_commit(config: &AppConfig, input: &Value) -> Result<Value, Strin
     let hash = row.get::<_, String>("digest");
     let p = required(&payload, "platform", 32)?;
     let a = required(&payload, "accountId", 256)?;
+    let channel = channel_filter(&payload)?;
+    if let Some(channel) = channel {
+        if payload["replaceImportId"].as_str() != input["replaceImportId"].as_str() {
+            return Err("교체 대상이 미리보기와 다릅니다. 다시 검토하세요.".into());
+        }
+        validate_report_owner(&tx, &channel, &p, &a).await?;
+    }
     db(tx
         .query_one(
             "SELECT pg_advisory_xact_lock(hashtext($1))",
-            &[&format!("analytics-import:{p}:{a}")],
+            &[&format!(
+                "analytics-import:{p}:{}",
+                channel
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| a.clone())
+            )],
         )
         .await)?;
     let existing=db(tx.query_opt("SELECT * FROM analytics_sources WHERE source_kind='import' AND platform=$1 AND account_id=$2 AND digest=$3 FOR UPDATE",&[&p,&a,&hash]).await)?;
@@ -390,7 +498,7 @@ async fn import_commit(config: &AppConfig, input: &Value) -> Result<Value, Strin
     }
     let observations: Vec<Observation> = serde_json::from_value(payload["observations"].clone())
         .map_err(|_| "미리보기 데이터 오류")?;
-    let overlaps=db(tx.query("SELECT DISTINCT s.id FROM analytics_sources s JOIN analytics_observations o ON o.source_id=s.id CROSS JOIN jsonb_array_elements($3::jsonb) n WHERE s.source_kind='import' AND s.status='active' AND s.platform=$1 AND s.account_id=$2 AND o.metric=n->>'metric' AND o.period_start <= (n->>'periodEnd')::date AND o.period_end >= (n->>'periodStart')::date AND o.payload->>'timezone'=n->>'timezone' AND o.payload->>'contentId'=n->>'contentId' AND o.payload->'dimensions'=n->'dimensions'",&[&p,&a,&payload["observations"]]).await)?;
+    let overlaps=db(tx.query("SELECT DISTINCT s.id FROM analytics_sources s JOIN analytics_observations o ON o.source_id=s.id CROSS JOIN jsonb_array_elements($3::jsonb) n WHERE s.source_kind='import' AND s.status='active' AND s.platform=$1 AND (($4::uuid IS NULL AND s.account_id=$2) OR ($4::uuid IS NOT NULL AND (s.account_id=$4::text OR EXISTS(SELECT 1 FROM analytics_report_owners r WHERE r.channel_id=$4 AND r.platform=s.platform AND r.account_id=s.account_id)))) AND o.metric=n->>'metric' AND o.period_start <= (n->>'periodEnd')::date AND o.period_end >= (n->>'periodStart')::date AND o.payload->>'timezone'=n->>'timezone' AND o.payload->>'contentId'=n->>'contentId' AND o.payload->'dimensions'=n->'dimensions'",&[&p,&a,&payload["observations"],&channel]).await)?;
     if overlaps
         .iter()
         .any(|r| Some(r.get::<_, Uuid>(0)) != replacement)
@@ -447,13 +555,22 @@ async fn remove_import(config: &AppConfig, input: &Value) -> Result<Value, Strin
     let tx = db(session.client.transaction().await)?;
     let row = db(tx
         .query_opt(
-            "SELECT source_kind FROM analytics_sources WHERE id=$1 FOR UPDATE",
+            "SELECT source_kind,platform,account_id FROM analytics_sources WHERE id=$1 FOR UPDATE",
             &[&id],
         )
         .await)?
     .ok_or("출처를 찾을 수 없습니다.")?;
     if row.get::<_, String>(0) != "import" {
         return Err("API 수집 자료는 가져오기 삭제로 제거할 수 없습니다.".into());
+    }
+    if let Some(channel) = channel_filter(input)? {
+        validate_report_owner(
+            &tx,
+            &channel,
+            &row.get::<_, String>("platform"),
+            &row.get::<_, String>("account_id"),
+        )
+        .await?;
     }
     db(tx
         .execute(

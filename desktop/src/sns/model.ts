@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-export type Observation = { id?:string; sourceId?:string; platform:string; accountId:string; connectionId?:string|null; sourceKind:"api"|"import"; metric:string; definition:string; unit:string; aggregation:"period"|"cumulative"|"snapshot"; periodStart:string; periodEnd:string; timezone:string; contentId:string; dimensions:Record<string,unknown>; value:number|null; status:"available"|"not_returned"|"unavailable"; observedAt:string; apiVersion:string; provenance:Record<string,unknown> };
-export type Source = { id:string; sourceKind:string; platform:string; accountId:string; connectionId?:string|null; label:string; filename:string; digest:string; status:string; metadata:Record<string,unknown>; createdAt:string; removedAt?:string|null };
+export type Observation = { reportChannelId?:string|null;expiresAt?:string|null;authorizationExpiresAt?:string|null;verificationExpiresAt?:string|null; id?:string; sourceId?:string; platform:string; accountId:string; connectionId?:string|null; sourceKind:"api"|"import"; metric:string; definition:string; unit:string; aggregation:"period"|"cumulative"|"snapshot"; periodStart:string; periodEnd:string; timezone:string; contentId:string; dimensions:Record<string,unknown>; value:number|null; status:"available"|"not_returned"|"unavailable"; observedAt:string; apiVersion:string; provenance:Record<string,unknown> };
+export type Source = { reportChannelId?:string|null;id:string; sourceKind:string; platform:string; accountId:string; connectionId?:string|null; label:string; filename:string; digest:string; status:string; metadata:Record<string,unknown>; createdAt:string; removedAt?:string|null };
 export type SyncJob = { connectionId:string; platform:string; accountId:string; status:string; lastSyncAt:string|null; nextSyncAt:string|null; cursor:Record<string,unknown>; coverage:Record<string,unknown>; message:string };
 export type Capability = { platform:string; apiVersion:string; accountRequirement:string; requiredScopes:string[]; metrics:string[]; history:string; latency:string; limitations:string[]; manualOnly:boolean };
 export type AnalyticsStatus = { schemaReady:boolean; migrationRequired:boolean; paused:boolean; jobs:SyncJob[]; capabilities:Capability[]; limits:{maxBytes:number;maxRows:number;maxColumns:number} };
-export type Connection = { connectionId:string; platform:string; accountId:string; accountTitle:string; scopes:string[]; readAuthorized:boolean; publishingAuthorized:boolean; connected:boolean; needsReconnect:boolean };
+export type Connection = { connectionId:string; platform:string; accountId:string; accountTitle:string; scopes:string[]; readAuthorized:boolean; publishingAuthorized:boolean; connected:boolean; needsReconnect:boolean;revocationPending?:boolean };
 export type Binding = { channelId:string; connectionId:string; platform:string; accountId:string };
 export type Connections = { connections:Connection[]; bindings?:Binding[]; warnings:unknown[] };
 export type Mapping = { date?:string;endDate?:string;contentId?:string;metric?:string;value?:string;metrics?:Record<string,string>;dimensions?:Record<string,string> };
@@ -29,4 +29,21 @@ export function csvReport(rows:Observation[]){
  const fields:[string,(r:Observation)=>unknown][]=[["platform",r=>r.platform],["accountId",r=>r.accountId],["source",r=>r.sourceKind],["sourceId",r=>r.sourceId],["metric",r=>r.metric],["definition",r=>r.definition],["value",r=>r.value],["status",r=>r.status],["unit",r=>r.unit],["aggregation",r=>r.aggregation],["periodStart",r=>r.periodStart],["periodEnd",r=>r.periodEnd],["timezone",r=>r.timezone],["contentId",r=>r.contentId],["dimensions",r=>JSON.stringify(r.dimensions)],["observedAt",r=>r.observedAt],["apiVersion",r=>r.apiVersion]];
  const cell=(value:unknown)=>{let text=value==null?"":String(value);if(/^[=+@\-\t\r]/.test(text))text="'"+text;return `"${text.replaceAll('"','""')}"`;};
  return "\ufeff"+[fields.map(([name])=>cell(name)).join(","),...rows.map(row=>fields.map(([,read])=>cell(read(row))).join(","))].join("\r\n");
+}
+
+/** Local report ownership survives changes to the remote OAuth identity. */
+export function scopedObservations(rows:Observation[],channels:{id:string;platform:string}[],bindings:Binding[],filter:{channelId?:string;platform:string;source:string;from:string;to:string},now=Date.now()){
+ const selected=channels.find(c=>c.id===filter.channelId);
+ const owners=selected?[selected]:channels;
+ return rows.filter(row=>{
+  if(filter.platform!=="all"&&row.platform!==filter.platform)return false;
+  if(filter.source!=="all"&&row.sourceKind!==filter.source)return false;
+  if(row.periodEnd<filter.from||row.periodStart>filter.to)return false;
+  if(!owners.some(c=>c.platform===row.platform&&(row.sourceKind==="import"?(row.reportChannelId?row.reportChannelId===c.id:row.accountId===c.id):row.accountId===(bindings.find(b=>b.channelId===c.id)?.accountId??c.id))))return false;
+  if(row.platform==="youtube"&&row.sourceKind==="api"){
+   const deadline=Date.parse(row.expiresAt??"");
+   if(!Number.isFinite(deadline)||deadline<=now)return false;
+  }
+  return true;
+ });
 }

@@ -33,4 +33,5 @@ CREATE TABLE IF NOT EXISTS analytics_jobs (
 ALTER TABLE analytics_sources ADD COLUMN IF NOT EXISTS authorization_verified_at timestamptz;
 ALTER TABLE analytics_sources ADD COLUMN IF NOT EXISTS authorization_expires_at timestamptz;
 ALTER TABLE analytics_observations ADD COLUMN IF NOT EXISTS verification_expires_at timestamptz;
+GRANT SELECT,INSERT,UPDATE,DELETE ON analytics_settings,analytics_sources,analytics_previews,analytics_observations,analytics_jobs TO toris_app;
 INSERT INTO social_schema_migrations(version) VALUES ('010_analytics') ON CONFLICT DO NOTHING;

@@ -456,3 +456,217 @@ async fn youtube_video_deadlines_and_revocation_preserve_manual_and_other_connec
     task.abort();
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires a disposable analytics test PostgreSQL database"]
+async fn report_owner_aliases_survive_binding_rebinding_correction_and_remove_without_leaks(
+) -> Result<(), String> {
+    let _guard = TEST_LOCK.lock().await;
+    let (config, url) = configured()?;
+    let (mut client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+        .await
+        .map_err(|e| e.to_string())?;
+    let task = tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    // Match the application's restricted role. Owner-created migrations must grant
+    // data access without granting schema ownership or DDL privileges.
+    assert_eq!(
+        client
+            .query_one("SELECT current_user", &[])
+            .await
+            .map_err(|e| e.to_string())?
+            .get::<_, String>(0),
+        "toris_app"
+    );
+    let ddl = client
+        .batch_execute("CREATE TABLE analytics_forbidden_ddl_fixture(id integer)")
+        .await
+        .expect_err("app must not create schema objects");
+    assert_eq!(
+        ddl.code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    let connection_id = Uuid::new_v4();
+    let remote_a = format!("old-{}", Uuid::new_v4());
+    let remote_b = format!("next-{}", Uuid::new_v4());
+    for channel in [a, b] {
+        client.execute("INSERT INTO social_channels(id,platform,name,url) VALUES($1,'x','alias fixture','https://x.com/fixture')",&[&channel]).await.map_err(|e|e.to_string())?;
+    }
+    // Historical app versions wrote the original remote account ID into imports.
+    let preview =
+        analytics::dispatch(&config, report(&remote_a, "date,views\n2026-10-01,125\n")).await?;
+    let original = analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":preview["previewId"]}),
+    )
+    .await?;
+    let original_id = original["source"]["id"]
+        .as_str()
+        .ok_or("missing original")?
+        .to_string();
+    // Exercise the same pre-upsert transaction hook as native bindChannel.
+    for owner in [&remote_a, &remote_b] {
+        let tx = client.transaction().await.map_err(|e| e.to_string())?;
+        analytics::remember_report_owners(&tx, &a, "x", owner).await?;
+        tx.execute("INSERT INTO social_channel_connections(channel_id,connection_id,platform,account_id) VALUES($1,$2,'x',$3) ON CONFLICT(channel_id) DO UPDATE SET connection_id=EXCLUDED.connection_id,account_id=EXCLUDED.account_id",&[&a,&connection_id,owner]).await.map_err(|e|e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+    }
+    let history = analytics::dispatch(
+        &config,
+        json!({"action":"importHistory","channelId":a.to_string(),"platform":"x"}),
+    )
+    .await?;
+    assert_eq!(history["imports"].as_array().unwrap().len(), 1);
+    assert_eq!(history["imports"][0]["accountId"], remote_a);
+    assert_eq!(history["imports"][0]["reportChannelId"], a.to_string());
+    let query = analytics::dispatch(
+        &config,
+        json!({"action":"query","channelId":a.to_string(),"sourceKind":"import"}),
+    )
+    .await?;
+    assert_eq!(query["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(query["observations"][0]["value"], 125.);
+    assert_eq!(query["observations"][0]["accountId"], remote_a);
+    assert_eq!(query["observations"][0]["reportChannelId"], a.to_string());
+    // Another channel reuses that exact remote identity. Its report/history must
+    // not inherit A's aliases; new reports still use B's stable local owner.
+    let tx = client.transaction().await.map_err(|e| e.to_string())?;
+    analytics::remember_report_owners(&tx, &b, "x", &remote_a).await?;
+    tx.execute("INSERT INTO social_channel_connections(channel_id,connection_id,platform,account_id) VALUES($1,$2,'x',$3)",&[&b,&connection_id,&remote_a]).await.map_err(|e|e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    let mut other_input = report(&b.to_string(), "date,views\n2026-10-01,999\n");
+    other_input["channelId"] = json!(b.to_string());
+    let other = analytics::dispatch(&config, other_input).await?;
+    analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":other["previewId"]}),
+    )
+    .await?;
+    let other_rows = analytics::dispatch(
+        &config,
+        json!({"action":"query","channelId":b.to_string(),"sourceKind":"import"}),
+    )
+    .await?;
+    assert_eq!(other_rows["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(other_rows["observations"][0]["value"], 999.);
+    let mut wrong = report(&remote_a, "date,views\n2026-10-01,888\n");
+    wrong["channelId"] = json!(b.to_string());
+    wrong["replaceImportId"] = json!(original_id);
+    assert!(analytics::dispatch(&config, wrong).await.is_err());
+    assert!(analytics::dispatch(
+        &config,
+        json!({"action":"importRemove","channelId":b.to_string(),"sourceId":original_id})
+    )
+    .await
+    .is_err());
+    // Select the historical source before preview. Its original owner is pinned,
+    // and an altered replacement ID at commit is rejected without any mutation.
+    let mut correction = report(&remote_a, "date,views\n2026-10-01,130\n");
+    correction["channelId"] = json!(a.to_string());
+    correction["replaceImportId"] = json!(original_id);
+    let reviewed = analytics::dispatch(&config, correction).await?;
+    assert!(analytics::dispatch(
+        &config,
+        json!({"action":"importCommit","previewId":reviewed["previewId"]})
+    )
+    .await
+    .is_err());
+    assert!(analytics::dispatch(&config,json!({"action":"importCommit","previewId":reviewed["previewId"],"replaceImportId":other_rows["observations"][0]["sourceId"]})).await.is_err());
+    let corrected=analytics::dispatch(&config,json!({"action":"importCommit","previewId":reviewed["previewId"],"replaceImportId":original_id})).await?;
+    assert_eq!(corrected["source"]["accountId"], remote_a);
+    let history = analytics::dispatch(
+        &config,
+        json!({"action":"importHistory","channelId":a.to_string()}),
+    )
+    .await?;
+    let sources = history["imports"].as_array().unwrap();
+    assert_eq!(sources.len(), 2);
+    assert_eq!(
+        sources.iter().filter(|s| s["status"] == "active").count(),
+        1
+    );
+    assert_eq!(
+        sources.iter().filter(|s| s["status"] == "replaced").count(),
+        1
+    );
+    let query = analytics::dispatch(
+        &config,
+        json!({"action":"query","channelId":a.to_string(),"sourceKind":"import"}),
+    )
+    .await?;
+    assert_eq!(query["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(query["observations"][0]["value"], 130.);
+    assert_eq!(
+        query["observations"][0]["definition"],
+        "X report original views"
+    );
+    assert_eq!(query["observations"][0]["timezone"], "Asia/Seoul");
+    assert_eq!(query["observations"][0]["periodStart"], "2026-10-01");
+    analytics::dispatch(&config,json!({"action":"importRemove","channelId":a.to_string(),"sourceId":corrected["source"]["id"]})).await?;
+    assert!(analytics::dispatch(
+        &config,
+        json!({"action":"query","channelId":a.to_string(),"sourceKind":"import"})
+    )
+    .await?["observations"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let history = analytics::dispatch(
+        &config,
+        json!({"action":"importHistory","channelId":a.to_string()}),
+    )
+    .await?;
+    assert_eq!(history["imports"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        history["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["status"] == "removed")
+            .count(),
+        1
+    );
+    // Deleting a local channel must not make its retained original identities
+    // available to be claimed by a different channel later.
+    client
+        .execute("DELETE FROM social_channels WHERE id=$1", &[&a])
+        .await
+        .map_err(|e| e.to_string())?;
+    let tx = client.transaction().await.map_err(|e| e.to_string())?;
+    analytics::remember_report_owners(&tx, &b, "x", &remote_a).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    let retained = client
+        .query_one(
+            "SELECT channel_id FROM analytics_report_owners WHERE platform='x' AND account_id=$1",
+            &[&remote_a],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    assert_eq!(retained.get::<_, Uuid>(0), a);
+    let after_delete = analytics::dispatch(
+        &config,
+        json!({"action":"importHistory","channelId":b.to_string()}),
+    )
+    .await?;
+    assert_eq!(after_delete["imports"].as_array().unwrap().len(), 1);
+    client
+        .execute(
+            "DELETE FROM analytics_sources WHERE platform='x' AND account_id=ANY($1)",
+            &[&vec![remote_a, b.to_string()]],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    client
+        .execute(
+            "DELETE FROM social_channels WHERE id=ANY($1)",
+            &[&vec![a, b]],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    drop(client);
+    let _ = task.await;
+    Ok(())
+}
