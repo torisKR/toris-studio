@@ -18,7 +18,7 @@ try {
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 UI 검증' } };
-    if (command === 'codexify_connection_get') return { mcpUrl: '', pluginUrl: '', conversationUrl: '', projectRoot: '', conversationId: '' };
+    if (command === 'ai_status') return { providers: [], contentModel: null, agentModel: null, image: null };
     if (command === 'video_list_projects') return [];
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false };
     if (command === 'set_main_activity') return null;

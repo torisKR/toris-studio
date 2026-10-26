@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BridgeInvoke } from "./codexify-client";
+import type { BridgeInvoke } from "./ai-client";
 
 export const PUBLISH_PLATFORMS = ["youtube", "instagram", "facebook", "threads", "tiktok"] as const;
 export type PublishPlatform = typeof PUBLISH_PLATFORMS[number] | "naver_blog";

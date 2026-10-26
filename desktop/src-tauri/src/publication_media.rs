@@ -419,6 +419,29 @@ impl Drop for MediaLease {
         }
     }
 }
+/// The bundled sidecar sits next to the app executable; debug builds may use a local install.
+pub(crate) fn cloudflared_binary() -> Option<std::path::PathBuf> {
+    let name = if cfg!(windows) {
+        "cloudflared.exe"
+    } else {
+        "cloudflared"
+    };
+    let sibling = std::env::current_exe().ok()?.parent()?.join(name);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+    if cfg!(debug_assertions) {
+        let mut candidates = vec![
+            std::path::PathBuf::from("/opt/homebrew/bin").join(name),
+            std::path::PathBuf::from("/usr/local/bin").join(name),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join(".cloudflared/bin").join(name));
+        }
+        return candidates.into_iter().find(|p| p.is_file());
+    }
+    None
+}
 /// The bundled cloudflared is built with Go 1.27, which requires macOS 13.
 const CLOUDFLARED_MIN_MACOS: u32 = 13;
 fn tunnel_os_supported() -> bool {
@@ -444,8 +467,8 @@ pub async fn lease(video: &str, thumbnail: Option<&str>) -> Result<MediaLease, S
             "Threads 영상과 썸네일 포함 Instagram 게시는 macOS {CLOUDFLARED_MIN_MACOS} 이상에서 사용할 수 있습니다."
         ));
     }
-    let executable = crate::codexify_proxy::cloudflared_binary()
-        .ok_or("앱에 포함된 cloudflared 실행 파일을 찾을 수 없습니다.")?;
+    let executable =
+        cloudflared_binary().ok_or("앱에 포함된 cloudflared 실행 파일을 찾을 수 없습니다.")?;
     let configuration = tempfile::NamedTempFile::new().map_err(|_| "미디어 터널 설정 준비 실패")?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
     let mut files = HashMap::new();

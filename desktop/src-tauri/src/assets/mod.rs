@@ -304,7 +304,7 @@ fn ingest(store: &mut Store, input: &Value) -> Result<Value, String> {
     fs::rename(temp.path(), &destination).map_err(err)?;
     let now = Utc::now().to_rfc3339();
     let source = input["source"].as_str().unwrap_or("imported");
-    if !["chatgpt", "imported", "procedural", "converted"].contains(&source) {
+    if !["ai", "chatgpt", "imported", "procedural", "converted"].contains(&source) {
         let _ = fs::remove_dir_all(&destination);
         return Err("지원하지 않는 에셋 출처입니다.".into());
     }

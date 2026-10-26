@@ -36,10 +36,6 @@ const knownRecipe = id => fixtures.catalog.some(item => item.id === id);
 let releaseOldPreview;
 let holdOldPreview = true;
 let cancelExport = true;
-const profile = {
-  mcpUrl: 'https://isolated.invalid/mcp', pluginUrl: 'https://chatgpt.com/plugins/qa-studio',
-  conversationUrl: '', projectRoot: `${output}/fixture-project`, conversationId: 'qa-conversation',
-};
 const server = await createServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } });
 await server.listen();
 let browser, page;
@@ -52,7 +48,8 @@ try {
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args: clone(args) });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 템플릿 UI 검증' } };
-    if (command === 'codexify_connection_get') return clone(profile);
+    if (command === 'ai_status') return { providers: [{ id: 'codex-cli', label: 'Codex CLI', kind: 'subscription', available: true, detail: 'QA', suggestedModels: [] }], contentModel: { provider: 'codex-cli', model: '' }, agentModel: null, image: null };
+    if (command === 'ai_generate') return { text: '```json\n{"title":"AI 초안 QA","scenes":[]}\n```', provider: 'codex-cli', model: '' };
     if (command === 'video_list_projects') return clone([...savedProjects.values()]);
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false, ttsConfigured: false, dataPath: '격리된 메모리 프로젝트 저장소', renderer: 'fixture only' };
     if (command === 'set_main_activity') return null;
@@ -91,9 +88,6 @@ try {
       if (cancelExport) { cancelExport = false; return null; }
       return `${output}/fixture-export.${args.format === 'markdown' ? 'md' : 'json'}`;
     }
-    if (command === 'codexify_chats') return { chats: [{ id: profile.conversationId, title: 'Isolated fixture chat', workspace: 'fixture-project', projectMatches: true }], serverTimeMs: Date.now() };
-    if (command === 'codexify_chat_read') return { messages: [], revision: 'qa', delivered_through: 0, read_through: 0, agent_waiting_until_ms: null, server_time_ms: Date.now(), has_more: false, before: null, unchanged: false };
-    if (command === 'codexify_chat_send') return { sent: { id: 'qa-receipt', end: 1, created_at_ms: Date.now(), tool_call_count: 0 } };
     unexpected.push(command);
     throw new Error(`Unexpected native operation in isolated template UI test: ${command}`);
   });
@@ -309,12 +303,15 @@ try {
   await allView.click();
   await selectCard(2).click(); await ready(); await topic.fill(newTopic); await ready();
   const saveCount = calls.filter(call => call.command === 'video_save_project').length;
-  await page.getByRole('button', { name: 'ChatGPT에 영상 초안 요청', exact: true }).click();
-  await page.getByText('요청을 저장했습니다. ChatGPT 대화에서 시작·재개한 뒤 응답 JSON을 가져오세요.', { exact: true }).waitFor();
-  const send = calls.findLast(call => call.command === 'codexify_chat_send');
-  assert.ok(send?.args.input.message.includes(fixtures.catalog[2].id), 'mock ChatGPT request carries the selected recipe id');
-  assert.ok(send.args.input.message.includes(newTopic));
-  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'chat receipt must not be presented as a newly generated or saved project');
+  await page.getByRole('button', { name: 'AI로 영상 초안 만들기', exact: true }).click();
+  await page.getByText('AI가 영상 초안 JSON을 만들었습니다. 내용을 검토한 뒤 가져오기로 저장하세요.', { exact: true }).waitFor();
+  const send = calls.findLast(call => call.command === 'ai_generate');
+  assert.ok(send?.args.input.prompt.includes(fixtures.catalog[2].id), 'AI request carries the selected recipe id');
+  assert.ok(send.args.input.prompt.includes(newTopic));
+  const keepEditing = page.getByRole('button', { name: '계속 편집', exact: true });
+  if (await keepEditing.isVisible()) await keepEditing.click();
+  else { assert.match(await page.locator('dialog[open] textarea').inputValue(), /"title": "AI 초안 QA"/); await page.getByRole('button', { name: 'JSON 가져오기 닫기', exact: true }).click(); }
+  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'AI output is reviewed in the import dialog, never saved automatically');
   assert.equal(savedProjects.size, 1);
   assert.equal(await editorTitle.inputValue(), newTopic);
   await editorTitle.fill('현재 편집을 내보내는 영상 QA');

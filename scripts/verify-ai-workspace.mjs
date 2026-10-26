@@ -8,7 +8,7 @@ const out=resolve('/private/tmp/toris-ai-workspace-ui');await mkdir(out,{recursi
 const trend={id:'source-1',source:'youtube',keyword:'AI 생산성',title:'반복 업무를 줄이는 로컬 AI',url:'https://www.youtube.com/watch?v=abcdefghijk',metric:null,region:'KR',publishedAt:null,fetchedAt:'2026-10-09T00:00:00Z',details:{discovery:'youtube_keyword',description:'제공된 원본 설명: 작은 업무부터 자동화하세요.'}};
 const items=[{trend,matches:[],observedKeywords:[{keyword:'로컬 자동화',source:'youtube',observedAt:trend.fetchedAt}],extractedKeywords:[{keyword:'반복 업무',score:2,occurrences:1}]}];
 let clipboard='',keywordReads=0;
-let connectionProfile={mcpUrl:'http://127.0.0.1:21228/mcp',pluginUrl:'https://chatgpt.com/plugins/plugin_qa',conversationUrl:'',projectRoot:'/tmp/qa-studio',conversationId:''};
+let generated=[];
 let dashboardConnected=true,keywordItems=items,delayNextDashboard=false,delayNextKeywordRead=false,resolveDashboardRead,resolveKeywordRead;
 const report={adapter:'Chromium with explicit IPC fixtures; no model, OAuth or publishing calls',checks:[],errors:[]};
 const server=await createServer({configFile:resolve('desktop/vite.config.ts'),server:{port:0,strictPort:false}});await server.listen();
@@ -32,12 +32,9 @@ try {
   if(command==='get_keyword_runs')return [];
   if(command==='get_content_keywords')return items[0];
   if(command==='copy_text'){clipboard=args.text;return;}
-  if(command==='codexify_connection_get')return {...connectionProfile};
-  if(command==='codexify_connection_save'){connectionProfile={...args.input};return {...connectionProfile};}
-  if(command==='codexify_chats')return {chats:[],serverTimeMs:1000};
-  if(command==='codexify_connection_check')return {reachable:true,serverName:'QA fixture',protocolVersion:'2025-11-25',fileReceiverReady:true,ownerReady:true,toolCount:64,studioTools:['toris_studio_receive_file'],missingStudioTools:[],checkedAt:'2026-10-20T00:00:00Z',message:'QA bridge fixture'};
+  if(command==='ai_status')return {providers:[{id:'codex-cli',label:'Codex CLI',kind:'subscription',available:true,detail:'QA fixture',suggestedModels:[]}],contentModel:{provider:'codex-cli',model:''},agentModel:null,image:null};
+  if(command==='ai_generate'){generated.push(args.input.prompt);return {text:'QA 모델이 쓴 초안 (실제 생성물 아님)',provider:'codex-cli',model:''};}
   if(command==='open_external')return null;
-  if(command==='codexify_chat_read')return {messages:[{role:'agent',markdown:'실제 생성물이 아닌 ChatGPT QA 응답'}],server_time_ms:1000};
   if(command==='integration_status')return {oauth:{providers:[]},mcp:{lastToolCallAt:null,lastFileReceivedAt:null,chatgptLoginVerified:false},mcpConfig:{mcpServers:{'toris-studio':{command:'/Applications/Toris Studio.app/Contents/MacOS/toris-studio-desktop',args:['--studio-mcp']}}},lastUpload:null,version:'0.1.14'};
   throw new Error(`QA: unsupported IPC ${command}`);
  });
@@ -62,16 +59,16 @@ try {
  assert.equal(await page.getByLabel('참고 자료와 맥락',{exact:false}).inputValue(),'직접 적은 맥락을 보존합니다.');
  await page.getByRole('button',{name:'선택한 키워드를 주제와 자료로 사용',exact:true}).click();
  assert.equal(await page.locator('.ai-reference-item').count(),1);
- await page.getByRole('button',{name:'요청 복사·ChatGPT 열기',exact:true}).click();
- assert.match(clipboard,/직접 적은 맥락/);assert.match(clipboard,/abcdefghijk/);assert.match(clipboard,/Codexify/);
- report.checks.push('Keyword-to-topic + evidence selection, deduplication, manual context preservation, Codexify ChatGPT handoff');
+ await page.getByRole('button',{name:'요청 복사',exact:true}).click();
+ assert.match(clipboard,/직접 적은 맥락/);assert.match(clipboard,/abcdefghijk/);assert.doesNotMatch(clipboard,/Codexify/);
+ report.checks.push('Keyword-to-topic + evidence selection, deduplication, manual context preservation, request copy');
  assert.equal(await page.locator('.ai-trend-summary li').count(),6);
  await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:resolve(out,'ai-workspace-desktop.png'),fullPage:true});
- await page.getByRole('button',{name:'ChatGPT 최근 응답 가져오기',exact:true}).click();
- await page.waitForFunction(()=>document.querySelector('#social-ai-manual-output')?.value === '실제 생성물이 아닌 ChatGPT QA 응답');
- assert.equal(await page.getByLabel('ChatGPT 결과 붙여넣기·편집',{exact:true}).inputValue(),'실제 생성물이 아닌 ChatGPT QA 응답');
- assert.equal(await page.getByRole('button',{name:'AI로 작성',exact:true}).count(),0);
- report.checks.push('ChatGPT actual owner-chat reply import stays editable; direct AI provider generation button removed');
+ await page.getByRole('button',{name:'AI로 작성',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#social-ai-manual-output')?.value === 'QA 모델이 쓴 초안 (실제 생성물 아님)');
+ assert.equal(generated.length,1);assert.match(generated[0],/직접 적은 맥락/);
+ assert.equal(await page.getByLabel('결과 확인·편집',{exact:true}).inputValue(),'QA 모델이 쓴 초안 (실제 생성물 아님)');
+ report.checks.push('AI로 작성 sends the composed brief to the selected model and the reply stays editable');
  await page.getByRole('button',{name:'참고자료 해제: 반복 업무를 줄이는 로컬 AI',exact:true}).click();
  assert.equal(await page.locator('.ai-reference-item').count(),0);
  await page.getByRole('button',{name:'반복 업무 · 추출 키워드',exact:true}).click();
@@ -119,13 +116,12 @@ try {
  report.checks.push('DB disconnect during a delayed keyword read clears discovery busy state; stale response is ignored and reconnect reloads fresh keywords');
  await page.getByLabel('참고 자료와 맥락',{exact:false}).fill('가'.repeat(5900));
  await page.locator('.ai-context-budget.error').waitFor();
- assert.equal(await page.getByRole('button',{name:'요청 복사·ChatGPT 열기',exact:true}).isDisabled(),true);
- assert.equal(await page.getByRole('button',{name:'연결된 대화에 보내기',exact:true}).isDisabled(),true);
+ assert.equal(await page.getByRole('button',{name:'요청 복사',exact:true}).isDisabled(),true);
+ assert.equal(await page.getByRole('button',{name:'AI로 작성',exact:true}).isDisabled(),true);
  await page.getByLabel('참고 자료와 맥락',{exact:false}).fill('직접 적은 맥락을 보존합니다.');
  report.checks.push('Oversized combined context blocks both providers without erasing manual input; animation pause works independently of execution');
  await page.setViewportSize({width:820,height:800});await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:resolve(out,'ai-workspace-narrow.png'),fullPage:true});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
- report.checks.push('Codexify direct configuration interaction verified by dedicated verify-codexify-ui.mjs');
  await page.getByRole('button',{name:'AI 작업실',exact:true}).click();
  await page.getByLabel('참고 자료와 맥락',{exact:false}).fill('가'.repeat(5900));
  await page.locator('.ai-context-budget.error').waitFor();
@@ -133,8 +129,8 @@ try {
  await page.getByRole('button',{name:'패턴 리포트',exact:true}).click();
  assert.match(await page.getByLabel('참고 자료와 맥락',{exact:false}).inputValue(),/원본 수치/);
  assert.ok((await page.getByLabel('참고 자료와 맥락',{exact:false}).inputValue()).length<=6000);
- assert.equal(await page.getByRole('button',{name:'연결된 대화에 보내기',exact:true}).isDisabled(),false);
- report.checks.push('Explicit trend pattern report prepares a bounded ChatGPT brief and preserves manual request approval');
+ assert.equal(await page.getByRole('button',{name:'AI로 작성',exact:true}).isDisabled(),false);
+ report.checks.push('Explicit trend pattern report prepares a bounded AI brief and waits for an explicit request');
  assert.deepEqual(report.errors,[]);report.passed=true;report.keywordReads=keywordReads;
  console.log(JSON.stringify(report,null,2));
 } finally {await writeFile(resolve(out,'verification.json'),JSON.stringify(report,null,2));await browser.close();await server.close();}

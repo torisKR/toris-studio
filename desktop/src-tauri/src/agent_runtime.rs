@@ -1,0 +1,525 @@
+//! Host for the bundled LangGraph agent runtime (Node, JSONL over stdio).
+//! Rust owns the process, the OS-vault API keys and the only bridge to the UI.
+//! The runtime never opens a network port; the UI never talks to it directly.
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, Command},
+    sync::{oneshot, Mutex},
+};
+
+const KEY_SERVICE: &str = "kr.toris.studio.agent.v1";
+pub const KEY_PROVIDERS: [&str; 4] = ["anthropic", "openai", "google", "openrouter"];
+pub const CHROMA_URL: &str = "http://127.0.0.1:18765";
+const READY_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_LINE: usize = 4 * 1024 * 1024;
+/// Methods the UI may call. Anything else (e.g. `configure`) is host-only.
+pub const UI_METHODS: [&str; 14] = [
+    "status",
+    "models.list",
+    "projects.list",
+    "index.status",
+    "index.build",
+    "index.cancel",
+    "search",
+    "run.start",
+    "run.resume",
+    "run.cancel",
+    "run.list",
+    "run.get",
+    "complete",
+    "image",
+];
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelChoice {
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSettings {
+    pub projects_root: String,
+    pub ollama_url: String,
+    pub agent_model: Option<ModelChoice>,
+    pub content_model: Option<ModelChoice>,
+    pub image: Option<ModelChoice>,
+    pub embedding: ModelChoice,
+}
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            projects_root: dirs::home_dir()
+                .unwrap_or_default()
+                .join("projects")
+                .to_string_lossy()
+                .into_owned(),
+            ollama_url: "http://127.0.0.1:11434".into(),
+            agent_model: None,
+            content_model: None,
+            image: None,
+            embedding: ModelChoice {
+                provider: "local".into(),
+                model: String::new(),
+            },
+        }
+    }
+}
+
+fn settings_path() -> PathBuf {
+    crate::config::config_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join("agent-settings.json")
+}
+pub fn load_settings() -> Result<AgentSettings, String> {
+    match std::fs::read(settings_path()) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|_| "Agent 설정 파일 형식이 올바르지 않습니다.".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AgentSettings::default()),
+        Err(_) => Err("Agent 설정을 읽지 못했습니다.".into()),
+    }
+}
+pub fn validate_settings(settings: &AgentSettings) -> Result<(), String> {
+    if !Path::new(&settings.projects_root).is_absolute() {
+        return Err("프로젝트 폴더는 절대 경로여야 합니다.".into());
+    }
+    let url = url::Url::parse(&settings.ollama_url).map_err(|_| "Ollama 주소를 확인하세요.")?;
+    if url.scheme() != "http" || !matches!(url.host_str(), Some("127.0.0.1" | "localhost")) {
+        return Err("Ollama는 http://127.0.0.1 주소만 사용할 수 있습니다.".into());
+    }
+    for choice in [
+        &settings.agent_model,
+        &settings.content_model,
+        &settings.image,
+    ]
+    .into_iter()
+    .flatten()
+    .chain(std::iter::once(&settings.embedding))
+    {
+        if choice.provider.len() > 40 || choice.model.len() > 200 || choice.model.contains('\n') {
+            return Err("모델 설정을 확인하세요.".into());
+        }
+    }
+    Ok(())
+}
+pub fn save_settings(settings: &AgentSettings) -> Result<(), String> {
+    validate_settings(settings)?;
+    crate::config::prepare_portable_data()?;
+    let path = settings_path();
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(
+        &temp,
+        serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?,
+    )
+    .map_err(|_| "Agent 설정 저장 실패")?;
+    std::fs::rename(&temp, &path).map_err(|_| "Agent 설정 저장 실패".to_string())
+}
+
+fn key_account(provider: &str) -> Result<&'static str, String> {
+    KEY_PROVIDERS
+        .into_iter()
+        .find(|p| *p == provider)
+        .ok_or_else(|| "API 키 공급자를 확인하세요.".to_string())
+}
+pub fn read_key(provider: &str) -> Result<Option<String>, String> {
+    let account = key_account(provider)?;
+    #[cfg(target_os = "macos")]
+    return crate::vault::read(KEY_SERVICE, account);
+    #[cfg(not(target_os = "macos"))]
+    match keyring::Entry::new(KEY_SERVICE, account).and_then(|e| e.get_password()) {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err(crate::vault::error()),
+    }
+}
+pub fn write_key(provider: &str, value: Option<&str>) -> Result<(), String> {
+    let account = key_account(provider)?;
+    if let Some(value) = value {
+        if value.len() > 1000 || value.chars().any(char::is_control) {
+            return Err("API 키 형식을 확인하세요.".into());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    return match value {
+        Some(value) => crate::vault::write(KEY_SERVICE, account, value),
+        None => crate::vault::delete(KEY_SERVICE, account),
+    };
+    #[cfg(not(target_os = "macos"))]
+    {
+        let entry = keyring::Entry::new(KEY_SERVICE, account).map_err(|_| crate::vault::error())?;
+        match value {
+            Some(value) => entry.set_password(value).map_err(|_| crate::vault::error()),
+            None => match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => Err(crate::vault::error()),
+            },
+        }
+    }
+}
+pub fn keys() -> Result<HashMap<&'static str, String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let values = crate::vault::read_many(KEY_SERVICE, &KEY_PROVIDERS)?;
+        Ok(KEY_PROVIDERS
+            .into_iter()
+            .zip(values)
+            .filter_map(|(k, v)| v.filter(|v| !v.is_empty()).map(|v| (k, v)))
+            .collect())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut out = HashMap::new();
+        for provider in KEY_PROVIDERS {
+            if let Some(value) = read_key(provider)? {
+                out.insert(provider, value);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Directories searched for node and subscription CLIs (Finder/Explorer launches lack shell PATH).
+pub fn search_path() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let mut dirs = vec![
+        home.join(".local/bin"),
+        home.join(".npm-global/bin"),
+        home.join(".volta/bin"),
+        home.join(".bun/bin"),
+        home.join(".cargo/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(appdata).join("npm"));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    dirs.into_iter().filter(|d| d.is_absolute()).collect()
+}
+
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
+pub fn bundle_path() -> Option<PathBuf> {
+    let dir = exe_dir()?;
+    let mut candidates = vec![
+        dir.join("../Resources/agent-runtime/agent.mjs"),
+        dir.join("agent-runtime/agent.mjs"),
+    ];
+    if cfg!(debug_assertions) {
+        candidates.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/agent-runtime/agent.mjs"),
+        );
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+/// Prefer the app's bundled Node (shipped for the Studio browser), then a user install.
+pub fn node_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    let dir = exe_dir()?;
+    let bundled = if cfg!(target_os = "macos") {
+        dir.join("../Helpers/studio-browser").join(name)
+    } else {
+        dir.join("studio-browser").join(name)
+    };
+    std::iter::once(bundled)
+        .chain(search_path().into_iter().map(|d| d.join(name)))
+        .find(|p| p.is_file())
+}
+
+type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
+pub type Emitter = Arc<dyn Fn(Value) + Send + Sync>;
+
+struct Process {
+    child: Child,
+    stdin: ChildStdin,
+}
+
+pub struct AgentRuntime {
+    starting: Mutex<()>,
+    process: Mutex<Option<Process>>,
+    pending: Pending,
+    next_id: AtomicU64,
+    emitter: std::sync::RwLock<Option<Emitter>>,
+}
+impl Default for AgentRuntime {
+    fn default() -> Self {
+        Self {
+            starting: Mutex::new(()),
+            process: Mutex::new(None),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU64::new(1),
+            emitter: std::sync::RwLock::new(None),
+        }
+    }
+}
+pub fn shared() -> Arc<AgentRuntime> {
+    Arc::new(AgentRuntime::default())
+}
+
+/// Full configuration including secrets; sent only over the child's stdin.
+pub fn runtime_config(settings: &AgentSettings) -> Result<Value, String> {
+    let keys = keys()?;
+    let image = settings.image.as_ref().filter(|c| !c.provider.is_empty());
+    Ok(json!({
+        "projectsRoot": settings.projects_root,
+        "chromaUrl": CHROMA_URL,
+        "searchPath": search_path(),
+        "keys": keys,
+        "ollamaUrl": settings.ollama_url,
+        "agentModel": settings.agent_model.as_ref().filter(|c| !c.provider.is_empty()),
+        "contentModel": settings.content_model.as_ref().filter(|c| !c.provider.is_empty()),
+        "image": image,
+        "embedding": settings.embedding,
+    }))
+}
+
+impl AgentRuntime {
+    pub fn set_emitter(&self, emitter: Emitter) {
+        if let Ok(mut slot) = self.emitter.write() {
+            *slot = Some(emitter);
+        }
+    }
+    fn emit(&self, value: Value) {
+        if let Some(emitter) = self.emitter.read().ok().and_then(|e| e.clone()) {
+            emitter(value);
+        }
+    }
+
+    pub async fn running(&self) -> bool {
+        let mut guard = self.process.lock().await;
+        match guard.as_mut() {
+            Some(p) => matches!(p.child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
+
+    async fn spawn(self: &Arc<Self>) -> Result<(), String> {
+        let node = node_path().ok_or("Node.js를 찾을 수 없습니다. Node 22 이상을 설치하세요.")?;
+        let bundle = bundle_path().ok_or("에이전트 런타임 파일이 없습니다. `pnpm agent:build`를 실행하거나 앱을 다시 설치하세요.")?;
+        let mut command = Command::new(&node);
+        command
+            .arg("--disable-warning=ExperimentalWarning")
+            .arg(&bundle)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        for key in [
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "LANG",
+            "LC_ALL",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "SYSTEMROOT",
+            "WINDIR",
+            "USERPROFILE",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "PATHEXT",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command.env(
+            "PATH",
+            std::env::join_paths(search_path()).unwrap_or_default(),
+        );
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000);
+        let mut child = command
+            .spawn()
+            .map_err(|_| "에이전트 런타임을 시작하지 못했습니다.")?;
+        let stdin = child.stdin.take().ok_or("런타임 입력 연결 실패")?;
+        let stdout = child.stdout.take().ok_or("런타임 출력 연결 실패")?;
+        let (ready_tx, ready_rx) = oneshot::channel::<()>();
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ready = Some(ready_tx);
+            let mut lines = BufReader::with_capacity(64 * 1024, stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.len() > MAX_LINE {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if let Some(id) = value["id"].as_str() {
+                    if let Some(tx) = this.pending.lock().await.remove(id) {
+                        let result = if value["ok"] == true {
+                            Ok(value["result"].clone())
+                        } else {
+                            Err(value["error"]
+                                .as_str()
+                                .unwrap_or("에이전트 요청 실패")
+                                .to_string())
+                        };
+                        let _ = tx.send(result);
+                    }
+                } else if value["event"] == "ready" {
+                    if let Some(tx) = ready.take() {
+                        let _ = tx.send(());
+                    }
+                } else if value["event"].is_string() {
+                    this.emit(value);
+                }
+            }
+            // Process ended: fail every waiter instead of hanging the UI.
+            for (_, tx) in this.pending.lock().await.drain() {
+                let _ = tx.send(Err(
+                    "에이전트 런타임이 종료되었습니다. 다시 시도하세요.".into()
+                ));
+            }
+            this.emit(json!({"event":"runtime","state":"stopped"}));
+        });
+        tokio::time::timeout(READY_TIMEOUT, ready_rx)
+            .await
+            .map_err(|_| "에이전트 런타임 시작 시간이 초과되었습니다.")?
+            .map_err(|_| "에이전트 런타임이 바로 종료되었습니다. Node 버전을 확인하세요.")?;
+        *self.process.lock().await = Some(Process { child, stdin });
+        let config = runtime_config(&load_settings()?)?;
+        self.send("configure", config, Duration::from_secs(10))
+            .await?;
+        self.emit(json!({"event":"runtime","state":"running"}));
+        Ok(())
+    }
+
+    async fn ensure(self: &Arc<Self>) -> Result<(), String> {
+        let _starting = self.starting.lock().await;
+        if !self.running().await {
+            *self.process.lock().await = None;
+            self.spawn().await?;
+        }
+        Ok(())
+    }
+
+    async fn send(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id.clone(), tx);
+        let mut line = serde_json::to_vec(&json!({"id":id,"method":method,"params":params}))
+            .map_err(|e| e.to_string())?;
+        line.push(b'\n');
+        {
+            let mut guard = self.process.lock().await;
+            let process = guard
+                .as_mut()
+                .ok_or("에이전트 런타임이 실행 중이 아닙니다.")?;
+            if process.stdin.write_all(&line).await.is_err() || process.stdin.flush().await.is_err()
+            {
+                self.pending.lock().await.remove(&id);
+                return Err("에이전트 런타임에 요청을 보내지 못했습니다.".into());
+            }
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("에이전트 응답이 끊겼습니다.".into()),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                Err("에이전트 응답 시간이 초과되었습니다.".into())
+            }
+        }
+    }
+
+    pub async fn call(self: &Arc<Self>, method: &str, params: Value) -> Result<Value, String> {
+        if !UI_METHODS.contains(&method) {
+            return Err("허용되지 않은 에이전트 요청입니다.".into());
+        }
+        self.ensure().await?;
+        let timeout = match method {
+            "complete" | "image" => Duration::from_secs(420),
+            "search" | "models.list" | "status" => Duration::from_secs(90),
+            _ => Duration::from_secs(60),
+        };
+        self.send(method, params, timeout).await
+    }
+
+    /// Push new settings/keys to a running runtime; a stopped one reads them on start.
+    pub async fn reconfigure(self: &Arc<Self>) -> Result<(), String> {
+        if self.running().await {
+            let config = runtime_config(&load_settings()?)?;
+            self.send("configure", config, Duration::from_secs(10))
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn restart(self: &Arc<Self>) -> Result<(), String> {
+        let _starting = self.starting.lock().await;
+        self.stop().await;
+        self.spawn().await
+    }
+
+    pub async fn stop(&self) {
+        let process = self.process.lock().await.take();
+        if let Some(mut process) = process {
+            let _ = process
+                .stdin
+                .write_all(b"{\"id\":\"stop\",\"method\":\"shutdown\"}\n")
+                .await;
+            if tokio::time::timeout(Duration::from_secs(3), process.child.wait())
+                .await
+                .is_err()
+            {
+                let _ = process.child.kill().await;
+            }
+        }
+    }
+
+    /// Synchronous best effort for app exit.
+    pub fn shutdown(&self) {
+        if let Ok(mut guard) = self.process.try_lock() {
+            if let Some(mut process) = guard.take() {
+                let _ = process.child.start_kill();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn settings_reject_relative_roots_and_remote_ollama() {
+        let mut settings = AgentSettings::default();
+        assert!(validate_settings(&settings).is_ok());
+        settings.projects_root = "projects".into();
+        assert!(validate_settings(&settings).is_err());
+        settings = AgentSettings::default();
+        settings.ollama_url = "http://10.0.0.5:11434".into();
+        assert!(validate_settings(&settings).is_err());
+    }
+    #[test]
+    fn host_only_methods_are_not_callable_from_the_ui() {
+        assert!(!UI_METHODS.contains(&"configure"));
+        assert!(!UI_METHODS.contains(&"shutdown"));
+        assert!(key_account("aws").is_err());
+    }
+}

@@ -1,5 +1,4 @@
 import type { KeywordContent, SocialPlatform, SocialTrend } from "./types";
-import { studioToolInstruction } from "./codexify";
 export type AiMaterial = { id: string; trend: SocialTrend; keyword: string; excerpt: string; excerptKind: "description" | "body" };
 export type AiSelectionMode = "topic" | "reference" | "both";
 export type AiBrief = { topic: string; context: string; references: AiMaterial[] };
@@ -62,5 +61,5 @@ export function chatBrief(platform:SocialPlatform,topic:string,manual:string,ref
   if(!topic.trim())throw new Error("주제를 입력하거나 선택하세요.");
   if(topic.length>600)throw new Error("주제는 600자 이하여야 합니다.");
   const context=composeContext(manual,references);
-  return ["이미 연결된 Codexify의 작업 프로젝트에서 진행해줘. 프로젝트를 전환하거나 기존 Studio 저장 폴더를 변경하지 마.",studioToolInstruction(),"아래 자료로 대상 플랫폼에 맞는 콘텐츠 초안을 작성해줘. 제목·설명만 있는 출처의 원문을 직접 읽었다고 주장하지 말고 사실과 제안을 구분해줘. 공개 게시나 유료 도구는 실행하지 마.",JSON.stringify({platform,topic,context},null,2)].join("\n\n");
+  return ["아래 자료로 대상 플랫폼에 맞는 콘텐츠 초안을 작성해줘. 제목·설명만 있는 출처의 원문을 직접 읽었다고 주장하지 말고 사실과 제안을 구분해줘. 공개 게시나 유료 도구는 실행하지 마.",JSON.stringify({platform,topic,context},null,2)].join("\n\n");
 }

@@ -1,10 +1,10 @@
+#[cfg(feature = "desktop")]
+mod agent_native;
+pub mod agent_runtime;
 pub mod ai;
 pub mod assets;
 pub mod browser;
 pub mod chatgpt_drafts;
-pub mod codexify_connection;
-pub mod codexify_proxy;
-pub mod codexify_runtime;
 pub mod config;
 pub mod credentials;
 #[cfg(feature = "desktop")]
@@ -169,18 +169,6 @@ mod desktop {
             .map_err(|_| "이미 트렌드를 수집하고 있습니다.")?;
         let config = state.config_snapshot().await;
         social::refresh_trends(&config, keyword).await
-    }
-    #[tauri::command]
-    pub async fn ai_status() -> Result<Value, String> {
-        Ok(
-            serde_json::json!({"providers":[],"defaultProvider":null,"mode":"chatgpt-chat","message":"실제 ChatGPT 대화에서 요청을 시작하세요."}),
-        )
-    }
-    #[tauri::command]
-    pub async fn ai_generate(window: tauri::WebviewWindow, input: Value) -> Result<Value, String> {
-        updater::authorize(&window)?;
-        let _ = input;
-        Err("직접 모델 호출은 제거되었습니다. 코딩의 ChatGPT 연결에서 대화를 시작하고 요청을 전달하세요.".into())
     }
     #[tauri::command]
     pub async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
@@ -628,8 +616,7 @@ mod desktop {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .manage(state.clone())
             .manage(updater::shared())
-            .manage(codexify_runtime::shared())
-            .manage(Arc::new(codexify_proxy::ProxyController::default()))
+            .manage(agent_runtime::shared())
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
@@ -653,6 +640,14 @@ mod desktop {
             })
             .setup(move |app| {
                 crate::tray::setup(app)?;
+                {
+                    use tauri::{Emitter, Manager};
+                    let handle = app.handle().clone();
+                    app.state::<Arc<agent_runtime::AgentRuntime>>()
+                        .set_emitter(Arc::new(move |event| {
+                            let _ = handle.emit_to("main", "agent-event", event);
+                        }));
+                }
                 // Independent from uploads: a resume during a long request must
                 // still invalidate other reservations missed while asleep.
                 tauri::async_runtime::spawn(async move {
@@ -750,10 +745,7 @@ mod desktop {
                 if let tauri::RunEvent::Exit = event {
                     use tauri::Manager;
                     crate::publications::shutdown_media();
-                    app.state::<Arc<codexify_proxy::ProxyController>>()
-                        .shutdown();
-                    app.state::<Arc<codexify_runtime::RuntimeController>>()
-                        .shutdown();
+                    app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();
                 }
                 if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
                     use tauri::Manager;
@@ -927,11 +919,11 @@ pub fn run() {
             match action.as_str() {
                 "--self-check" => {
                     let dashboard = social::dashboard(&config).await?;
-                    let ai = serde_json::json!({"mode":"chatgpt-chat","providers":[],"message":"실제 ChatGPT 대화와 Codexify로 요청합니다."});
+                    let ai = serde_json::json!({"mode":"agent-runtime","settings":agent_runtime::load_settings().ok(),"node":agent_runtime::node_path(),"bundle":agent_runtime::bundle_path()});
                     Ok(serde_json::json!({"database":dashboard.database,"channelCount":dashboard.channels.len(),"contentCount":dashboard.content.len(),"trendCount":dashboard.trends.len(),"ai":ai}))
                 },
                 "--collect-trends" => serde_json::to_value(social::refresh_trends(&config,None).await?).map_err(|_| "직렬화 실패".into()),
-                "--verify-ai" => Err("실제 ChatGPT 대화를 시작한 뒤 앱의 코딩에서 연결을 확인하세요. 직접 모델 호출은 제거되었습니다.".into()),
+                "--verify-ai" => Err("앱의 Agent 탭에서 모델을 선택하고 연결을 확인하세요.".into()),
                 "--db-start" => { let next = ops::start_database(&config).await?; next.save()?; Ok(serde_json::json!({"ok":true})) },
                 "--db-backup" => ops::backup_database().await,
                 "--db-migrate" => { ops::migrate_database().await?; Ok(serde_json::json!({"ok":true})) },

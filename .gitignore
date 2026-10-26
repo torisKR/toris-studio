@@ -48,3 +48,5 @@ desktop/.env*
 
 # Verified, generated Studio browser runtimes and download cache
 /desktop/src-tauri/browser-runtime/
+# Generated agent runtime bundle (pnpm agent:build)
+/desktop/src-tauri/resources/agent-runtime/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": ["binaries/cloudflared"],
+    "resources": {
+      "resources/cloudflared/LICENSE": "cloudflared-notices/LICENSE",
+      "resources/cloudflared/NOTICE": "cloudflared-notices/NOTICE",
+      "resources/cloudflared/manifest.json": "cloudflared-notices/manifest.json",
+      "resources/agent-runtime/agent.mjs": "agent-runtime/agent.mjs",
+      "resources/agent-runtime/agent.mjs.sha256": "agent-runtime/agent.mjs.sha256"
+    }
+  }
+}

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyBrowserStaged, MANIFEST } from './prepare-browser.mjs';
-import { verifyStaged } from './prepare-codexify.mjs';
+import { verifyStaged } from './prepare-runtime.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fail = message => { throw new Error(message); };
 export function installerCandidate(names, target) {

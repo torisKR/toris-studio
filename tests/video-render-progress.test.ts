@@ -90,7 +90,7 @@ test("native video menu and persistent panel render in the desktop app", async (
     const markup = renderToStaticMarkup(createElement(App));
     assert.match(markup, /영상 제작/);
     assert.match(markup, /<div hidden=""><section class="desktop-video" aria-label="영상 스튜디오"/);
-    assert.match(markup, /ChatGPT에 영상 초안 요청/);
+    assert.match(markup, /AI로 영상 초안 만들기/);
     const source = readFileSync(new URL("../desktop/src/App.tsx", import.meta.url), "utf8");
     assert.match(source, /id: "video", label: "영상 제작", icon: Clapperboard, group: "제작"/);
     assert.match(source, /<div hidden=\{tab !== "video"\}><VideoPanel active=\{tab === "video"\} onOpenSettings=\{\(\) => setTab\("settings"\)\} onOpenKeywords=\{\(\) => setTab\("keywords"\)\}/);

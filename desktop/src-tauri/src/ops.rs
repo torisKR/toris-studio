@@ -13,6 +13,62 @@ const HANDOFF_SCHEMA: &str = include_str!("../../../db/migrations/008_publicatio
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
 const CRAWLER_COMPOSE: &str = include_str!("../../../infrastructure/keyword-crawler/compose.yaml");
+const VECTOR_COMPOSE: &str = include_str!("../../../infrastructure/agent-vector-db/compose.yaml");
+
+/// Start (or keep) the local ChromaDB container for agent code search.
+pub async fn start_vector_db() -> Result<Value, String> {
+    crate::config::prepare_portable_data()?;
+    let root = config_path()
+        .parent()
+        .ok_or("설정 경로 오류")?
+        .join("vector-stack");
+    fs::create_dir_all(&root).map_err(|_| "벡터 DB 설정 폴더 생성 실패")?;
+    if !fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err("벡터 DB 설정 폴더의 형식이 올바르지 않습니다.".into());
+    }
+    let compose_path = root.join("compose.yaml");
+    fs::write(&compose_path, VECTOR_COMPOSE).map_err(|_| "벡터 DB 구성 저장 실패")?;
+    let mut command = Command::new(docker_program());
+    command
+        .current_dir(&root)
+        .args(["compose", "-f"])
+        .arg(&compose_path)
+        .args(["up", "-d", "chroma"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let status = tokio::time::timeout(Duration::from_secs(300), command.status())
+        .await
+        .map_err(|_| "벡터 DB 시작 시간이 초과되었습니다. Docker/OrbStack에서 이미지 다운로드 상태를 확인하세요.")?
+        .map_err(|_| "Docker/OrbStack을 설치하고 실행하세요.")?;
+    if !status.success() {
+        return Err(
+            "벡터 DB 시작에 실패했습니다. Docker/OrbStack과 로컬 포트 18765를 확인하세요.".into(),
+        );
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "벡터 DB 확인 실패")?;
+    for _ in 0..40 {
+        if client
+            .get(format!(
+                "{}/api/v2/heartbeat",
+                crate::agent_runtime::CHROMA_URL
+            ))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+        {
+            return Ok(
+                json!({"ok":true,"url":crate::agent_runtime::CHROMA_URL,"message":"로컬 ChromaDB가 준비되었습니다."}),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Err("벡터 DB 컨테이너는 실행됐지만 응답하지 않습니다. 잠시 후 다시 확인하세요.".into())
+}
 
 fn stack_root() -> Result<PathBuf, String> {
     crate::config::prepare_portable_data()?;

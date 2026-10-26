@@ -2,13 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SettingsPanel } from "./SettingsPanel";
 import { IntegrationPanel } from "./IntegrationPanel";
-import { CodingPanel } from "./CodingPanel";
+import { AgentPanel } from "./AgentPanel";
 import { PublicationPanel } from "./PublicationPanel";
 import { VideoPanel } from "./VideoPanel";
 import { DesktopCommandMenu } from "./DesktopCommandMenu";
 import { createSingleFlight } from "./desktop-interactions";
 import { beginMainActivity } from "./native-windows";
-import { getProfile, openConnectedChat, sendToConnectedChat } from "./codexify-client";
+import { aiStatus as readAiStatus, contentReady, generateText, modelLabel } from "./ai-client";
+import type { AiStatus as ModelStatus } from "./ai-client";
 import { AssetStudio } from "./assets/AssetStudio";
 import { AiDiscovery } from "./AiDiscovery";
 import { BookOpen } from "lucide-react";
@@ -35,12 +36,12 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "publications" | "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "video" | "integrations" | "settings" | "coding";
+type Tab = "publications" | "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "video" | "integrations" | "settings" | "agent";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
 };
-type AiStatus = { providers: AiProvider[]; defaultProvider: string | null };
+type AiStatus = { providers: AiProvider[]; defaultProvider: string | null; model: ModelStatus | null };
 type Notice = { text: string; tone: "success" | "error" | "info" };
 type ContentForm = {
   id?: string; platform: SocialPlatform; channelId: string; title: string;
@@ -70,7 +71,7 @@ const tabs = [
   { id: "ai", label: "AI 작업실", icon: Sparkles, group: "제작" },
   { id: "assets", label: "이미지 생성기", icon: Plus, group: "제작" },
   { id: "video", label: "영상 제작", icon: Clapperboard, group: "제작" },
-  { id: "coding", label: "코딩", icon: Code2, group: "제작" },
+  { id: "agent", label: "Agent", icon: Code2, group: "제작" },
   { id: "channels", label: "내 채널", icon: Users, group: "채널과 연결" },
   { id: "youtube", label: "YouTube 관리", icon: Youtube, group: "채널과 연결" },
   { id: "oauth", label: "SNS 로그인", icon: ShieldCheck, group: "채널과 연결" },
@@ -242,7 +243,7 @@ export function App() {
   const [trendFilter, setTrendFilter] = useState<"all" | "short" | "small_channel">("all");
   const [refreshingTrends, setRefreshingTrends] = useState(false);
   const [trendWarnings, setTrendWarnings] = useState<string[]>([]);
-  const [aiStatus, setAiStatus] = useState<AiStatus>({ providers: [], defaultProvider: null });
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ providers: [], defaultProvider: null, model: null });
   const [aiStatusError, setAiStatusError] = useState("");
   const [aiChecking, setAiChecking] = useState(true);
   const [aiPlatform, setAiPlatform] = useState<SocialPlatform>("youtube");
@@ -251,7 +252,6 @@ export function App() {
   const [aiOutput, setAiOutput] = useState("");
   const [aiOutputLabel, setAiOutputLabel] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
-  const aiChatRetry = useRef<{message:string;requestId:string}|null>(null);
   const [aiError, setAiError] = useState("");
   const [copying, setCopying] = useState(false);
   const [publicationSeed, setPublicationSeed] = useState<{title:string;description:string;key:number} | null>(null);
@@ -265,7 +265,7 @@ export function App() {
   const dashboardRequest = useRef(0);
   const aiRequest = useRef(0);
   const [readDashboard] = useState(() => createSingleFlight<DashboardData>());
-  const [readAiProfile] = useState(() => createSingleFlight<Awaited<ReturnType<typeof getProfile>>>());
+  const [readAiProfile] = useState(() => createSingleFlight<ModelStatus>());
 
   const loadDashboard = useCallback(async () => {
     if (!alive.current) return;
@@ -283,10 +283,11 @@ export function App() {
     const current = () => alive.current && owner === lifecycle.current && request === aiRequest.current;
     setAiChecking(true); setAiStatusError("");
     try {
-      const profile = await readAiProfile(() => getProfile());
+      const model = await readAiProfile(() => readAiStatus());
       if (!current()) return;
-      const configured = Boolean(profile.conversationId && profile.projectRoot && (profile.pluginUrl || profile.conversationUrl));
-      setAiStatus({ providers: [{ id: "chatgpt", label: "ChatGPT 대화", configured, available: configured, detail: configured ? "연결 설정이 저장되었습니다. 실제 수신·응답은 코딩에서 확인하세요." : "코딩에서 Codexify와 ChatGPT 대화를 연결하세요." }], defaultProvider: configured ? "chatgpt" : null });
+      const ready = contentReady(model);
+      const choice = model.contentModel ?? model.agentModel;
+      setAiStatus({ providers: [{ id: "content", label: modelLabel(model, choice), configured: Boolean(choice), available: ready, detail: ready ? `${modelLabel(model, choice)}로 작성합니다.` : choice ? "선택한 모델을 사용할 수 없습니다. Agent 탭에서 키·로그인을 확인하세요." : "Agent 탭의 모델 설정에서 콘텐츠 작성 모델을 선택하세요." }], defaultProvider: ready ? "content" : null, model });
     } catch (error) { if (current()) setAiStatusError(errorMessage(error)); }
     finally { if (current()) setAiChecking(false); }
   }, [readAiProfile]);
@@ -307,7 +308,7 @@ export function App() {
   }, []);
 
   const nativeActivity = saving || refreshingTrends || aiBusy || loading || aiChecking;
-  const nativeActivityLabel = saving ? "로컬 DB에 저장 중" : refreshingTrends ? "콘텐츠 수집 중" : aiBusy ? "ChatGPT 요청 처리 중" : loading ? "워크스페이스 불러오는 중" : aiChecking ? "ChatGPT 연결 확인 중" : "";
+  const nativeActivityLabel = saving ? "로컬 DB에 저장 중" : refreshingTrends ? "콘텐츠 수집 중" : aiBusy ? "AI 작성 중" : loading ? "워크스페이스 불러오는 중" : aiChecking ? "AI 모델 확인 중" : "";
   useEffect(() => nativeActivity ? beginMainActivity() : undefined, [nativeActivity]);
 
   useEffect(() => {
@@ -367,7 +368,7 @@ export function App() {
   async function copyAiBrief() {
     if (aiBusy) return;
     setAiError(""); setAiBusy(true);
-    try { await invoke("copy_text", { text: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences) }); await openConnectedChat(); setAiSelectionNotice("요청을 복사하고 저장한 ChatGPT 연결을 열었습니다. 대화에 붙여넣어 시작하세요."); }
+    try { await invoke("copy_text", { text: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences) }); setAiSelectionNotice("요청을 클립보드에 복사했습니다. 원하는 AI 도구에 붙여넣어 사용하세요."); }
     catch (error) { setAiError(errorMessage(error)); }
     finally { setAiBusy(false); }
   }
@@ -375,11 +376,9 @@ export function App() {
     if (aiBusy) return;
     setAiError(""); setAiBusy(true);
     try {
-      const message = chatBrief(aiPlatform, aiTopic, aiContext, aiReferences);
-      if (aiChatRetry.current?.message !== message) aiChatRetry.current = {message, requestId:crypto.randomUUID()};
-      const { waiting } = await sendToConnectedChat(message, aiChatRetry.current.requestId);
-      aiChatRetry.current = null;
-      setAiSelectionNotice(waiting ? "요청을 Codexify 대화에 저장했습니다. ChatGPT의 수신·응답은 연결 화면에서 확인하세요." : "요청을 Codexify 대화에 저장했습니다. ChatGPT가 현재 대기 중이 아니므로 연결된 대화에서 실행을 시작하세요.");
+      const result = await generateText(chatBrief(aiPlatform, aiTopic, aiContext, aiReferences));
+      setAiOutput(result.text); setAiOutputLabel(`${modelLabel(aiStatus.model, { provider: result.provider, model: result.model })} 작성 · 검토 후 사용`);
+      setAiSelectionNotice("AI 초안을 받았습니다. 사실과 표현을 검토한 뒤 사용하세요.");
     } catch (error) { setAiError(errorMessage(error)); }
     finally { setAiBusy(false); }
   }
@@ -452,20 +451,9 @@ export function App() {
     finally { setRefreshingTrends(false); }
   }
 
-  async function readChatReply() {
-    if (aiBusy) return;
-    setAiBusy(true); setAiError("");
-    try {
-      const state = await invoke<import("./codexify-client").ChatState>("codexify_chat_read");
-      const reply = [...state.messages].reverse().find(message => message.role === "agent" && message.markdown.trim());
-      if (!reply) throw new Error("연결된 대화에서 받은 응답이 없습니다. ChatGPT에서 시작·재개한 뒤 다시 확인하세요.");
-      setAiOutput(reply.markdown); setAiOutputLabel("연결된 ChatGPT의 최근 응답 · 검토 후 사용");
-    } catch (error) { setAiError(errorMessage(error)); }
-    finally { setAiBusy(false); }
-  }
   function aiFromContent() {
     setAiTopic(contentForm.title); setAiContext(contentForm.body.slice(0, 6000)); setAiReferences([]); setContentOpen(false); setTab("ai");
-    setAiSelectionNotice("콘텐츠를 ChatGPT 작성 요청으로 가져왔습니다. 참고자료를 확인한 뒤 대화에 보내세요.");
+    setAiSelectionNotice("콘텐츠를 AI 작성 요청으로 가져왔습니다. 참고자료를 확인한 뒤 AI로 작성하세요.");
   }
 
   function patternReport() {
@@ -473,7 +461,7 @@ export function App() {
     const context = visibleTrends.map((trend, index) => `${index + 1}. 출처: ${sourceLabels[trend.source]}\n키워드: ${trend.keyword}\n제목: ${trend.title}\n원본 수치: ${trend.metric ?? "제공되지 않음"}\n조회수: ${trend.details?.viewCount ?? "제공되지 않음"}\n채널: ${trend.details?.channelTitle ?? "제공되지 않음"}\n구독자: ${trend.details?.subscriberCount ?? "제공되지 않음"}\n길이: ${trend.details?.durationSeconds ?? "제공되지 않음"}초\n링크: ${trend.url}\n수집: ${trend.fetchedAt}`).join("\n\n") +
       "\n\n위 제목과 출처 정보만 근거로 사용해줘. 원문을 읽었다고 주장하지 말고 사실과 추정을 구분해줘. 수치가 없는 검색 결과를 인기 순위로 해석하지 말아줘. 도입 훅, 주제, 표현 형식의 공통점을 분석하고 각 플랫폼 아이디어와 검증할 가설을 제안해줘.";
     setAiTopic(topic); setAiContext(context.slice(0, 6000)); setAiReferences([]); setAiOutput(""); setTab("ai");
-    setAiSelectionNotice("패턴 분석 자료를 준비했습니다. 연결된 ChatGPT 대화에 보내기를 눌러 요청하세요.");
+    setAiSelectionNotice("패턴 분석 자료를 준비했습니다. AI로 작성을 눌러 요청하세요.");
   }
 
   function useTrend(trend: SocialTrend, selectedPlatform?: SocialPlatform) {
@@ -481,7 +469,7 @@ export function App() {
     openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { publications: "SNS 일괄 게시", overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", video: "영상 제작", coding: "코딩", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
+  const viewTitle = { publications: "SNS 일괄 게시", overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", video: "영상 제작", agent: "Agent", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
   const viewDescription = {
     publications: "영상·텍스트·블로그 원고를 준비하고 자동 게시 예약과 네이버 수동 인계를 구분해 관리하세요.",
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
@@ -491,11 +479,11 @@ export function App() {
     channels: "플랫폼의 채널 정보와 콘텐츠를 한 곳에서 관리하세요.",
     youtube: "YouTube Data API로 채널의 공개 성과와 최근 영상을 확인하세요.",
     oauth: "공식 로그인으로 계정을 연결하고, 저장된 연결과 만료 일시를 확인하세요.",
-    ai: "수집한 키워드로 주제를 고르고, 근거를 연결해 실제 ChatGPT 대화에서 초안을 만드세요.",
+    ai: "수집한 키워드로 주제를 고르고, 근거를 연결해 선택한 AI 모델로 초안을 만드세요.",
     assets: "이미지와 3D 에셋을 규격에 맞추고, 영상·프로젝트별로 모아 재사용하세요.",
-    video: "주제와 카테고리로 ChatGPT에 영상 초안을 요청하고, 장면·모션을 편집해 로컬 MP4로 출력하세요.",
-    coding: "Codexify를 실행하고 공개 MCP 주소를 연결해, 선택한 프로젝트의 작업을 ChatGPT에 요청하세요.",
-    integrations: "ChatGPT 도구 연결부터 실제 업로드까지, 확인한 단계만 완료로 표시합니다.",
+    video: "주제와 카테고리로 AI에 영상 초안을 요청하고, 장면·모션을 편집해 로컬 MP4로 출력하세요.",
+    agent: "~/projects의 프로젝트를 골라 Supervisor·Frontend·Backend·QA 에이전트에게 작업을 맡기고, 변경과 명령을 승인하세요.",
+    integrations: "MCP 도구 연결부터 실제 업로드까지, 확인한 단계만 완료로 표시합니다.",
     settings: "내 기기의 데이터베이스와 수집 소스를 연결하세요."
   }[tab];
 
@@ -508,26 +496,26 @@ export function App() {
         <nav className="social-nav" aria-label="콘텐츠 관리">
           {(["워크스페이스", "제작", "채널과 연결"] as const).map((group) => <div className="social-nav-group" key={group}><span className="social-nav-group-label">{group}</span>{tabs.filter((item) => item.group === group).map(({ id, label, icon: Icon }) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}><Icon size={18} aria-hidden="true" /><span>{label}</span>{id === "content" && dashboard.content.length > 0 && <small>{dashboard.content.length}</small>}</button>)}</div>)}
         </nav>
-        <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 연결된 ChatGPT 대화에 전달됩니다.</p></div>
+        <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 선택한 모델 공급자에게 전달됩니다.</p></div>
       </aside>
 
       <div className="social-shell">
-        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("overview")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><DesktopCommandMenu items={tabs} onNavigate={setTab} />{nativeActivity && <span className="desktop-native-activity" role="status"><LoaderCircle size={14} className="social-spin" aria-hidden="true" />{nativeActivityLabel}</span>}<span className="social-local-label">DESKTOP</span>{tab !== "coding" && <div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div>}</div></header>
+        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("overview")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><DesktopCommandMenu items={tabs} onNavigate={setTab} />{nativeActivity && <span className="desktop-native-activity" role="status"><LoaderCircle size={14} className="social-spin" aria-hidden="true" />{nativeActivityLabel}</span>}<span className="social-local-label">DESKTOP</span>{tab !== "agent" && <div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div>}</div></header>
         <main id="social-main" className="social-main" tabIndex={-1}>
-          <div className="social-page-heading"><div><h1>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={tab !== "assets" && tab !== "coding" && loading} onClick={() => { if (tab === "assets" || tab === "integrations" || tab === "coding" || tab === "publications") setAssetRefreshKey(key => key + 1); else { void loadDashboard(); void checkAi(); } }}><RefreshCw size={17} className={tab !== "assets" && tab !== "coding" && loading ? "social-spin" : ""} /></button>{tab === "channels" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openChannel()}><Plus size={17} />채널 등록</button> : tab === "content" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17} />새 콘텐츠</button> : tab === "trends" ? <button className="social-button primary" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={17} className={refreshingTrends ? "social-spin" : ""} />{refreshingTrends ? "수집 중" : "트렌드 수집"}</button> : tab === "ai" ? <button className="social-button" disabled={aiChecking} onClick={() => void checkAi()}><RefreshCw size={17} className={aiChecking ? "social-spin" : ""} />연결 확인</button> : null}</div></div>
+          <div className="social-page-heading"><div><h1>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={tab !== "assets" && tab !== "agent" && loading} onClick={() => { if (tab === "assets" || tab === "integrations" || tab === "agent" || tab === "publications") setAssetRefreshKey(key => key + 1); else { void loadDashboard(); void checkAi(); } }}><RefreshCw size={17} className={tab !== "assets" && tab !== "agent" && loading ? "social-spin" : ""} /></button>{tab === "channels" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openChannel()}><Plus size={17} />채널 등록</button> : tab === "content" ? <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17} />새 콘텐츠</button> : tab === "trends" ? <button className="social-button primary" disabled={refreshingTrends} onClick={() => void refreshTrends()}><RefreshCw size={17} className={refreshingTrends ? "social-spin" : ""} />{refreshingTrends ? "수집 중" : "트렌드 수집"}</button> : tab === "ai" ? <button className="social-button" disabled={aiChecking} onClick={() => void checkAi()}><RefreshCw size={17} className={aiChecking ? "social-spin" : ""} />연결 확인</button> : null}</div></div>
 
           {notice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={18} /> : <CircleAlert size={18} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></button></div>}
-          {tab !== "assets" && tab !== "integrations" && tab !== "coding" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
-          {tab !== "assets" && tab !== "integrations" && tab !== "coding" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
+          {tab !== "assets" && tab !== "integrations" && tab !== "agent" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
+          {tab !== "assets" && tab !== "integrations" && tab !== "agent" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
           {tab === "overview" && <OverviewPanel dashboard={dashboard} loading={loading} aiChecking={aiChecking} availableAiCount={availableAi.length} onNavigate={setTab} onCreate={(platform) => openContent(undefined, platform ? { platform } : {})} onEdit={openContent} onAddChannel={openChannel} onSaveTrend={useTrend} onUseInAi={useTrendInAi} />}
 
-          <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("oauth")} onOpenChatGPT={() => setTab("coding")} onOpenAssets={() => setTab("assets")} /></div>
+          <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("oauth")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} /></div>
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} /></div>
           <div hidden={tab !== "youtube"}><YouTubePanel active={tab === "youtube"} databaseConnected={dashboard.database.connected} onMessage={setNotice} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} /></div>
-          <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} onCoding={() => setTab("coding")} /></div>
-          <div hidden={tab !== "coding"}><CodingPanel active={tab === "coding"} refreshKey={assetRefreshKey} /></div>
+          <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} onAgent={() => setTab("agent")} /></div>
+          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>
 
@@ -578,22 +566,22 @@ export function App() {
             <AiDiscovery trends={dashboard.trends} loading={loading} databaseConnected={dashboard.database.connected} busy={aiBusy} references={aiReferences} onSelect={useAiMaterial} onRefresh={loadDashboard} onExplore={() => setTab("keywords")} />
             {aiSelectionNotice && <p className="social-notice success" role="status">{aiSelectionNotice}</p>}
             {aiStatusError && <div className="social-notice error" role="alert"><CircleAlert size={17} /><span>{aiStatusError}</span></div>}
-            <div className="social-notice info"><CircleAlert size={18} /><span>{aiStatus.providers[0]?.detail || "코딩에서 ChatGPT 대화를 연결하세요."} 메시지 저장은 생성 완료가 아닙니다.</span><button className="social-button compact" onClick={() => setTab("coding")}>ChatGPT 연결 확인</button></div>
+            <div className="social-notice info"><CircleAlert size={18} /><span>{aiStatus.providers[0]?.detail || "Agent 탭에서 콘텐츠 작성 모델을 선택하세요."} AI 결과는 검토가 필요한 초안입니다.</span><button className="social-button compact" onClick={() => setTab("agent")}>모델 설정</button></div>
             <div className="social-ai-workbench"><form className="social-ai-brief" onSubmit={(event) => { event.preventDefault(); void sendAiBrief(); }}><div className="social-section-heading"><h2>어떤 콘텐츠를 만들까요?</h2></div><label htmlFor="social-ai-platform">대상 플랫폼</label><select id="social-ai-platform" value={aiPlatform} onChange={(event) => setAiPlatform(event.target.value as SocialPlatform)} disabled={aiBusy}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select><label htmlFor="social-ai-topic">주제와 작성 방향</label><textarea id="social-ai-topic" value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="예: AI로 반복 작업을 줄이는 팁 3개를 소개하는 30초 릴스. 초보자도 따라 할 수 있도록 작성해줘." rows={5} maxLength={600} required disabled={aiBusy} /><label htmlFor="social-ai-context">참고 자료와 맥락 <small>선택</small></label><textarea id="social-ai-context" value={aiContext} onChange={(event) => setAiContext(event.target.value)} placeholder="실제 출처 URL, 핵심 사실, 타깃 독자, 원하는 말투 등을 입력하세요." rows={6} maxLength={6000} disabled={aiBusy} />
               <div className="ai-reference-list" aria-label="선택한 참고자료">{aiReferences.map(item => <div className="ai-reference-item" key={item.id}><BookOpen size={16}/><span><strong>{item.trend.title}</strong><small>{item.keyword} · {sourceLabels[item.trend.source]}</small></span><button type="button" className="social-dismiss" aria-label={`참고자료 해제: ${item.trend.title}`} disabled={aiBusy} onClick={() => { setAiReferences(current => current.filter(r => r.id !== item.id)); setAiSelectionNotice("참고자료를 해제했습니다. 직접 작성한 맥락은 유지됩니다."); }}><X size={15}/></button></div>)}</div>
               <p className={`ai-context-budget${aiCompiledContext.error ? " error" : ""}`} role={aiCompiledContext.error ? "alert" : undefined}>{aiCompiledContext.error || `AI에 전달할 맥락 ${aiCompiledContext.text.length.toLocaleString()} / 6,000자 · 자료 ${aiReferences.length}개`}</p>
               {!aiCompiledContext.error && <details className="ai-context-preview"><summary>전달할 참고자료 확인</summary><pre>{aiCompiledContext.text || "선택하거나 입력한 참고자료가 없습니다."}</pre></details>}
-              <div className="ai-chat-handoff"><p>저장한 Codexify 대화에 요청을 보내세요. ChatGPT의 수신과 응답은 연결 화면에서 확인할 수 있습니다.</p><button type="button" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void sendAiBrief()}><Send size={16}/>연결된 대화에 보내기</button><button type="button" className="social-button" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void copyAiBrief()}><Copy size={16}/>요청 복사·ChatGPT 열기</button></div>
-              <p className="social-form-hint">입력한 자료는 연결된 ChatGPT 대화에 전달됩니다. 종료된 대화는 ChatGPT에서 직접 시작·재개하세요.</p>{aiError && <p className="social-form-error" role="alert">{aiError}</p>}</form><section className="social-ai-result" aria-label="ChatGPT 작성 결과"><div className="social-result-header"><h2>받은 응답·수동 입력</h2>{aiOutputLabel && <small>{aiOutputLabel}</small>}</div><button type="button" className="social-button" disabled={aiBusy} onClick={() => void readChatReply()}><RefreshCw size={16}/>{aiBusy ? "대화 확인 중" : "ChatGPT 최근 응답 가져오기"}</button><label htmlFor="social-ai-manual-output">ChatGPT 결과 붙여넣기·편집</label><textarea id="social-ai-manual-output" rows={5} value={aiOutput} disabled={aiBusy} onChange={event => setAiOutput(event.target.value)} placeholder="ChatGPT에서 받은 문구를 붙여넣거나 최근 응답을 가져오세요." />{aiOutput ? <><div className="social-result-actions"><span>검토하고 편집한 뒤 초안으로 저장하세요.</span><div className="desktop-result-buttons"><button type="button" className="social-button" disabled={copying || aiBusy} onClick={() => {
+              <div className="ai-chat-handoff"><p>{availableAi.length ? `${aiStatus.providers[0].label} 모델로 바로 작성합니다.` : "Agent 탭에서 콘텐츠 작성 모델을 선택하세요."}</p><button type="button" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error) || !availableAi.length} onClick={() => void sendAiBrief()}>{aiBusy ? <LoaderCircle size={16} className="social-spin"/> : <Sparkles size={16}/>}{aiBusy ? "작성 중" : "AI로 작성"}</button><button type="button" className="social-button" disabled={aiBusy || !aiTopic.trim() || Boolean(aiCompiledContext.error)} onClick={() => void copyAiBrief()}><Copy size={16}/>요청 복사</button></div>
+              <p className="social-form-hint">입력한 자료는 선택한 모델 공급자에게 전달됩니다. 구독 CLI는 이 컴퓨터에서 로그인한 계정을 사용합니다.</p>{aiError && <p className="social-form-error" role="alert">{aiError}</p>}</form><section className="social-ai-result" aria-label="AI 작성 결과"><div className="social-result-header"><h2>AI 응답·수동 입력</h2>{aiOutputLabel && <small>{aiOutputLabel}</small>}</div><label htmlFor="social-ai-manual-output">결과 확인·편집</label><textarea id="social-ai-manual-output" rows={5} value={aiOutput} disabled={aiBusy} onChange={event => setAiOutput(event.target.value)} placeholder="AI로 작성하거나 다른 곳에서 받은 문구를 붙여넣으세요." />{aiOutput ? <><div className="social-result-actions"><span>검토하고 편집한 뒤 초안으로 저장하세요.</span><div className="desktop-result-buttons"><button type="button" className="social-button" disabled={copying || aiBusy} onClick={() => {
       setCopying(true); void invoke("copy_text", { text: aiOutput }).then(() => setNotice({ tone: "success", text: "작성 결과를 클립보드에 복사했습니다." })).catch((error: unknown) => setNotice({ tone: "error", text: errorMessage(error) })).finally(() => setCopying(false));
-    }}>{copying ? <LoaderCircle size={16} className="social-spin" /> : <Copy size={16} />}복사</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}><FileText size={16} />콘텐츠로 가져오기</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => { setPublicationSeed({ title: aiTopic.slice(0, 180), description: aiOutput, key: Date.now() }); setTab("publications"); }}><Send size={16}/>SNS 게시 초안으로</button></div></div></> : <EmptyState icon={Sparkles} title={aiBusy ? "대화를 확인하고 있어요" : "아이디어를 초안으로 바꿔보세요"} text={"ChatGPT 응답을 가져오거나 붙여넣고 편집한 뒤 SNS 게시 초안으로 저장하세요."} />}</section></div>
+    }}>{copying ? <LoaderCircle size={16} className="social-spin" /> : <Copy size={16} />}복사</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}><FileText size={16} />콘텐츠로 가져오기</button><button className="social-button primary" disabled={!dashboard.database.connected || aiBusy} onClick={() => { setPublicationSeed({ title: aiTopic.slice(0, 180), description: aiOutput, key: Date.now() }); setTab("publications"); }}><Send size={16}/>SNS 게시 초안으로</button></div></div></> : <EmptyState icon={Sparkles} title={aiBusy ? "AI가 작성하고 있어요" : "아이디어를 초안으로 바꿔보세요"} text={"AI로 작성하거나 붙여넣고 편집한 뒤 SNS 게시 초안으로 저장하세요."} />}</section></div>
           </>}
           {tab === "settings" && <SettingsPanel onSaved={() => { void loadDashboard(); void checkAi(); }} databaseConnected={dashboard.database.connected} />}
         </main>
         <footer className="social-footer"><span>Toris Studio · Desktop · 로컬 워크스페이스</span><span>모든 일정 표시: 한국 표준시 (KST)</span></footer>
       </div>
 
-      <dialog ref={contentDialog} className="social-dialog" onCancel={(event) => { if (saving || aiBusy) event.preventDefault(); else setContentOpen(false); }} onClose={() => setContentOpen(false)} aria-labelledby="social-content-dialog-title"><form onSubmit={saveContent} noValidate><div className="social-dialog-header"><div><h2 id="social-content-dialog-title">{contentForm.id ? "콘텐츠 수정" : "새 콘텐츠"}</h2><p>채널에 맞는 초안을 만들고 발행을 계획하세요.</p></div><button className="social-dismiss" type="button" aria-label="콘텐츠 편집 닫기" disabled={saving || aiBusy} onClick={() => setContentOpen(false)}><X size={20} /></button></div><div className="social-form-grid"><div><label htmlFor="social-content-platform">플랫폼</label><select id="social-content-platform" value={contentForm.platform} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, platform: event.target.value as SocialPlatform, channelId: "" }))}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select></div><div><label htmlFor="social-content-channel">채널</label><select id="social-content-channel" value={contentForm.channelId} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, channelId: event.target.value }))}><option value="">채널 미지정</option>{dashboard.channels.filter((channel) => channel.platform === contentForm.platform).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></div></div><label htmlFor="social-content-title">제목 · 아이디어</label><input id="social-content-title" value={contentForm.title} onChange={(event) => setContentForm((current) => ({ ...current, title: event.target.value }))} placeholder="콘텐츠의 핵심 아이디어를 입력하세요" maxLength={180} required disabled={saving || aiBusy} /><div className="social-body-label"><label htmlFor="social-content-body">본문 · 대본</label><button className="social-button compact" type="button" disabled={saving || aiBusy || !contentForm.title.trim()} onClick={aiFromContent}>{aiBusy ? <LoaderCircle size={14} className="social-spin" /> : <Sparkles size={14} />}{aiBusy ? "작성 중" : "AI 초안"}</button></div><textarea id="social-content-body" value={contentForm.body} onChange={(event) => setContentForm((current) => ({ ...current, body: event.target.value }))} placeholder="아이디어, 글, 영상 대본과 참고 출처를 적어보세요" rows={8} maxLength={20000} disabled={saving || aiBusy} />{aiError && <p className="social-form-error" role="alert">{aiError}</p>}{availableAi.length === 0 && <p className="social-form-hint">ChatGPT 작성 요청은 AI 작업실에서 대화에 전달하고 응답을 가져올 수 있습니다.</p>}<div className="social-form-grid"><div><label htmlFor="social-content-status">진행 상태</label><select id="social-content-status" value={contentForm.status} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, status: event.target.value as ContentStatus }))}>{CONTENT_STATUSES.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}</select></div>{contentForm.status === "scheduled" && <div><label htmlFor="social-content-scheduled">계획 일시 (한국 시간)</label><input type="datetime-local" id="social-content-scheduled" value={contentForm.scheduledAt} onChange={(event) => setContentForm((current) => ({ ...current, scheduledAt: event.target.value }))} required disabled={saving || aiBusy} /></div>}</div>{contentForm.status === "scheduled" && <p className="social-form-hint">일정 기록용입니다. 해당 시간에 자동으로 게시하지 않습니다.</p>}{contentForm.status === "published" && <p className="social-form-hint">플랫폼에서 직접 발행한 콘텐츠의 기록입니다. 저장하면 발행 기록으로 분류됩니다.</p>}<label htmlFor="social-content-url">발행 URL <small>선택</small></label><input id="social-content-url" type="url" value={contentForm.url} onChange={(event) => setContentForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://" maxLength={2000} disabled={saving || aiBusy} />{formError && <p ref={contentError} tabIndex={-1} className="social-form-error" role="alert">{formError}</p>}<div className="social-dialog-actions"><button className="social-button" type="button" disabled={saving || aiBusy} onClick={() => setContentOpen(false)}>취소</button><button className="social-button primary" type="submit" disabled={saving || aiBusy}>{saving ? <LoaderCircle size={17} className="social-spin" /> : <Check size={17} />}{saving ? "저장 중" : "콘텐츠 저장"}</button></div></form></dialog>
+      <dialog ref={contentDialog} className="social-dialog" onCancel={(event) => { if (saving || aiBusy) event.preventDefault(); else setContentOpen(false); }} onClose={() => setContentOpen(false)} aria-labelledby="social-content-dialog-title"><form onSubmit={saveContent} noValidate><div className="social-dialog-header"><div><h2 id="social-content-dialog-title">{contentForm.id ? "콘텐츠 수정" : "새 콘텐츠"}</h2><p>채널에 맞는 초안을 만들고 발행을 계획하세요.</p></div><button className="social-dismiss" type="button" aria-label="콘텐츠 편집 닫기" disabled={saving || aiBusy} onClick={() => setContentOpen(false)}><X size={20} /></button></div><div className="social-form-grid"><div><label htmlFor="social-content-platform">플랫폼</label><select id="social-content-platform" value={contentForm.platform} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, platform: event.target.value as SocialPlatform, channelId: "" }))}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select></div><div><label htmlFor="social-content-channel">채널</label><select id="social-content-channel" value={contentForm.channelId} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, channelId: event.target.value }))}><option value="">채널 미지정</option>{dashboard.channels.filter((channel) => channel.platform === contentForm.platform).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}</select></div></div><label htmlFor="social-content-title">제목 · 아이디어</label><input id="social-content-title" value={contentForm.title} onChange={(event) => setContentForm((current) => ({ ...current, title: event.target.value }))} placeholder="콘텐츠의 핵심 아이디어를 입력하세요" maxLength={180} required disabled={saving || aiBusy} /><div className="social-body-label"><label htmlFor="social-content-body">본문 · 대본</label><button className="social-button compact" type="button" disabled={saving || aiBusy || !contentForm.title.trim()} onClick={aiFromContent}>{aiBusy ? <LoaderCircle size={14} className="social-spin" /> : <Sparkles size={14} />}{aiBusy ? "작성 중" : "AI 초안"}</button></div><textarea id="social-content-body" value={contentForm.body} onChange={(event) => setContentForm((current) => ({ ...current, body: event.target.value }))} placeholder="아이디어, 글, 영상 대본과 참고 출처를 적어보세요" rows={8} maxLength={20000} disabled={saving || aiBusy} />{aiError && <p className="social-form-error" role="alert">{aiError}</p>}{availableAi.length === 0 && <p className="social-form-hint">AI 초안은 Agent 탭에서 콘텐츠 작성 모델을 선택한 뒤 AI 작업실에서 만들 수 있습니다.</p>}<div className="social-form-grid"><div><label htmlFor="social-content-status">진행 상태</label><select id="social-content-status" value={contentForm.status} disabled={saving || aiBusy} onChange={(event) => setContentForm((current) => ({ ...current, status: event.target.value as ContentStatus }))}>{CONTENT_STATUSES.map((status) => <option key={status} value={status}>{statusLabels[status]}</option>)}</select></div>{contentForm.status === "scheduled" && <div><label htmlFor="social-content-scheduled">계획 일시 (한국 시간)</label><input type="datetime-local" id="social-content-scheduled" value={contentForm.scheduledAt} onChange={(event) => setContentForm((current) => ({ ...current, scheduledAt: event.target.value }))} required disabled={saving || aiBusy} /></div>}</div>{contentForm.status === "scheduled" && <p className="social-form-hint">일정 기록용입니다. 해당 시간에 자동으로 게시하지 않습니다.</p>}{contentForm.status === "published" && <p className="social-form-hint">플랫폼에서 직접 발행한 콘텐츠의 기록입니다. 저장하면 발행 기록으로 분류됩니다.</p>}<label htmlFor="social-content-url">발행 URL <small>선택</small></label><input id="social-content-url" type="url" value={contentForm.url} onChange={(event) => setContentForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://" maxLength={2000} disabled={saving || aiBusy} />{formError && <p ref={contentError} tabIndex={-1} className="social-form-error" role="alert">{formError}</p>}<div className="social-dialog-actions"><button className="social-button" type="button" disabled={saving || aiBusy} onClick={() => setContentOpen(false)}>취소</button><button className="social-button primary" type="submit" disabled={saving || aiBusy}>{saving ? <LoaderCircle size={17} className="social-spin" /> : <Check size={17} />}{saving ? "저장 중" : "콘텐츠 저장"}</button></div></form></dialog>
 
       <dialog ref={channelDialog} className="social-dialog small" onCancel={(event) => { if (saving) event.preventDefault(); else setChannelOpen(false); }} onClose={() => setChannelOpen(false)} aria-labelledby="social-channel-dialog-title"><form onSubmit={saveChannel} noValidate><div className="social-dialog-header"><div><h2 id="social-channel-dialog-title">채널 정보 등록</h2><p>관리할 채널의 기본 정보를 저장하세요.</p></div><button className="social-dismiss" type="button" aria-label="채널 등록 닫기" disabled={saving} onClick={() => setChannelOpen(false)}><X size={20} /></button></div><label htmlFor="social-channel-platform">플랫폼</label><select id="social-channel-platform" value={channelForm.platform} onChange={(event) => setChannelForm((current) => ({ ...current, platform: event.target.value as SocialPlatform }))} disabled={saving}>{SOCIAL_PLATFORMS.map((platform) => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select><label htmlFor="social-channel-name">채널 이름</label><input id="social-channel-name" value={channelForm.name} onChange={(event) => setChannelForm((current) => ({ ...current, name: event.target.value }))} placeholder="내 채널 이름" maxLength={120} required disabled={saving} /><label htmlFor="social-channel-handle">핸들 · 계정 ID <small>선택</small></label><input id="social-channel-handle" value={channelForm.handle} onChange={(event) => setChannelForm((current) => ({ ...current, handle: event.target.value }))} placeholder="@my_channel" maxLength={160} disabled={saving} /><label htmlFor="social-channel-url">채널 URL <small>필수</small></label><input id="social-channel-url" type="url" required value={channelForm.url} onChange={(event) => setChannelForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://" maxLength={2000} disabled={saving} /><p className="social-form-hint">채널 이름과 공식 HTTPS 채널 URL을 입력하세요. 등록한 채널은 내 채널에 표시됩니다. 계정 로그인은 SNS 로그인에서 별도로 연결합니다.</p>{formError && <p ref={channelError} tabIndex={-1} className="social-form-error" role="alert">{formError}</p>}<div className="social-dialog-actions"><button className="social-button" type="button" disabled={saving} onClick={() => setChannelOpen(false)}>취소</button><button className="social-button primary" type="submit" disabled={saving}>{saving ? <LoaderCircle size={17} className="social-spin" /> : <Plus size={17} />}{saving ? "저장 중" : "채널 등록"}</button></div></form></dialog>
     </div>

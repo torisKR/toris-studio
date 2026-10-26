@@ -12,7 +12,7 @@ Toris Studio는 macOS·Windows용 Tauri 앱입니다. `desktop/src-tauri`의 Rus
 
 ## 개발 실행
 
-0.1.21부터 **코딩** 메뉴는 실제 ChatGPT 대화와 Codexify 연결만 사용합니다. 연결 상태, 요청 전달·수신·응답·파일 수신을 구분하며 ChatGPT 대화 시작은 사용자가 직접 진행합니다. 앱 소유 Open WebUI 컨테이너는 중지하고 기존 대화 볼륨은 보존합니다. [ChatGPT 연결 안내](CODEXIFY_WORKFLOW.md)를 참고하세요.
+**Agent** 탭에서 `~/projects`의 프로젝트에 Supervisor·Frontend·Backend·QA 에이전트를 실행합니다. 파일 변경과 명령 실행은 매번 승인합니다. 같은 모델 설정이 AI 작업실·영상·SNS 문구·이미지 생성에 쓰입니다. 자세한 내용은 [Agent 안내](AGENT.md)를 참고하세요.
 
 저장소 루트에서 Node.js 24, pnpm, Rust stable을 설치한 뒤 실행합니다. macOS는 Xcode Command Line Tools, Windows는 Visual Studio C++ Build Tools와 WebView2가 필요합니다.
 
@@ -78,7 +78,7 @@ Opal 메뉴를 **키워드 탐색**으로 교체합니다. 저장 자료 검색,
 
 ## AI 연결
 
-**코딩**에서 Codexify 로컬 브리지·프록시와 실제 ChatGPT 대화를 연결합니다. 데스크톱의 직접 OpenAI/Claude/CLI 모델 호출과 Open WebUI 어댑터는 제거되었습니다. ChatGPT 자체 사용 한도와 대화 재개 조건은 그대로 적용됩니다. SNS 문구는 ChatGPT가 `studio_publication_draft_receive`로 반환한 초안을 사용자가 확인·수정·저장하고 별도로 승인합니다. 이미지도 같은 대화의 기존 에셋 수신 경로로 받습니다.
+**Agent → 모델 설정**에서 구독 CLI(Claude Code·Codex·Gemini·Cursor·Kiro) 또는 API 키(Anthropic·OpenAI·Gemini·OpenRouter)와 로컬 Ollama 중 하나를 고릅니다. API 키는 OS 자격 증명 저장소에 저장합니다. SNS 문구는 선택한 모델이 작성한 뒤 앱 요청 ID에 연결된 미승인 초안으로 저장되며, 사용자가 직접 적용·게시를 승인합니다. 이미지 생성기는 OpenAI 또는 Gemini 이미지 API로 큐의 작업을 생성해 에셋 보관함에 저장합니다.
 
 
 ## 영상과 음성
