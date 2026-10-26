@@ -1,12 +1,14 @@
-Toris Studio includes cloudflared 2026.10.0, distributed under the
+Toris Studio includes cloudflared 2026.10.4, distributed under the
 accompanying Apache License 2.0. Windows includes the upstream executable.
 The macOS executable is compiled from the unmodified pinned upstream source
-with Go 1.26.9 and CGO disabled to preserve macOS 12 compatibility.
+with Go 1.27.3 (the exact version required by its go.mod) and CGO disabled.
+Go 1.27 requires macOS 13 or later, so the publication media tunnel is
+available on macOS 13+; the rest of Toris Studio keeps its macOS 12 floor.
 Cloudflared is developed by Cloudflare, Inc. and contributors.
 
 Upstream: https://github.com/cloudflare/cloudflared
-Release: https://github.com/cloudflare/cloudflared/releases/tag/2026.10.0
-Source commit: 18cdfe0a6fc7b72a0702d255a1f984e776ce0498
+Release: https://github.com/cloudflare/cloudflared/releases/tag/2026.10.4
+Source commit: dc3b264da64a801bc3a8d5301a6db21401910ad5
 
 The pinned upstream asset/source/toolchain hashes and supported targets are recorded in
 manifest.json. macOS application signing may replace the executable's

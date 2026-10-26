@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { crc32, gzipSync } from 'node:zlib';
-import { buildInvocation, cloudflaredBuild, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, MANIFEST, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-codexify.mjs';
+import { buildInvocation, cloudflaredBuild, cloudflaredMacOS, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, MANIFEST, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-codexify.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function tar(entries) {
@@ -54,7 +54,7 @@ async function temporary(task) {
 test('release targets are exact and desktop builds always include the runtime overlay', () => {
   for (const target of Object.keys(MANIFEST.targets)) {
     assert.match(targetSpec(target).url, /^https:\/\/github\.com\/devnoname120\/codexify\/releases\/download\/v1\.7\.0\//);
-    assert.match(targetSpec(target, 'cloudflared').url, /^https:\/\/github\.com\/cloudflare\/cloudflared\/releases\/download\/2026\.10\.0\//);
+    assert.match(targetSpec(target, 'cloudflared').url, /^https:\/\/github\.com\/cloudflare\/cloudflared\/releases\/download\/2026\.10\.4\//);
     assert.equal(targetSpec(target).sha256.length, 64);
   }
   for (const target of ['x86_64-unknown-linux-gnu', '../../other', 'aarch64-apple-darwin;id', '__proto__']) assert.throws(() => targetSpec(target), /Unsupported/);
@@ -177,6 +177,9 @@ test('architecture verification rejects accidental Intel/ARM swaps and malformed
   verifyBinary(macho, 'aarch64-apple-darwin');
   assert.throws(() => verifyBinary(macho, 'x86_64-apple-darwin'), /architecture/);
   macho.writeUInt32LE(0xf0000, 44); assert.throws(() => verifyBinary(macho, 'aarch64-apple-darwin'), /macOS 12/);
+  macho.writeUInt32LE(0xd0000, 44); assert.throws(() => verifyBinary(macho, 'aarch64-apple-darwin'), /macOS 12/);
+  verifyBinary(macho, 'aarch64-apple-darwin', cloudflaredMacOS());
+  macho.writeUInt32LE(0xe0000, 44); assert.throws(() => verifyBinary(macho, 'aarch64-apple-darwin', cloudflaredMacOS()), /macOS 13/);
   const pe = Buffer.alloc(128); pe.write('MZ'); pe.writeUInt32LE(64, 60); pe.writeUInt32LE(0x4550, 64); pe.writeUInt16LE(0x8664, 68);
   verifyBinary(pe, 'x86_64-pc-windows-msvc');
   pe.writeUInt16LE(0x14c, 68); assert.throws(() => verifyBinary(pe, 'x86_64-pc-windows-msvc'), /architecture/);

@@ -12,6 +12,6 @@ Playwright는 macOS 14 이상·Windows 11 이상에서 제공하며 미지원 OS
 
 `desktop/src-tauri/resources/browser/manifest.json`은 Node 24.16.0, playwright-core 1.63.0, Chromium revision 1243 / Chrome for Testing 153.0.8010.12의 플랫폼별 원본 URL·SHA256·바이트 크기·아키텍처·라이선스 정보를 고정합니다. 브라우저 추출기는 경로 이탈·중복·특수 파일을 거부하고 크기와 파일 수를 제한합니다. Mac 배포본의 상대 링크 다섯 개만 허용합니다.
 
-Node 실행 파일, Playwright Library와 headed Chrome만 번들합니다. npm·pnpm·Playwright 테스트 러너·Firefox·WebKit·headless-shell은 포함하지 않습니다. Mac의 Node와 Chrome은 `Contents/Helpers/studio-browser`에 배치하고 개별 서명한 다음 상위 앱을 서명합니다. JavaScript 작업자·Playwright Library·라이선스는 `Contents/Resources/studio-browser`에 보관합니다. Studio 본체에는 JIT 권한을 추가하지 않습니다. Codexify·cloudflared의 macOS 12 배포 대상 검증을 유지하고 설치/업데이트 파일의 512 MiB 제한을 적용합니다.
+Node 실행 파일, Playwright Library와 headed Chrome만 번들합니다. npm·pnpm·Playwright 테스트 러너·Firefox·WebKit·headless-shell은 포함하지 않습니다. Mac의 Node와 Chrome은 `Contents/Helpers/studio-browser`에 배치하고 개별 서명한 다음 상위 앱을 서명합니다. JavaScript 작업자·Playwright Library·라이선스는 `Contents/Resources/studio-browser`에 보관합니다. Studio 본체에는 JIT 권한을 추가하지 않습니다. Codexify는 macOS 12, cloudflared 2026.10.4는 Go 1.27.3 요구로 macOS 13 배포 대상을 검증하고 설치/업데이트 파일의 512 MiB 제한을 적용합니다.
 
 공개 배포와 설치된 앱 교체는 이번 구현 범위에 포함하지 않습니다. 검증 결과는 [브라우저 전환 검증 기록](BROWSER_RUNTIME_VALIDATION.md)에 기록합니다.

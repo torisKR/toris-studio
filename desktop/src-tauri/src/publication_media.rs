@@ -419,7 +419,31 @@ impl Drop for MediaLease {
         }
     }
 }
+/// The bundled cloudflared is built with Go 1.27, which requires macOS 13.
+const CLOUDFLARED_MIN_MACOS: u32 = 13;
+fn tunnel_os_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().split('.').next()?.parse::<u32>().ok())
+            .is_some_and(|major| major >= CLOUDFLARED_MIN_MACOS)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
 pub async fn lease(video: &str, thumbnail: Option<&str>) -> Result<MediaLease, String> {
+    if !tunnel_os_supported() {
+        return Err(format!(
+            "Threads 영상과 썸네일 포함 Instagram 게시는 macOS {CLOUDFLARED_MIN_MACOS} 이상에서 사용할 수 있습니다."
+        ));
+    }
     let executable = crate::codexify_proxy::cloudflared_binary()
         .ok_or("앱에 포함된 cloudflared 실행 파일을 찾을 수 없습니다.")?;
     let configuration = tempfile::NamedTempFile::new().map_err(|_| "미디어 터널 설정 준비 실패")?;

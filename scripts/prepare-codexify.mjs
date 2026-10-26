@@ -200,7 +200,8 @@ export async function downloadArchive(spec, { fetcher = fetch, timeoutMs = 60_00
   }
   fail('Too many Codexify download redirects.');
 }
-export function verifyBinary(bytes, target) {
+/** maxMacOS is a packed Mach-O version (0x000c0000 = 12.0). */
+export function verifyBinary(bytes, target, maxMacOS = 0x000c0000) {
   if (target.includes('darwin')) {
     if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf || bytes.readUInt32LE(4) !== (target.startsWith('aarch64') ? 0x0100000c : 0x01000007)) fail('Codexify Mach-O architecture does not match target.');
     const count = bytes.readUInt32LE(16), commandBytes = bytes.readUInt32LE(20);
@@ -214,7 +215,7 @@ export function verifyBinary(bytes, target) {
       if (command === 0x24) { if (size < 16) fail('Invalid Mach-O minimum version.'); minimum = Math.max(minimum || 0, bytes.readUInt32LE(offset + 8)); }
       offset += size;
     }
-    if (minimum === null || minimum > 0x000c0000) fail('Bundled runtime must support macOS 12.0 or earlier.');
+    if (minimum === null || minimum > maxMacOS) fail(`Bundled runtime must support macOS ${maxMacOS >> 16}.0 or earlier.`);
   } else {
     if (bytes.length < 64 || bytes.subarray(0, 2).toString('ascii') !== 'MZ') fail('Invalid Codexify Windows executable.');
     const pe = bytes.readUInt32LE(0x3c);
@@ -261,6 +262,13 @@ async function extractSource(archive, prefix, destination, { toolchain = false }
     await writeFile(file, bytes, { flag: 'wx', mode: executable ? 0o755 : 0o644 });
   }
 }
+/** cloudflared's pinned Go release decides its macOS floor; codexify keeps the app's 12.0 floor. */
+export function cloudflaredMacOS() {
+  const [major, minor = '0'] = String(CLOUDFLARED_MANIFEST.minimumMacOS || '12.0').split('.');
+  const packed = (Number(major) << 16) | (Number(minor) << 8);
+  if (!Number.isInteger(Number(major)) || Number(major) < 12 || Number(major) > 99) fail('Invalid cloudflared minimum macOS version.');
+  return packed;
+}
 function exactGo(command) {
   const result = spawnSync(command, ['version'], { encoding: 'utf8', timeout: 15_000, shell: false, env: { ...process.env, GOENV: 'off', GOTOOLCHAIN: 'local' } });
   return result.status === 0 && result.stdout.startsWith(`go version go${CLOUDFLARED_MANIFEST.goVersion} `);
@@ -271,7 +279,7 @@ export function cloudflaredBuild(target, { source, destination, cache, go }) {
   return {
     command: go,
     args: ['build', '-trimpath', '-buildvcs=false', '-mod=readonly', '-tags=netgo,osusergo',
-      '-ldflags', `-X main.Version=${spec.version} -X main.BuildTime=2026-10-05-17:37UTC -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=toris-studio`,
+      '-ldflags', `-X main.Version=${spec.version} -X main.BuildTime=${CLOUDFLARED_MANIFEST.buildTime} -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=toris-studio`,
       '-o', destination, './cmd/cloudflared'],
     cwd: source,
     env: { ...process.env, GOENV: 'off', GOTOOLCHAIN: 'local', GOWORK: 'off', GOFLAGS: '',
@@ -316,10 +324,10 @@ async function prepareCloudflaredSource(target, { root, fetcher }) {
     console.log(`Building cloudflared ${CLOUDFLARED_MANIFEST.version} from pinned source with Go ${CLOUDFLARED_MANIFEST.goVersion}, CGO disabled (${target}).`);
     await runBounded(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env });
     const binary = await regularFile(destination);
-    verifyBinary(binary, target);
+    verifyBinary(binary, target, cloudflaredMacOS());
     const file = path.join(directory, `cloudflared-${target}`);
     await atomicWrite(file, binary, 0o755);
-    console.log(`Prepared cloudflared ${CLOUDFLARED_MANIFEST.version}; verified pinned source, architecture, and macOS 12 deployment target.`);
+    console.log(`Prepared cloudflared ${CLOUDFLARED_MANIFEST.version}; verified pinned source, architecture, and macOS ${CLOUDFLARED_MANIFEST.minimumMacOS} deployment target.`);
     return file;
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
@@ -339,7 +347,7 @@ export async function prepareTarget(target, { root = ROOT, fetcher = fetch, runt
     await atomicWrite(cachedArchive, archive, 0o600);
   }
   const { binary, license } = extractArchive(archive, spec);
-  verifyBinary(binary, target);
+  verifyBinary(binary, target, runtime === 'cloudflared' ? cloudflaredMacOS() : undefined);
   const committedLicense = await regularFile(path.join(root, `desktop/src-tauri/resources/${runtime}/LICENSE`), 16 * 1024);
   if (license && !licenseMatches(license, committedLicense)) fail('Codexify archive LICENSE differs from the committed license.');
   if (runtime === 'cloudflared') verifyCloudflaredLicense(committedLicense);
@@ -373,7 +381,7 @@ export async function verifyStaged(target, directory, { root = ROOT } = {}) {
     const spec = targetSpec(target, runtime);
     const binary = path.join(directory, mac ? `Contents/MacOS/${runtime}` : `${runtime}.exe`);
     const resources = path.join(directory, mac ? `Contents/Resources/${runtime}-notices` : `${runtime}-notices`);
-    verifyBinary(await regularFile(binary), target);
+    verifyBinary(await regularFile(binary), target, runtime === 'cloudflared' ? cloudflaredMacOS() : undefined);
     for (const name of ['LICENSE', 'NOTICE', 'manifest.json']) {
       if (!(await regularFile(path.join(resources, name), 32 * 1024)).equals(await regularFile(path.join(root, `desktop/src-tauri/resources/${runtime}`, name), 32 * 1024))) fail(`Bundled ${runtime} ${name} differs from the verified source.`);
     }
