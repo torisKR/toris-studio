@@ -24,10 +24,16 @@ const ACCOUNT: &str = "desktop-secrets-v2";
 const SETTINGS_SERVICE: &str = "kr.toris.studio.settings";
 #[cfg(any(target_os = "macos", test))]
 const OAUTH_SERVICE: &str = "kr.toris.studio.oauth.v1";
+/// Agent-tab API keys; must match `agent_runtime::KEY_SERVICE`.
+#[cfg(any(target_os = "macos", test))]
+const AGENT_SERVICE: &str = "kr.toris.studio.agent.v1";
 #[cfg(any(target_os = "macos", test))]
 const MAX_RECORD: usize = 65_536;
 #[cfg(any(target_os = "macos", test))]
 const MAX_ENVELOPE: usize = 1_500_000;
+/// 6 settings + 18 OAuth + 4 agent API keys.
+#[cfg(any(target_os = "macos", test))]
+const MAX_ENTRIES: usize = 28;
 
 pub fn error() -> String {
     "OS 자격 증명 저장소 접근이 보류되었습니다. 연결 설정에서 ‘저장소 권한 다시 확인’을 누르세요."
@@ -68,6 +74,10 @@ fn slot(service: &str, account: &str) -> Result<String, String> {
                 return Ok(format!("oauth:{account}"));
             }
         }
+    } else if service == AGENT_SERVICE {
+        if ["anthropic", "openai", "google", "openrouter"].contains(&account) {
+            return Ok(format!("agent:{account}"));
+        }
     }
     Err(error())
 }
@@ -78,6 +88,8 @@ fn valid_slot(key: &str) -> bool {
         slot(SETTINGS_SERVICE, &format!("connection-secrets-v1:{field}")).is_ok()
     } else if let Some(account) = key.strip_prefix("oauth:") {
         slot(OAUTH_SERVICE, account).is_ok()
+    } else if let Some(account) = key.strip_prefix("agent:") {
+        slot(AGENT_SERVICE, account).is_ok()
     } else {
         false
     }
@@ -117,7 +129,7 @@ impl Default for Envelope {
 impl Envelope {
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 2
-            || self.entries.len() > 24
+            || self.entries.len() > MAX_ENTRIES
             || self
                 .entries
                 .iter()
@@ -964,6 +976,38 @@ mod tests {
         assert!(slot(OAUTH_SERVICE, "session:attacker").is_err());
         assert!(slot("untrusted.service", "session:facebook").is_err());
         assert!(slot(OAUTH_SERVICE, "upload:facebook").is_err());
+    }
+
+    #[test]
+    fn agent_api_keys_round_trip_beside_a_full_envelope() {
+        let mut vault = Vault::new(MemoryBackend::default());
+        let providers = ["anthropic", "openai", "google", "openrouter"];
+        assert_eq!(vault.read_many(AGENT_SERVICE, &providers).unwrap(), [None, None, None, None]);
+        vault.write_many(AGENT_SERVICE, &[("openai", "sk-synthetic")]).unwrap();
+        assert_eq!(
+            vault.read_many(AGENT_SERVICE, &providers).unwrap(),
+            [None, Some("sk-synthetic".into()), None, None]
+        );
+        vault.delete(AGENT_SERVICE, "openai").unwrap();
+        assert_eq!(vault.read_many(AGENT_SERVICE, &["openai"]).unwrap(), [None]);
+        assert!(!vault.blocked());
+        assert!(slot(AGENT_SERVICE, "aws").is_err());
+        assert!(!valid_slot("agent:aws"));
+
+        let mut envelope = Envelope::default();
+        for field in ["databaseUrl", "opencodexApiKey", "teamclaudeApiKey", "youtubeApiKey", "naverClientId", "naverClientSecret"] {
+            envelope.entries.insert(format!("settings:{field}"), None);
+        }
+        for provider in ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook"] {
+            for kind in ["client", "session", "audit"] {
+                envelope.entries.insert(format!("oauth:{kind}:{provider}"), None);
+            }
+        }
+        for provider in providers {
+            envelope.entries.insert(slot(AGENT_SERVICE, provider).unwrap(), Some("k".into()));
+        }
+        assert_eq!(envelope.entries.len(), 28);
+        assert!(Envelope::decode(&envelope.encode().unwrap()).is_ok());
     }
 
     #[cfg(target_os = "macos")]

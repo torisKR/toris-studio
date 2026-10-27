@@ -312,7 +312,11 @@ pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
 
 /// Full configuration including secrets; sent only over the child's stdin.
 pub fn runtime_config(settings: &AgentSettings) -> Result<Value, String> {
-    Ok(runtime_config_with(settings, &keys()?))
+    Ok(runtime_config_from(settings, keys()))
+}
+/// A locked key store must not block CLI models: API models then report a missing key.
+pub fn runtime_config_from(settings: &AgentSettings, keys: Result<HashMap<&'static str, String>, String>) -> Value {
+    runtime_config_with(settings, &keys.unwrap_or_default())
 }
 pub fn runtime_config_with(
     settings: &AgentSettings,
@@ -637,6 +641,15 @@ mod tests {
         assert!(config["image"].is_null());
         assert_eq!(config["keys"]["openai"], "sk-test");
         assert_eq!(config["chromaUrl"], CHROMA_URL);
+    }
+
+    #[test]
+    fn a_locked_key_store_still_configures_cli_models() {
+        let mut settings = AgentSettings::default();
+        settings.agent_model = Some(ModelChoice { provider: "codex-cli".into(), model: String::new() });
+        let config = runtime_config_from(&settings, Err("저장소 보류".into()));
+        assert_eq!(config["agentModel"]["provider"], "codex-cli");
+        assert_eq!(config["keys"], json!({}));
     }
 
     fn fake_runtime(script: &str) -> Arc<AgentRuntime> {
