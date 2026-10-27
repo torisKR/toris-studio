@@ -24,20 +24,67 @@ const ACCOUNT: &str = "desktop-secrets-v2";
 const SETTINGS_SERVICE: &str = "kr.toris.studio.settings";
 #[cfg(any(target_os = "macos", test))]
 const OAUTH_SERVICE: &str = "kr.toris.studio.oauth.v1";
-/// Agent-tab API keys; must match `agent_runtime::KEY_SERVICE`.
-#[cfg(any(target_os = "macos", test))]
-const AGENT_SERVICE: &str = "kr.toris.studio.agent.v1";
 #[cfg(any(target_os = "macos", test))]
 const MAX_RECORD: usize = 65_536;
 #[cfg(any(target_os = "macos", test))]
 const MAX_ENVELOPE: usize = 1_500_000;
-/// 6 settings + 18 OAuth + 4 agent API keys.
+// Retain the 24 legacy slots alongside up to 100 connections, their five
+// lifecycle records, and bounded recovery/backups/tombstones. The byte limits
+// remain independent; no old record is discarded to make space.
 #[cfg(any(target_os = "macos", test))]
-const MAX_ENTRIES: usize = 28;
+const MAX_ENTRIES: usize = 2048;
 
 pub fn error() -> String {
     "OS 자격 증명 저장소 접근이 보류되었습니다. 연결 설정에서 ‘저장소 권한 다시 확인’을 누르세요."
         .into()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn oauth_provider(provider: &str) -> bool {
+    [
+        "youtube",
+        "threads",
+        "naver_blog",
+        "tiktok",
+        "instagram",
+        "facebook",
+    ]
+    .contains(&provider)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn oauth_account(account: &str) -> bool {
+    let mut parts = account.split(':');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("connections" | "connection-commits"), Some("v2"), None, None) => true,
+        (Some(kind), Some(provider), None, None) => {
+            matches!(
+                kind,
+                "client" | "session" | "audit" | "legacy-client-changed"
+            ) && oauth_provider(provider)
+        }
+        (Some("legacy-copy"), Some("v2"), Some(provider), None) => oauth_provider(provider),
+        (Some("legacy-backup"), Some(provider), Some(generation), None) => {
+            oauth_provider(provider)
+                && generation.len() == 43
+                && generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        }
+        (Some(kind), Some("v2"), Some(id), None) => {
+            matches!(
+                kind,
+                "connection"
+                    | "audit"
+                    | "refresh-candidate"
+                    | "revocation-pending"
+                    | "db-cleanup-pending"
+            ) && id.len() == 36
+                && uuid::Uuid::parse_str(id)
+                    .is_ok_and(|parsed| parsed.hyphenated().to_string() == id)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -58,26 +105,8 @@ fn slot(service: &str, account: &str) -> Result<String, String> {
         {
             return Ok(format!("settings:{field}"));
         }
-    } else if service == OAUTH_SERVICE {
-        if let Some((kind, provider)) = account.split_once(':') {
-            if ["client", "session", "audit"].contains(&kind)
-                && [
-                    "youtube",
-                    "threads",
-                    "naver_blog",
-                    "tiktok",
-                    "instagram",
-                    "facebook",
-                ]
-                .contains(&provider)
-            {
-                return Ok(format!("oauth:{account}"));
-            }
-        }
-    } else if service == AGENT_SERVICE {
-        if ["anthropic", "openai", "google", "openrouter"].contains(&account) {
-            return Ok(format!("agent:{account}"));
-        }
+    } else if service == OAUTH_SERVICE && oauth_account(account) {
+        return Ok(format!("oauth:{account}"));
     }
     Err(error())
 }
@@ -88,8 +117,6 @@ fn valid_slot(key: &str) -> bool {
         slot(SETTINGS_SERVICE, &format!("connection-secrets-v1:{field}")).is_ok()
     } else if let Some(account) = key.strip_prefix("oauth:") {
         slot(OAUTH_SERVICE, account).is_ok()
-    } else if let Some(account) = key.strip_prefix("agent:") {
-        slot(AGENT_SERVICE, account).is_ok()
     } else {
         false
     }
@@ -608,7 +635,7 @@ pub fn retry_access() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[derive(Default)]
     struct MemoryBackend {
@@ -650,6 +677,262 @@ mod tests {
     }
     const YOUTUBE: &str = "connection-secrets-v1:youtubeApiKey";
     const NAVER: &str = "connection-secrets-v1:naverClientSecret";
+
+    // Cross-module OAuth tests replace only the OS boundary, retaining the
+    // production slot validation, envelope, migration, and tombstone behavior.
+    pub(crate) struct MemoryVault(std::sync::Mutex<Vault<MemoryBackend>>);
+    impl Default for MemoryVault {
+        fn default() -> Self {
+            Self(std::sync::Mutex::new(Vault::new(MemoryBackend::default())))
+        }
+    }
+    impl MemoryVault {
+        pub(crate) fn read(&self, account: &str) -> Result<Option<String>, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .read_many(OAUTH_SERVICE, &[account])
+                .map(|mut values| values.remove(0))
+        }
+        pub(crate) fn write(&self, account: &str, value: &str) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .write_many(OAUTH_SERVICE, &[(account, value)])
+        }
+        pub(crate) fn delete(&self, account: &str) -> Result<(), String> {
+            self.0.lock().unwrap().delete(OAUTH_SERVICE, account)
+        }
+        pub(crate) fn restart(&self) {
+            let mut vault = self.0.lock().unwrap();
+            let backend = std::mem::take(&mut vault.backend);
+            *vault = Vault::new(backend);
+        }
+    }
+
+    #[test]
+    fn oauth_connection_indexes_load_without_a_false_permission_error() {
+        let mut vault = Vault::new(MemoryBackend::default());
+        assert_eq!(
+            vault
+                .read_many(OAUTH_SERVICE, &["connection-commits:v2", "connections:v2"])
+                .unwrap(),
+            [None, None]
+        );
+        assert!(!vault.blocked());
+        let mut restarted = Vault::new(vault.backend);
+        assert_eq!(
+            restarted
+                .read_many(OAUTH_SERVICE, &["connection-commits:v2", "connections:v2"])
+                .unwrap(),
+            [None, None]
+        );
+        assert_eq!(restarted.backend.writes, 1);
+    }
+
+    #[test]
+    fn oauth_connection_records_migrate_and_preserve_disconnects_across_restart() {
+        let accounts = [
+            "connections:v2",
+            "connection-commits:v2",
+            "connection:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "audit:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "refresh-candidate:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "revocation-pending:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "db-cleanup-pending:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "legacy-copy:v2:youtube",
+            "legacy-client-changed:youtube",
+            "legacy-backup:youtube:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ];
+        let mut backend = MemoryBackend::default();
+        for account in accounts {
+            backend
+                .values
+                .insert(pair(OAUTH_SERVICE, account), "synthetic-record".into());
+        }
+        let mut vault = Vault::new(backend);
+        assert_eq!(
+            vault.read_many(OAUTH_SERVICE, &accounts).unwrap(),
+            vec![Some("synthetic-record".into()); accounts.len()]
+        );
+        vault
+            .write_many(OAUTH_SERVICE, &[(accounts[2], "updated-record")])
+            .unwrap();
+        vault.delete(OAUTH_SERVICE, accounts[4]).unwrap();
+        let mut restarted = Vault::new(vault.backend);
+        let restored = restarted.read_many(OAUTH_SERVICE, &accounts).unwrap();
+        assert_eq!(restored[2].as_deref(), Some("updated-record"));
+        assert_eq!(restored[4], None);
+        assert_eq!(restored[9].as_deref(), Some("synthetic-record"));
+        assert_eq!(
+            restarted.backend.reads[&pair(OAUTH_SERVICE, accounts[2])],
+            1
+        );
+        assert_eq!(
+            restarted.backend.reads[&pair(OAUTH_SERVICE, accounts[4])],
+            1
+        );
+        assert_eq!(
+            restarted.backend.values[&pair(OAUTH_SERVICE, accounts[2])],
+            "synthetic-record"
+        );
+    }
+
+    #[test]
+    fn denied_oauth_connection_read_is_cached_until_explicit_retry() {
+        let mut backend = MemoryBackend::default();
+        backend.read_denied = Some(pair(OAUTH_SERVICE, "connections:v2"));
+        let mut vault = Vault::new(backend);
+        for _ in 0..20 {
+            assert!(vault.read_many(OAUTH_SERVICE, &["connections:v2"]).is_err());
+        }
+        assert!(vault.blocked());
+        assert_eq!(
+            vault.backend.reads[&pair(OAUTH_SERVICE, "connections:v2")],
+            1
+        );
+        vault.backend.read_denied = None;
+        vault.retry();
+        assert_eq!(
+            vault.read_many(OAUTH_SERVICE, &["connections:v2"]).unwrap(),
+            [None]
+        );
+        assert!(!vault.blocked());
+    }
+
+    #[test]
+    fn oauth_connection_state_extends_full_legacy_envelope_without_pruning() {
+        let mut old = Envelope::default();
+        for field in [
+            "databaseUrl",
+            "opencodexApiKey",
+            "teamclaudeApiKey",
+            "youtubeApiKey",
+            "naverClientId",
+            "naverClientSecret",
+        ] {
+            old.entries
+                .insert(format!("settings:{field}"), Some("legacy-setting".into()));
+        }
+        for provider in [
+            "youtube",
+            "threads",
+            "naver_blog",
+            "tiktok",
+            "instagram",
+            "facebook",
+        ] {
+            for kind in ["client", "session", "audit"] {
+                old.entries.insert(
+                    format!("oauth:{kind}:{provider}"),
+                    Some("legacy-oauth".into()),
+                );
+            }
+        }
+        let original = old.entries.clone();
+        let mut expanded = Envelope::decode(&old.encode().unwrap()).unwrap();
+        expanded
+            .entries
+            .insert("oauth:connections:v2".into(), Some("[]".into()));
+        expanded
+            .entries
+            .insert("oauth:connection-commits:v2".into(), Some("[]".into()));
+        for id in 0..100_u128 {
+            for kind in [
+                "connection",
+                "audit",
+                "refresh-candidate",
+                "revocation-pending",
+                "db-cleanup-pending",
+            ] {
+                expanded.entries.insert(
+                    format!("oauth:{kind}:v2:{}", uuid::Uuid::from_u128(id)),
+                    Some("synthetic-state".into()),
+                );
+            }
+        }
+        let restored = Envelope::decode(&expanded.encode().unwrap()).unwrap();
+        assert_eq!(restored.entries.len(), 526);
+        for (key, value) in original {
+            assert_eq!(restored.entries.get(&key), Some(&value));
+        }
+    }
+
+    #[test]
+    fn oauth_connection_keys_reject_unrecognized_or_unbounded_identifiers() {
+        for account in [
+            "connections:v3",
+            "connection-commits:v2:extra",
+            "connection:v2:42a548b1830f47daaf9afc8f4a45215d",
+            "connection:v2:42A548B1-830F-47DA-AF9A-FC8F4A45215D",
+            "connection:v2:42a548b1-830f-47da-af9a-fc8f4a45215d:extra",
+            "connection:v2:not-a-uuid",
+            "arbitrary:v2:42a548b1-830f-47da-af9a-fc8f4a45215d",
+            "legacy-copy:v2:attacker",
+            "legacy-client-changed:attacker",
+            "legacy-backup:youtube:short",
+            "legacy-backup:attacker:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "legacy-backup:youtube:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/",
+            "legacy-backup:youtube:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:extra",
+            "session:attacker",
+        ] {
+            let mut vault = Vault::new(MemoryBackend::default());
+            assert!(
+                vault.read_many(OAUTH_SERVICE, &[account]).is_err(),
+                "{account}"
+            );
+            assert!(vault.write_many(OAUTH_SERVICE, &[(account, "x")]).is_err());
+            assert!(vault.delete(OAUTH_SERVICE, account).is_err());
+            assert!(vault.backend.reads.is_empty());
+            assert_eq!(vault.backend.writes, 0);
+            assert!(!vault.blocked());
+        }
+    }
+
+    #[test]
+    fn oauth_connection_storage_remains_bounded_by_records_and_bytes() {
+        let mut crowded = Envelope::default();
+        for id in 0..2048_u128 {
+            crowded.entries.insert(
+                format!("oauth:connection:v2:{}", uuid::Uuid::from_u128(id)),
+                None,
+            );
+        }
+        assert!(crowded.encode().is_ok());
+        crowded.entries.insert(
+            "oauth:connection:v2:42a548b1-830f-47da-af9a-fc8f4a45215d".into(),
+            None,
+        );
+        assert!(crowded.encode().is_err());
+        let mut oversized = Envelope::default();
+        oversized.entries.insert(
+            "oauth:connection:v2:42a548b1-830f-47da-af9a-fc8f4a45215d".into(),
+            Some("x".repeat(65_536)),
+        );
+        assert!(oversized.encode().is_ok());
+        oversized
+            .entries
+            .values_mut()
+            .next()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .push('x');
+        assert!(oversized.encode().is_err());
+        oversized.entries.clear();
+        for id in 0..22_u128 {
+            oversized.entries.insert(
+                format!("oauth:connection:v2:{}", uuid::Uuid::from_u128(id)),
+                Some("x".repeat(65_536)),
+            );
+        }
+        assert!(oversized.encode().is_ok());
+        oversized.entries.insert(
+            "oauth:connection:v2:42a548b1-830f-47da-af9a-fc8f4a45215d".into(),
+            Some("x".repeat(65_536)),
+        );
+        assert!(oversized.encode().is_err());
+    }
 
     #[test]
     fn authorized_migration_preserves_legacy_and_restarts_without_legacy_reads() {
@@ -979,35 +1262,13 @@ mod tests {
     }
 
     #[test]
-    fn agent_api_keys_round_trip_beside_a_full_envelope() {
-        let mut vault = Vault::new(MemoryBackend::default());
-        let providers = ["anthropic", "openai", "google", "openrouter"];
-        assert_eq!(vault.read_many(AGENT_SERVICE, &providers).unwrap(), [None, None, None, None]);
-        vault.write_many(AGENT_SERVICE, &[("openai", "sk-synthetic")]).unwrap();
-        assert_eq!(
-            vault.read_many(AGENT_SERVICE, &providers).unwrap(),
-            [None, Some("sk-synthetic".into()), None, None]
-        );
-        vault.delete(AGENT_SERVICE, "openai").unwrap();
-        assert_eq!(vault.read_many(AGENT_SERVICE, &["openai"]).unwrap(), [None]);
-        assert!(!vault.blocked());
-        assert!(slot(AGENT_SERVICE, "aws").is_err());
-        assert!(!valid_slot("agent:aws"));
-
-        let mut envelope = Envelope::default();
-        for field in ["databaseUrl", "opencodexApiKey", "teamclaudeApiKey", "youtubeApiKey", "naverClientId", "naverClientSecret"] {
-            envelope.entries.insert(format!("settings:{field}"), None);
-        }
-        for provider in ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook"] {
-            for kind in ["client", "session", "audit"] {
-                envelope.entries.insert(format!("oauth:{kind}:{provider}"), None);
-            }
-        }
-        for provider in providers {
-            envelope.entries.insert(slot(AGENT_SERVICE, provider).unwrap(), Some("k".into()));
-        }
-        assert_eq!(envelope.entries.len(), 28);
-        assert!(Envelope::decode(&envelope.encode().unwrap()).is_ok());
+    fn an_envelope_written_by_the_released_app_still_decodes() {
+        // 0.3.2 stores multi-connection OAuth records in the shared envelope.
+        let raw = r#"{"schemaVersion":2,"entries":{"oauth:connections:v2":"[]","oauth:legacy-client-changed:youtube":null,"settings:youtubeApiKey":"k"}}"#;
+        assert!(Envelope::decode(raw).is_ok());
+        // Agent keys live in their own Keychain items: an agent slot here would
+        // make the released app reject the whole envelope.
+        assert!(!valid_slot("agent:openai"));
     }
 
     #[cfg(target_os = "macos")]

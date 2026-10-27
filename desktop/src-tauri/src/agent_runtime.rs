@@ -138,9 +138,8 @@ fn key_account(provider: &str) -> Result<&'static str, String> {
 }
 pub fn read_key(provider: &str) -> Result<Option<String>, String> {
     let account = key_account(provider)?;
-    #[cfg(target_os = "macos")]
-    return crate::vault::read(KEY_SERVICE, account);
-    #[cfg(not(target_os = "macos"))]
+    // Agent keys are separate Keychain items, never entries in the shared app
+    // envelope: older/newer app builds reject envelope slots they do not know.
     match keyring::Entry::new(KEY_SERVICE, account).and_then(|e| e.get_password()) {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -154,12 +153,6 @@ pub fn write_key(provider: &str, value: Option<&str>) -> Result<(), String> {
             return Err("API 키 형식을 확인하세요.".into());
         }
     }
-    #[cfg(target_os = "macos")]
-    return match value {
-        Some(value) => crate::vault::write(KEY_SERVICE, account, value),
-        None => crate::vault::delete(KEY_SERVICE, account),
-    };
-    #[cfg(not(target_os = "macos"))]
     {
         let entry = keyring::Entry::new(KEY_SERVICE, account).map_err(|_| crate::vault::error())?;
         match value {
@@ -181,25 +174,13 @@ pub fn settings_view(settings: &AgentSettings, keys: Result<HashMap<&'static str
     json!({"settings": settings, "keys": saved, "chromaUrl": CHROMA_URL, "keyStore": key_store})
 }
 pub fn keys() -> Result<HashMap<&'static str, String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let values = crate::vault::read_many(KEY_SERVICE, &KEY_PROVIDERS)?;
-        Ok(KEY_PROVIDERS
-            .into_iter()
-            .zip(values)
-            .filter_map(|(k, v)| v.filter(|v| !v.is_empty()).map(|v| (k, v)))
-            .collect())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let mut out = HashMap::new();
-        for provider in KEY_PROVIDERS {
-            if let Some(value) = read_key(provider)? {
-                out.insert(provider, value);
-            }
+    let mut out = HashMap::new();
+    for provider in KEY_PROVIDERS {
+        if let Some(value) = read_key(provider)?.filter(|v| !v.is_empty()) {
+            out.insert(provider, value);
         }
-        Ok(out)
     }
+    Ok(out)
 }
 
 /// Directories searched for node and subscription CLIs (Finder/Explorer launches lack shell PATH).
