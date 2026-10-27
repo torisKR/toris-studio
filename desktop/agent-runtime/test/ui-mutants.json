@@ -55,9 +55,20 @@
   "timeoutMs": 400000
  },
  {
-  "id": "ui.office-paper-never-flies",
-  "file": "desktop/src/AgentOffice.tsx",
-  "find": "if (first || prefersReducedMotion() || !floor.current) return;",
+  "id": "ui.office-desk-filter-ignored",
+  "file": "desktop/src/AgentRunView.tsx",
+  "find": ".filter(e => !focus || e.agent === focus)",
+  "replace": "",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.pixel-nobody-walks",
+  "file": "desktop/src/PixelOffice.tsx",
+  "find": "if (first || !plan || reducedMotion()) return;",
   "replace": "return;",
   "cmd": [
    "node",
@@ -66,10 +77,10 @@
   "timeoutMs": 400000
  },
  {
-  "id": "ui.office-desk-filter-ignored",
-  "file": "desktop/src/AgentRunView.tsx",
-  "find": ".filter(e => !focus || e.agent === focus)",
-  "replace": "",
+  "id": "ui.pixel-away-shown",
+  "file": "desktop/src/AgentOffice.css",
+  "find": ".pixel-person.is-away, .pixel-person.is-walking { opacity: 0; }",
+  "replace": ".pixel-person.is-walking { opacity: 0; }",
   "cmd": [
    "node",
    "scripts/verify-agent-ui.mjs"

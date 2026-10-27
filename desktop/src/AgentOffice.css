@@ -1,4 +1,4 @@
-/* Agent office: desks, hand-off paper and the procedure strip. Tokens follow DESIGN.md. */
+/* Agent office: pixel scene, desk cards and the procedure strip. UI tokens follow DESIGN.md. */
 .office { --o-ok: #8ae3bb; --o-attn: #e6be83; --o-mono: ui-monospace, SFMono-Regular, Menlo, monospace; display: grid; gap: 12px; }
 .office-code { font: 600 10px/1 var(--o-mono); letter-spacing: .08em; color: var(--social-muted); text-transform: uppercase; font-variant-numeric: tabular-nums; }
 
@@ -12,109 +12,64 @@
 .office-steps li[data-state="current"] { color: var(--social-text); border-color: var(--social-accent); box-shadow: inset 0 -2px 0 var(--social-accent); font-weight: 600; }
 @media (max-width: 900px) { .office-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
-/* Floor: a faint drafting grid, nothing else decorative. */
-.office-floor { position: relative; display: grid; gap: 10px; padding: 12px; border: 1px solid var(--social-line); border-radius: 12px;
-  background-color: var(--social-bg);
-  background-image: linear-gradient(color-mix(in srgb, var(--social-line) 45%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--social-line) 45%, transparent) 1px, transparent 1px);
-  background-size: 24px 24px; background-position: -1px -1px; }
-.office-row { display: grid; gap: 10px; }
-.office-row-pm { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
-.office-row-staff { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-@media (max-width: 640px) { .office-row-pm { grid-template-columns: 1fr; } }
+/* Pixel scene: one SVG, scaled with hard pixel edges. */
+.office-floor { overflow: hidden; border: 1px solid var(--social-line); border-radius: 12px; background: #0b1017; }
+.pixel-office { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.pixel-plate { font: 700 4px var(--o-mono); fill: #e8eef5; letter-spacing: .4px; }
+.pixel-person.is-away, .pixel-person.is-walking { opacity: 0; }
 
-.office-desk { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "art" "state" "meta" "paper" "counts" "note"; row-gap: 3px; align-items: center; justify-items: start;
-  padding: 10px 12px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); color: var(--social-text); text-align: left; font: inherit; cursor: pointer;
-  transition: border-color .15s ease, transform .15s ease; }
-.office-desk > * { max-width: 100%; }
-.office-desk .office-worker { justify-self: center; margin: 2px 0 4px; }
-.office-desk.pm { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "head head" "art state" "art meta" "art paper" "art counts" "note note"; column-gap: 12px; }
-.office-desk.pm .office-worker { margin: 0; }
-.office-desk .office-note { justify-self: stretch; }
+/* A walk: out to the other desk, a short stop, back. Whole-pixel steps keep the pixel look. */
+.pixel-walker { animation: pixel-walk 3s steps(10, jump-none) 1 both; }
+@keyframes pixel-walk {
+  0% { transform: translate(var(--fx), var(--fy)); }
+  40%, 60% { transform: translate(var(--tx), var(--ty)); }
+  100% { transform: translate(var(--fx), var(--fy)); }
+}
+.pixel-walker .f-stride { opacity: 0; animation: pixel-step .3s steps(1) 10; }
+.pixel-walker .f-stand { animation: pixel-step-back .3s steps(1) 10; }
+@keyframes pixel-step { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pixel-step-back { 0% { opacity: 0; } 50% { opacity: 1; } }
+.pixel-carried { animation: pixel-drop 3s steps(1) 1 both; }
+.pixel-walker[data-kind="order"] .pixel-carried { animation-name: pixel-pick; }
+@keyframes pixel-drop { 0% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes pixel-pick { 0% { opacity: 0; } 50%, 100% { opacity: 1; } }
+
+/* A new event makes the bubble hop twice and a busy screen flicker; then both hold still. */
+.pixel-bubble-anim { animation: pixel-pop .2s steps(1) 4 alternate; }
+@keyframes pixel-pop { 50% { transform: translateY(-1px); } }
+[data-activity="coding"] .pixel-screen, [data-activity="testing"] .pixel-screen { animation: pixel-flicker .2s steps(1) 4; }
+@keyframes pixel-flicker { 50% { opacity: .55; } }
+
+/* Desk cards under the scene: what each person is doing, in words. */
+.office-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.office-desk { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "art head" "art meta" "state state" "paper paper" "counts counts" "note note"; column-gap: 8px; row-gap: 3px; align-items: center;
+  padding: 10px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); color: var(--social-text); text-align: left; font: inherit; cursor: pointer; transition: border-color .15s ease; }
+.office-desk > * { min-width: 0; }
 .office-desk:hover { border-color: color-mix(in srgb, var(--social-accent) 55%, var(--social-line)); }
-@media (hover: hover) and (pointer: fine) { .office-desk:hover { transform: translateY(-1px); } }
 .office-desk:focus-visible { outline: 2px solid var(--social-accent); outline-offset: 4px; }
 .office-desk[aria-pressed="true"] { border-color: var(--social-accent); background: color-mix(in srgb, var(--social-accent) 7%, var(--social-panel)); }
-.office-desk-head { grid-area: head; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.office-desk-head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.office-worker { grid-area: art; width: 96px; height: auto; }
-.office-desk.pm .office-worker { width: 120px; }
-.office-state { grid-area: state; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-.office-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--social-line); flex: none; }
-.office-meta { grid-area: meta; color: var(--social-muted); font-size: 11px; }
-.office-paper-chip { grid-area: paper; display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 11px var(--o-mono); color: var(--social-muted); }
+.pixel-portrait { grid-area: art; image-rendering: pixelated; background: var(--social-inset); border: 1px solid var(--social-line); border-radius: 4px; }
+.office-desk-head { grid-area: head; display: grid; gap: 3px; }
+.office-desk-head strong { font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.office-meta { grid-area: meta; color: var(--social-muted); font-size: 11px; line-height: 1.35; }
+.office-state { grid-area: state; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; font-weight: 600; }
+.office-dot { width: 7px; height: 7px; background: var(--social-line); flex: none; }
+.office-paper-chip { grid-area: paper; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 11px var(--o-mono); color: var(--social-muted); }
 .office-counts { grid-area: counts; font-size: 11px; color: var(--social-muted); font-variant-numeric: tabular-nums; }
 .office-counts b { color: var(--social-text); font-weight: 600; }
 .office-note { grid-area: note; margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--social-line); font-size: 12px; color: var(--social-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-
-/* Corner brackets mark the desk that is working right now. */
 .office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) { border-color: var(--social-accent); }
-.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"])::before,
-.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"])::after {
-  content: ""; position: absolute; width: 10px; height: 10px; border: 2px solid var(--social-accent); pointer-events: none; }
-.office-desk::before { top: -3px; left: -3px; border-right: 0 !important; border-bottom: 0 !important; }
-.office-desk::after { bottom: -3px; right: -3px; border-left: 0 !important; border-top: 0 !important; }
 .office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) .office-dot { background: var(--social-accent); }
 .office-desk[data-activity="approval"] { border-color: var(--o-attn); }
 .office-desk[data-activity="approval"] .office-state { color: var(--o-attn); }
 .office-desk[data-activity="done"] .office-state { color: var(--o-ok); }
 .office-desk[data-activity="away"] { color: var(--social-muted); }
-.office-desk[data-activity="away"] .office-worker { opacity: .5; }
+.office-desk[data-activity="away"] .pixel-portrait { opacity: .5; }
 
-.office-tray { display: grid; align-content: center; justify-items: start; gap: 4px; padding: 12px; border: 1px dashed var(--social-line); border-radius: 8px; background: var(--social-inset); font-size: 12px; color: var(--social-muted); }
+.office-tray { display: grid; align-content: center; justify-items: start; gap: 4px; padding: 10px; border: 1px dashed var(--social-line); border-radius: 8px; background: var(--social-inset); font-size: 12px; color: var(--social-muted); min-width: 0; }
 .office-tray strong { color: var(--social-text); font-size: 13px; }
-.office-tray svg { color: var(--social-muted); }
+.office-tray span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .office-tray.waiting { border-style: solid; border-color: var(--o-attn); color: var(--o-attn); }
-.office-tray.waiting svg { color: var(--o-attn); }
-
-/* The paper in flight: one finite move per hand-off. */
-.office-paper { position: absolute; z-index: 2; display: grid; place-items: center; width: 26px; height: 32px; margin: -16px 0 0 -13px; border: 1px solid var(--social-accent); border-radius: 3px; background: var(--social-panel); color: var(--social-accent); pointer-events: none;
-  animation: office-fly .9s cubic-bezier(.45, 0, .2, 1) both; }
-.office-paper[data-kind="sendBack"], .office-paper[data-kind="approval"] { border-color: var(--o-attn); color: var(--o-attn); }
-.office-paper[data-kind="final"] { border-color: var(--o-ok); color: var(--o-ok); }
-@keyframes office-fly {
-  0% { transform: translate(0, 0) scale(.8); opacity: 0; }
-  12% { opacity: 1; }
-  50% { transform: translate(calc(var(--dx) * .5), calc(var(--dy) * .5 - 28px)) rotate(-6deg); }
-  88% { opacity: 1; }
-  100% { transform: translate(var(--dx), var(--dy)) scale(.8); opacity: 0; }
-}
-
-/* Worker drawing. */
-.office-worker { color: var(--social-muted); }
-.office-worker .w-desk { fill: var(--social-line); }
-.office-worker .w-screen { fill: var(--social-inset); stroke: var(--social-line); }
-.office-worker .w-screen-art rect, .office-worker .w-stack rect { fill: var(--social-line); }
-.office-worker .w-stroke path, .office-worker .w-gear path, .office-worker .w-gear circle, .office-worker .w-arm, .office-worker .w-held path, .office-worker .w-check { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.office-worker .w-chair { fill: var(--social-inset); stroke: var(--social-line); }
-.office-worker .w-skin { fill: #c9d3df; }
-.office-worker .w-hair { fill: #3b4757; }
-.office-worker .w-body { fill: #3b4757; }
-.office-worker .w-sheet { fill: #edf2f7; }
-.office-worker .w-think circle { fill: var(--social-muted); }
-.office-worker .w-fill-accent { fill: var(--social-accent) !important; stroke: none; }
-.office-worker .w-check { stroke: var(--o-ok); stroke-width: 2.4; }
-.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) .office-worker { color: var(--social-accent); }
-.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) .w-body { fill: color-mix(in srgb, var(--social-accent) 45%, #3b4757); }
-.office-worker[data-activity="approval"] { color: var(--o-attn); }
-.office-worker[data-activity="approval"] .w-arm-r { transform: rotate(-38deg); transform-origin: 33px 33px; }
-.office-worker[data-activity="done"] .w-head { transform: rotate(-6deg); transform-origin: 26px 24px; }
-
-/* Each new event replays the pose a few times (the worker is re-mounted), then it holds still. */
-.office-worker[data-activity="coding"] .w-arm-r { animation: w-type .28s ease-in-out 6 alternate; transform-origin: 33px 33px; }
-.office-worker[data-activity="coding"] .w-arm-l { animation: w-type .28s ease-in-out .14s 6 alternate; transform-origin: 19px 33px; }
-.office-worker[data-activity="coding"] .w-line-grow, .office-worker[data-activity="testing"] .w-line-grow { animation: w-grow .7s ease-out 2; transform-origin: 47px 0; transform-box: view-box; }
-.office-worker[data-activity="reading"] .w-held { animation: w-read .8s ease-in-out 2 alternate; transform-origin: 40px 34px; }
-.office-worker[data-activity="thinking"] .w-think circle { animation: w-dot .6s ease-in-out 3 alternate; }
-.office-worker[data-activity="thinking"] .w-think circle:nth-child(2) { animation-delay: .15s; }
-.office-worker[data-activity="thinking"] .w-think circle:nth-child(3) { animation-delay: .3s; }
-.office-worker[data-activity="testing"] .w-screen { animation: w-flash .45s steps(2) 4; }
-.office-worker[data-activity="reviewing"] .w-lens { animation: w-scan .9s ease-in-out 2 alternate; }
-@keyframes w-type { to { transform: rotate(-9deg); } }
-@keyframes w-grow { from { transform: scaleX(.2); } to { transform: scaleX(1); } }
-@keyframes w-read { to { transform: rotate(-8deg) translateY(-1px); } }
-@keyframes w-dot { to { opacity: .25; } }
-@keyframes w-flash { 50% { fill: color-mix(in srgb, var(--social-accent) 30%, var(--social-inset)); } }
-@keyframes w-scan { to { transform: translate(-10px, 2px); } }
 
 .office-log h3 { margin: 0 0 6px; font-size: 12px; color: var(--social-muted); font-weight: 600; }
 .office-log ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
@@ -127,6 +82,7 @@
 .agent-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--social-muted); }
 
 @media (prefers-reduced-motion: reduce) {
-  .office-desk, .office-worker *, .office-paper { animation: none !important; transition: none !important; }
-  .office-paper { display: none; }
+  .office *, .office *::before, .office *::after { animation: none !important; transition: none !important; }
+  .pixel-walker { display: none; }
+  .pixel-person.is-walking { opacity: 1; }
 }

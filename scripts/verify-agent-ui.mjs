@@ -82,6 +82,14 @@ try {
   assert.equal(await card.locator('.diff-del').count(), 1);
   const office = page.getByRole('region', { name: '에이전트 사무실' });
   assert.equal(await office.getByRole('button', { name: /책상/ }).count(), 4, 'one desk per agent role');
+  const scene = office.locator('svg.pixel-office');
+  assert.equal(await scene.getAttribute('role'), 'img');
+  assert.match(await scene.getAttribute('aria-label'), /픽셀 사무실/);
+  assert.deepEqual(await scene.locator('[data-character]').evaluateAll(els => els.map(e => `${e.dataset.character}:${e.dataset.look}`).sort()),
+    ['backend:youngMan', 'frontend:youngWoman', 'qa:woman30s', 'supervisor:man30s']);
+  assert.equal(await scene.getAttribute('shape-rendering'), 'crispEdges');
+  assert.deepEqual(await scene.locator('[data-character]').evaluateAll(els => els.filter(e => getComputedStyle(e).opacity !== '0').map(e => e.dataset.character).sort()),
+    ['backend', 'supervisor'], 'only people who have started work are at their desks');
   assert.match(await office.getByRole('button', { name: /Backend Expert 책상/ }).getAttribute('aria-label'), /결재 대기/);
   assert.match(await office.getByRole('button', { name: /Supervisor 책상/ }).getAttribute('aria-label'), /PM/);
   assert.equal(await office.locator('[aria-current="step"]').innerText(), '결재 대기');
@@ -99,14 +107,16 @@ try {
   assert.equal(await timeline.locator('li').count(), 4, 'all events again');
   report.checks.push('Desk selection filters the log to that agent and toggles back');
 
-  // With motion allowed, a new hand-off flies a paper from one desk to the next.
+  // With motion allowed, the sender walks over with the paper and back, once.
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await emit(ev(5, 'qa', 'reviewing', '결과를 검토하고 있습니다.'));
-  await office.locator('.office-paper[data-kind="report"]').waitFor();
-  assert.ok(await page.evaluate(() => document.querySelector('.office-paper').getAnimations().length > 0), 'paper animates');
-  await page.waitForFunction(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length === 0, null, { timeout: 5000 });
+  await office.locator('.pixel-walker[data-kind="report"][data-walker="backend"]').waitFor({ state: 'attached' });
+  assert.ok(await page.evaluate(() => document.querySelector('.pixel-walker').getAnimations({ subtree: true }).length > 0), 'walker animates');
+  assert.equal(await office.locator('[data-character="backend"].is-walking').count(), 1, 'the seat is empty while walking');
+  await page.waitForFunction(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length === 0, null, { timeout: 8000 });
+  assert.equal(await office.locator('.pixel-walker').count(), 0, 'walker is gone after returning');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  report.checks.push('A hand-off animates once and then stops (no endless motion)');
+  report.checks.push('A hand-off walks the sender to the other desk and back once, then everything stops');
   await emit(ev(6, 'backend', 'awaiting_approval', 'src/cart.ts 변경 승인을 기다립니다.', { approval }));
   await card.waitFor();
 

@@ -475,5 +475,33 @@
   "find": "      if (seen.has(file)) continue;\n",
   "replace": "",
   "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "pixel.runs-not-merged",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "while (end < row.length && row[end] === ch) end++;",
+  "replace": "",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.user-walks",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "const walker = handoff.from === \"user\" ? handoff.to : handoff.from;",
+  "replace": "const walker = handoff.from;",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.tray-ignored",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "to: other === \"user\" ? TRAY_SPOT : DESK_SPOTS[other].visit",
+  "replace": "to: DESK_SPOTS[walker].visit",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.same-look",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "frontend: \"youngWoman\"",
+  "replace": "frontend: \"youngMan\"",
+  "test": "tests/pixel-office.test.ts"
  }
 ]
