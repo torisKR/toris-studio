@@ -1,42 +1,44 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.0",
+  "version": "2026.10.4",
   "repository": "https://github.com/cloudflare/cloudflared",
-  "sourceCommit": "18cdfe0a6fc7b72a0702d255a1f984e776ce0498",
+  "sourceCommit": "dc3b264da64a801bc3a8d5301a6db21401910ad5",
   "license": "Apache-2.0",
   "licenseGitBlob": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
-  "goVersion": "1.26.9",
+  "goVersion": "1.27.3",
+  "buildTime": "2026-10-26-11:19UTC",
+  "minimumMacOS": "13.0",
   "sourceArchive": {
-    "archive": "cloudflared-source-18cdfe0a6fc7b72a0702d255a1f984e776ce0498.tar.gz",
-    "url": "https://github.com/cloudflare/cloudflared/archive/18cdfe0a6fc7b72a0702d255a1f984e776ce0498.tar.gz",
-    "sha256": "303c531b416b986bfcc2157c0a90556c94c519ec4d71e64d32abbe5c451f59ec"
+    "archive": "cloudflared-source-dc3b264da64a801bc3a8d5301a6db21401910ad5.tar.gz",
+    "url": "https://github.com/cloudflare/cloudflared/archive/dc3b264da64a801bc3a8d5301a6db21401910ad5.tar.gz",
+    "sha256": "c761bd5bc430dce7186ad7984e795c341acd59893228988b368e18407d2d7bb2"
   },
   "toolchains": {
     "darwin-arm64": {
-      "archive": "go1.26.9.darwin-arm64.tar.gz",
-      "url": "https://go.dev/dl/go1.26.9.darwin-arm64.tar.gz",
-      "sha256": "f9bb7c0a02506c5d9bf0d1eb1f7ee6c7684f844ae49558308a0427b830e022cc"
+      "archive": "go1.27.3.darwin-arm64.tar.gz",
+      "url": "https://go.dev/dl/go1.27.3.darwin-arm64.tar.gz",
+      "sha256": "dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2"
     },
     "darwin-amd64": {
-      "archive": "go1.26.9.darwin-amd64.tar.gz",
-      "url": "https://go.dev/dl/go1.26.9.darwin-amd64.tar.gz",
-      "sha256": "00c29e3d4c8562f547410daa18d2959b641bd691ab00c4a525ea817a0253d4bd"
+      "archive": "go1.27.3.darwin-amd64.tar.gz",
+      "url": "https://go.dev/dl/go1.27.3.darwin-amd64.tar.gz",
+      "sha256": "b6f8e931e4ab497fcde6da8ae4499a58f9d258e55c8a80824a516eae5950a750"
     }
   },
   "targets": {
     "aarch64-apple-darwin": {
       "build": "source",
       "archive": "cloudflared-darwin-arm64.tgz",
-      "sha256": "a2f79ff7b9420aa537d74af239f376da170bbabeb529aec416002adac6a72e70"
+      "sha256": "68b6bc4080ac1330234db2a9002d07f98b000537a1bd531a687b660d4160fa7f"
     },
     "x86_64-apple-darwin": {
       "build": "source",
       "archive": "cloudflared-darwin-amd64.tgz",
-      "sha256": "903845b81828c8cb3c5d13d816a2de71c06a3da5785469df8eb0e1b736d92f9f"
+      "sha256": "f11fbef4207d715892331917dafd437f032cf4b7137ed64dea3008338c1c613d"
     },
     "x86_64-pc-windows-msvc": {
       "archive": "cloudflared-windows-amd64.exe",
-      "sha256": "86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c"
+      "sha256": "411b16d40c8d872243efeb52c550053d00af0a8a97fbb32e730fb8aba429eaa8"
     }
   }
 }

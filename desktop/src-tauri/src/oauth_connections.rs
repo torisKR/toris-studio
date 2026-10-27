@@ -268,7 +268,8 @@ fn read_scope(p: Provider) -> &'static str {
     match p{
  Provider::Youtube=>"https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly",
  Provider::Threads=>"threads_basic,threads_manage_insights",Provider::Instagram=>"instagram_business_basic,instagram_business_manage_insights",
- Provider::Facebook=>"pages_show_list,pages_read_engagement,read_insights",Provider::Tiktok=>"user.info.basic,user.info.stats,video.list",Provider::NaverBlog=>""}
+ Provider::Facebook=>"pages_show_list,pages_read_engagement,read_insights",Provider::Tiktok=>"user.info.basic,user.info.stats,video.list",Provider::NaverBlog=>"",
+ Provider::GoogleCalendar=>super::CALENDAR_SCOPE}
 }
 fn has_read(p: Provider, scopes: &[String]) -> bool {
     p != Provider::NaverBlog
@@ -366,6 +367,13 @@ async fn fetch_identities(
     p: Provider,
     session: &TokenSession,
 ) -> Result<Vec<RemoteIdentity>, String> {
+    // calendar.app.created grants no profile endpoint; the connection is the Studio-owned calendar itself.
+    if p == Provider::GoogleCalendar {
+        return Ok(vec![RemoteIdentity {
+            account_id: "studio-calendar".into(),
+            title: "Toris Studio 캘린더".into(),
+        }]);
+    }
     let (endpoint, params): (&'static str, Vec<(&str, &str)>) = match p {
         Provider::Youtube => (
             "https://www.googleapis.com/youtube/v3/channels",
@@ -388,6 +396,7 @@ async fn fetch_identities(
             vec![("fields", "open_id,display_name")],
         ),
         Provider::NaverBlog => ("https://openapi.naver.com/v1/nid/me", vec![]),
+        Provider::GoogleCalendar => unreachable!("handled above"),
     };
     let v = s
         .transport
@@ -435,6 +444,7 @@ async fn fetch_identities(
             v["response"]["id"].as_str(),
             v["response"]["nickname"].as_str(),
         )?],
+        Provider::GoogleCalendar => unreachable!("handled above"),
     };
     let mut unique = std::collections::HashSet::new();
     if result.is_empty()

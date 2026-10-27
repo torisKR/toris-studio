@@ -6,8 +6,13 @@ import { VideoPanel } from "./VideoPanel";
 import { DesktopCommandMenu } from "./DesktopCommandMenu";
 import { createSingleFlight } from "./desktop-interactions";
 import { beginMainActivity } from "./native-windows";
-import { creationApi, creationFingerprint, type CreationBridge, type CreationRequest } from "./creation-client";
-import { ChatGPTHandoff, CreationInbox } from "./ChatGPTHandoff";
+import { type CreationRequest } from "./creation-client";
+import { CreationInbox } from "./ChatGPTHandoff";
+import { aiStatus as readAiStatus, contentReady, generateText, modelLabel } from "./ai-client";
+import type { AiStatus as ModelStatus } from "./ai-client";
+import { AgentPanel } from "./AgentPanel";
+import { PlannerPanel } from "./PlannerPanel";
+import { OpsPanel } from "./OpsPanel";
 import { SnsWorkspace } from "./sns/SnsWorkspace";
 import { OperationTray } from "./OperationTray";
 import { MAIN_SECTIONS, sectionFor, sectionItems, restoreView, rememberView, type View, type Section } from "./workspace-navigation";
@@ -22,7 +27,7 @@ import { KeywordPanel } from "./KeywordPanel";
 import { External } from "./External";
 import { ContentBoard } from "./ContentBoard";
 import {
-  ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
+  ArrowRight, ArrowUpRight, AtSign, CalendarClock, CalendarDays, Check, ChevronRight,
   CircleAlert, Clapperboard, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
   LayoutDashboard, LoaderCircle, Music2, NotebookPen, Play, Plus, RefreshCw,
   Search, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
@@ -40,7 +45,7 @@ type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
 };
-type AiStatus = { providers: AiProvider[]; defaultProvider: string | null };
+type AiStatus = { providers: AiProvider[]; defaultProvider: string | null; model: ModelStatus | null };
 type Notice = { text: string; tone: "success" | "error" | "info" };
 type ContentForm = {
   id?: string; platform: SocialPlatform; channelId: string; title: string;
@@ -64,7 +69,7 @@ const sourceLabels: Record<TrendSource, string> = {
   google_trends: "Google 트렌드", youtube: "YouTube", naver_blog: "네이버 블로그"
 };
 const tabs = ([...MAIN_SECTIONS.flatMap(item => sectionItems(item.id)), ...sectionItems("settings")]);
-const sectionIcons = { sns: Users, content: FileText, creation: Clapperboard, publications: Send, settings: Settings2 };
+const sectionIcons = { sns: Users, content: FileText, creation: Clapperboard, publications: Send, operations: CalendarDays, settings: Settings2 };
 const emptyDashboard: DashboardData = {
   channels: [], content: [], trends: [], integrations: [],
   database: { connected: false, message: "DB 연결 상태를 확인하고 있습니다." }
@@ -213,7 +218,6 @@ export function App() {
   const rememberedViews = useRef<Partial<Record<Section, View>>>({});
   const setTab = (next: Tab) => { requestAnimationFrame(() => document.querySelector<HTMLElement>(".social-page-heading h1")?.focus({preventScroll:true})); rememberedViews.current = rememberView(rememberedViews.current, next); updateTab(next); try { localStorage.setItem("toris.workspace.view", next); } catch {} };
   const section = sectionFor(tab);
-  const [aiHandoff, setAiHandoff] = useState("");
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
   const [aiReferences, setAiReferences] = useState<AiMaterial[]>([]);
   const [aiSelectionNotice, setAiSelectionNotice] = useState("");
@@ -234,7 +238,7 @@ export function App() {
   const [trendFilter, setTrendFilter] = useState<"all" | "short" | "small_channel">("all");
   const [refreshingTrends, setRefreshingTrends] = useState(false);
   const [trendWarnings, setTrendWarnings] = useState<string[]>([]);
-  const [aiStatus, setAiStatus] = useState<AiStatus>({ providers: [], defaultProvider: null });
+  const [aiStatus, setAiStatus] = useState<AiStatus>({ providers: [], defaultProvider: null, model: null });
   const [aiStatusError, setAiStatusError] = useState("");
   const [aiChecking, setAiChecking] = useState(true);
   const [aiPlatform, setAiPlatform] = useState<SocialPlatform>("youtube");
@@ -256,7 +260,7 @@ export function App() {
   const dashboardRequest = useRef(0);
   const aiRequest = useRef(0);
   const [readDashboard] = useState(() => createSingleFlight<DashboardData>());
-  const [readAiProfile] = useState(() => createSingleFlight<CreationBridge>());
+  const [readAiProfile] = useState(() => createSingleFlight<ModelStatus>());
 
   const loadDashboard = useCallback(async () => {
     if (!alive.current) return;
@@ -274,9 +278,11 @@ export function App() {
     const current = () => alive.current && owner === lifecycle.current && request === aiRequest.current;
     setAiChecking(true); setAiStatusError("");
     try {
-      await readAiProfile(() => invoke<CreationBridge>("creation_bridge_info"));
+      const model = await readAiProfile(() => readAiStatus());
       if (!current()) return;
-      setAiStatus({ providers: [{ id: "chatgpt", label: "ChatGPT · RDC", configured: true, available: true, detail: "요청을 저장한 뒤 전달문을 ChatGPT에 붙여넣으세요. 실제 수신은 요청 목록에서 확인합니다." }], defaultProvider: "chatgpt" });
+      const ready = contentReady(model);
+      const choice = model.contentModel ?? model.agentModel;
+      setAiStatus({ providers: [{ id: "content", label: modelLabel(model, choice), configured: Boolean(choice), available: ready, detail: ready ? modelLabel(model, choice) + "로 작성합니다." : choice ? "선택한 모델을 사용할 수 없습니다. Agent에서 키·로그인을 확인하세요." : "Agent의 모델 설정에서 콘텐츠 작성 모델을 선택하세요." }], defaultProvider: ready ? "content" : null, model });
     } catch (error) { if (current()) setAiStatusError(errorMessage(error)); }
     finally { if (current()) setAiChecking(false); }
   }, [readAiProfile]);
@@ -297,7 +303,7 @@ export function App() {
   }, []);
 
   const nativeActivity = saving || refreshingTrends || aiBusy || loading || aiChecking;
-  const nativeActivityLabel = saving ? "로컬 DB에 저장 중" : refreshingTrends ? "콘텐츠 수집 중" : aiBusy ? "ChatGPT 요청 처리 중" : loading ? "워크스페이스 불러오는 중" : aiChecking ? "ChatGPT 연결 확인 중" : "";
+  const nativeActivityLabel = saving ? "로컬 DB에 저장 중" : refreshingTrends ? "콘텐츠 수집 중" : aiBusy ? "AI 작성 중" : loading ? "워크스페이스 불러오는 중" : aiChecking ? "AI 모델 확인 중" : "";
   useEffect(() => nativeActivity ? beginMainActivity() : undefined, [nativeActivity]);
 
   useEffect(() => {
@@ -352,15 +358,14 @@ export function App() {
     if (aiBusy) return;
     setAiError(""); setAiBusy(true);
     try {
-      const sourceRevision = await creationFingerprint([aiPlatform, aiTopic, aiCompiledContext.text]);
-      const value = await creationApi<{ request: CreationRequest; prompt: string }>("create", { kind: "text", title: aiTopic.slice(0, 180), prompt: chatBrief(aiPlatform, aiTopic, aiContext, aiReferences), sourceId: "text-workspace", sourceRevision });
-      setAiHandoff(value.prompt); setAiSelectionNotice("요청을 저장했습니다. 전달문을 ChatGPT에 붙여넣고 RDC로 계속하세요.");
+      if (aiOutput && !window.confirm("현재 편집한 결과를 새 AI 초안으로 바꿀까요?")) return;
+      const result = await generateText(chatBrief(aiPlatform, aiTopic, aiContext, aiReferences));
+      setAiOutput(result.text); setAiOutputLabel(modelLabel(aiStatus.model, { provider: result.provider, model: result.model }) + " 작성 · 검토 후 사용");
+      setAiSelectionNotice("AI 초안을 받았습니다. 사실과 표현을 검토한 뒤 사용하세요.");
     } catch (error) { setAiError(errorMessage(error)); }
     finally { setAiBusy(false); }
   }
   async function reviewText(request: CreationRequest) {
-    const currentRevision = await creationFingerprint([aiPlatform, aiTopic, aiCompiledContext.text]);
-    if (request.sourceRevision !== currentRevision) throw new Error("요청 이후 주제·자료가 변경되었습니다. 현재 내용을 기준으로 다시 요청하세요. 받은 초안은 보존했습니다.");
     if (!request.draft?.text) throw new Error("수신한 문구가 없습니다.");
     if (aiOutput && !window.confirm("현재 편집한 결과를 수신 초안으로 바꿔 검토할까요?")) return;
     setAiOutput(request.draft.text); setAiOutputLabel("수신 초안 · 검토·편집 후 저장");
@@ -453,7 +458,7 @@ export function App() {
   }
 
   const viewTitle = tabs.find(item => item.id === tab)?.label ?? "SNS 관리";
-  const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 ChatGPT에 전달하고 받은 문구를 검토하세요.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
+  const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
 
   return (
     <div className="social-workspace">
@@ -465,7 +470,7 @@ export function App() {
           {MAIN_SECTIONS.map(item => { const Icon = sectionIcons[item.id]; return <button key={item.id} type="button" title={item.label} className={section === item.id ? "active" : ""} aria-current={section === item.id ? "page" : undefined} onClick={() => setTab(rememberedViews.current[item.id] ?? sectionItems(item.id)[0].id)}><Icon size={19}/><span>{item.label}</span></button>; })}
         </nav>
         <nav className="workspace-settings-nav social-nav" aria-label="앱 설정"><button className={section === "settings" ? "active" : ""} title="설정" onClick={() => setTab("settings")}><Settings2 size={19}/><span>설정</span></button></nav>
-        <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 연결된 ChatGPT 대화에 전달됩니다.</p></div>
+        <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 선택한 모델 공급자에게 전달됩니다.</p></div>
       </aside>
 
       <div className="social-shell">
@@ -479,9 +484,12 @@ export function App() {
 
           <div hidden={tab !== "sns"}><SnsWorkspace active={tab === "sns"} dashboard={dashboard} refreshKey={assetRefreshKey} onAddChannel={openChannel} onCreate={(channel) => openContent(undefined, { platform: channel.platform, channelId: channel.id })} onNavigate={setTab} onChanged={() => void loadDashboard()}/></div>
 
-          <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenChatGPT={() => setTab("ai")} onOpenAssets={() => setTab("assets")} /></div>
+          <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} /></div>
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} /></div>
+          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
+          <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenPublications={() => setTab("publications")} /></div>
+          <div hidden={tab !== "ops"}><OpsPanel active={tab === "ops"} databaseConnected={dashboard.database.connected} onOpenPlanner={() => setTab("planner")} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>
 
           {tab === "content" && <>
@@ -513,10 +521,10 @@ export function App() {
               <h2>어떤 콘텐츠를 만들까요?</h2><label>대상 플랫폼<select value={aiPlatform} onChange={event => setAiPlatform(event.target.value as SocialPlatform)}>{SOCIAL_PLATFORMS.map(platform => <option key={platform} value={platform}>{platforms[platform].label}</option>)}</select></label>
               <label>주제와 작성 방향<textarea rows={4} value={aiTopic} maxLength={600} required onChange={event => setAiTopic(event.target.value)}/></label><label>참고 자료와 맥락<textarea rows={6} value={aiContext} maxLength={6000} onChange={event => setAiContext(event.target.value)}/></label>
               {aiReferences.map(item => <div className="workspace-inline-heading" key={item.id}><span>{item.trend.title}</span><button type="button" className="social-button compact" onClick={() => setAiReferences(current => current.filter(r => r.id !== item.id))}>참고자료 해제</button></div>)}
-              <p className="social-form-hint">{aiCompiledContext.error || `전달할 자료 ${aiCompiledContext.text.length.toLocaleString()} / 6,000자`}</p><button type="submit" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || !!aiCompiledContext.error}><Sparkles size={16}/>ChatGPT 요청 저장</button>
+              <p className="social-form-hint">{aiCompiledContext.error || `전달할 자료 ${aiCompiledContext.text.length.toLocaleString()} / 6,000자`}</p><button type="submit" className="social-button primary" disabled={aiBusy || !aiTopic.trim() || !!aiCompiledContext.error}>{aiBusy ? <LoaderCircle size={16} className="social-spin"/> : <Sparkles size={16}/>}{aiBusy ? "작성 중" : availableAi.length ? "AI로 작성" : "모델 설정 필요"}</button>
               {aiError && <p className="social-form-error" role="alert">{aiError}</p>}
             </form><section className="social-ai-result"><h2>받은 문구 검토</h2><p className="social-muted">{aiOutputLabel || "초안을 선택하거나 결과를 직접 붙여넣으세요."}</p><label htmlFor="social-ai-manual-output">문구 · 직접 편집</label><textarea id="social-ai-manual-output" rows={12} value={aiOutput} onChange={event => setAiOutput(event.target.value)}/><div className="workspace-inline-actions"><button className="social-button" disabled={!aiOutput.trim() || !dashboard.database.connected} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}>콘텐츠로 저장</button><button className="social-button primary" disabled={!aiOutput.trim()} onClick={() => { setPublicationSeed({ title: aiTopic.slice(0,180), description: aiOutput, key: Date.now() }); setTab("publications"); }}>게시 초안으로</button></div></section></div>
-            <ChatGPTHandoff prompt={aiHandoff}/><CreationInbox active={tab === "ai"} kind="text" onReview={reviewText}/>
+            <CreationInbox active={tab === "ai"} kind="text" onReview={reviewText}/>
           </div>
           {tab === "settings" && <SettingsPanel onSaved={() => { void loadDashboard(); void checkAi(); }} databaseConnected={dashboard.database.connected} />}
         </main>

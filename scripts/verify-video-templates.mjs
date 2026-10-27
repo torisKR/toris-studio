@@ -51,6 +51,18 @@ try {
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args: clone(args) });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 템플릿 UI 검증' } };
+    if (command === 'ai_status') return { providers: [{ id: 'codex-cli', label: 'Codex CLI', kind: 'subscription', available: true, detail: 'QA', suggestedModels: [] }], contentModel: { provider: 'codex-cli', model: '' }, agentModel: null, image: null };
+    if (command === 'ai_generate') throw new Error('video drafts go through video_create_idea_project, not raw text generation');
+    if (command === 'video_create_idea_project') {
+      const input = args.input; const now = new Date().toISOString();
+      const project = { id: crypto.randomUUID(), title: input.topic, format: input.format, template: 'adaptive-promo', language: input.language, createdAt: now, updatedAt: now,
+        scenes: Array.from({ length: input.sceneCount }, (_, i) => ({ id: `idea-${i + 1}`, headline: `QA 장면 ${i + 1}`, body: '본문', narration: '내레이션', durationSec: input.durationSec / input.sceneCount, mediaType: 'none', motion: { preset: 'stagger-rise', intensity: 0.6 } })),
+        idea: { version: 1, topic: input.topic, category: input.category, provider: input.provider, createdAt: now, reviewRequired: true, motionSkill: 'toris-video-motion' },
+        // The native planner applies the chosen recipe (video_templates::apply_recipe).
+        ...(input.templateId ? { templateRecipe: { version: 1, id: input.templateId, name: knownRecipe(input.templateId)?.name ?? input.templateId } } : {}) };
+      savedProjects.set(project.id, project);
+      return { project: clone(project), provider: input.provider, warnings: ['QA 경고'] };
+    }
     if (command === 'video_list_projects') return clone([...savedProjects.values()]);
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false, ttsConfigured: false, dataPath: '격리된 메모리 프로젝트 저장소', renderer: 'fixture only' };
     if (command === 'set_main_activity') return null;
@@ -307,17 +319,18 @@ try {
   await allView.click();
   await selectCard(2).click(); await ready(); await topic.fill(newTopic); await ready();
   const saveCount = calls.filter(call => call.command === 'video_save_project').length;
-  await page.getByRole('button', { name: 'ChatGPT에 영상 초안 요청', exact: true }).click();
-  await page.getByText('영상 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.', { exact: true }).waitFor();
-  const send = calls.findLast(call => call.command === 'creation_request_create');
-  assert.ok(send,'UI creates a saved video request');
-  const promptPreview=calls.findLast(call=>call.command==='video_template_preview');assert.equal(promptPreview.args.input.templateId,fixtures.catalog[2].id,'RDC request is prepared from the selected real recipe');
-  const generatedDraft=JSON.parse(send.args.input.prompt.slice(send.args.input.prompt.lastIndexOf('\n\n')+2));
-  const preparedProject=previews.get(keyOf(promptPreview.args.input)).project;assert.equal(generatedDraft.project.title,preparedProject.title);assert.deepEqual(generatedDraft.project.scenes,preparedProject.scenes.map(({id,headline,body,narration,durationSec,motion})=>({id,headline,body,narration,durationSec,motion})), 'Closed prompt contains the selected recipe scenes and motion');
-  assert.ok(send.args.input.prompt.includes(newTopic));
-  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'chat receipt must not be presented as a newly generated or saved project');
-  assert.equal(savedProjects.size, 1);
-  assert.equal(await editorTitle.inputValue(), newTopic);
+  await page.getByRole('button', { name: 'AI로 영상 초안 만들기', exact: true }).click();
+  const keepEditing = page.getByRole('button', { name: '계속 편집', exact: true });
+  if (await keepEditing.isVisible()) await page.getByRole('button', { name: '저장 후 이동', exact: true }).click().catch(() => keepEditing.click());
+  const send = await (async () => { for (let i = 0; i < 100; i++) { const hit = calls.findLast(call => call.command === 'video_create_idea_project'); if (hit) return hit; await page.waitForTimeout(50); } return null; })();
+  assert.ok(send, 'the idea request reaches the native planner');
+  assert.equal(send.args.input.templateId, fixtures.catalog[2].id, 'the request carries the selected recipe id');
+  assert.equal(send.args.input.topic, newTopic);
+  assert.equal(send.args.input.provider, 'agent-model', 'the Agent tab model writes the draft');
+  assert.equal(calls.filter(call => call.command === 'ai_generate').length, 0, 'no raw text generation for video drafts');
+  await page.getByText('AI가 만든 영상 초안을 검증하고 저장했습니다.', { exact: false }).waitFor();
+  assert.equal(await editorTitle.inputValue(), newTopic, 'the validated draft opens in the editor');
+  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'the native planner saves the draft itself');
   await editorTitle.fill('현재 편집을 내보내는 영상 QA');
   await page.getByRole('button', { name: 'Markdown 내보내기', exact: true }).click();
   await page.getByText('내보내기를 취소했습니다.', { exact: true }).waitFor();
@@ -343,16 +356,18 @@ try {
   assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'duplicate remains an editable unsaved draft');
   assert.deepEqual(savedProjects.get(saved.id), saved, 'duplicate must retain the original saved project');
   console.log('Template QA: latest edited export snapshot, cancelled/successful export, and duplicate protection passed');
-  assert.deepEqual(Object.keys(generatedDraft.project).sort(),['format','language','scenes','template','title']);
-  assert.deepEqual(Object.keys(generatedDraft.project.scenes[0]).sort(),['body','durationSec','headline','id','motion','narration']);
-  receivedVideoProject={...generatedDraft.project,title:'네이티브 수신 검토 영상 QA'};
-  const nativeReceipt=await receiveCreationFixture(send.args.input,{project:receivedVideoProject});
+  // An external AI tool connected through Studio MCP can still deliver a video draft for review.
+  const preparedProject=previews.get(keyOf(calls.findLast(call=>call.command==='video_template_preview').args.input)).project;
+  const externalRequest={kind:'video',title:newTopic,prompt:'외부 도구 영상 요청 (fixture)',sourceId:'video-workspace',sourceRevision:'fixture-revision'};
+  receivedVideoProject={title:'네이티브 수신 검토 영상 QA',format:preparedProject.format,template:preparedProject.template,language:preparedProject.language,scenes:preparedProject.scenes.map(({id,headline,body,narration,durationSec,motion})=>({id,headline,body,narration,durationSec,motion}))};
+  const nativeReceipt=await receiveCreationFixture(externalRequest,{project:receivedVideoProject});
   creations.push(nativeReceipt);const inbox=page.getByRole('region',{name:'제작 요청과 수신 초안',exact:true});
   await inbox.getByRole('button',{name:'새로고침',exact:true}).click();await inbox.getByRole('button',{name:'초안 검토',exact:true}).click();
   const importDialog=page.getByRole('dialog',{name:'영상 프로젝트 JSON 가져오기',exact:true});await importDialog.waitFor();assert.deepEqual(JSON.parse(await importDialog.getByLabel('VideoProject JSON',{exact:true}).inputValue()),receivedVideoProject);
-  assert.equal(savedProjects.size,1,'Native receipt and user review do not save a video project');
-  await importDialog.getByRole('button',{name:'가져와 저장',exact:true}).click();await page.getByText('JSON을 새 영상 프로젝트로 가져와 저장했습니다.',{exact:true}).waitFor();assert.equal(await editorTitle.inputValue(),receivedVideoProject.title);assert.equal(savedProjects.size,2,'Only explicit import saves to the memory IPC fixture');assert.deepEqual(savedProjects.get(saved.id),saved,'Receipt import preserves the original saved template');
-  console.log('Template QA: actual UI prompt -> compiled native MCP get/receive -> reviewed JSON import passed (save fixture only)');
+  const beforeReceipt=savedProjects.size;
+  assert.equal(savedProjects.size,beforeReceipt,'Native receipt and user review do not save a video project');
+  await importDialog.getByRole('button',{name:'가져와 저장',exact:true}).click();await page.getByText('JSON을 새 영상 프로젝트로 가져와 저장했습니다.',{exact:true}).waitFor();assert.equal(await editorTitle.inputValue(),receivedVideoProject.title);assert.equal(savedProjects.size,beforeReceipt+1,'Only explicit import saves to the memory IPC fixture');assert.deepEqual(savedProjects.get(saved.id),saved,'Receipt import preserves the original saved template');
+  console.log('Template QA: compiled native MCP get/receive -> reviewed JSON import passed (save fixture only)');
   await page.setViewportSize({ width: 820, height: 720 });
   await gallery.scrollIntoViewIfNeeded();
   await page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));

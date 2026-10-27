@@ -1,5 +1,6 @@
 import { mediaOverlay, prepareMedia, verifyMedia } from './prepare-media.mjs';
 import { browserOverlay, prepareBrowser, verifyBrowserStaged, verifyInstallerSizes } from './prepare-browser.mjs';
+import { buildAgentRuntime } from './build-agent-runtime.mjs';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -198,7 +199,8 @@ export async function downloadArchive(spec, { fetcher = fetch, timeoutMs = 60_00
   }
   fail('Too many runtime download redirects.');
 }
-export function verifyBinary(bytes, target) {
+/** maxMacOS is a packed Mach-O version (0x000c0000 = 12.0). */
+export function verifyBinary(bytes, target, maxMacOS = 0x000c0000) {
   if (target.includes('darwin')) {
     if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf || bytes.readUInt32LE(4) !== (target.startsWith('aarch64') ? 0x0100000c : 0x01000007)) fail('runtime Mach-O architecture does not match target.');
     const count = bytes.readUInt32LE(16), commandBytes = bytes.readUInt32LE(20);
@@ -212,7 +214,7 @@ export function verifyBinary(bytes, target) {
       if (command === 0x24) { if (size < 16) fail('Invalid Mach-O minimum version.'); minimum = Math.max(minimum || 0, bytes.readUInt32LE(offset + 8)); }
       offset += size;
     }
-    if (minimum === null || minimum > 0x000c0000) fail('Bundled runtime must support macOS 12.0 or earlier.');
+    if (minimum === null || minimum > maxMacOS) fail(`Bundled runtime must support macOS ${maxMacOS >> 16}.0 or earlier.`);
   } else {
     if (bytes.length < 64 || bytes.subarray(0, 2).toString('ascii') !== 'MZ') fail('Invalid runtime Windows executable.');
     const pe = bytes.readUInt32LE(0x3c);
@@ -259,6 +261,13 @@ async function extractSource(archive, prefix, destination, { toolchain = false }
     await writeFile(file, bytes, { flag: 'wx', mode: executable ? 0o755 : 0o644 });
   }
 }
+/** cloudflared's pinned Go release decides its macOS floor; the rest of the app keeps 12.0. */
+export function cloudflaredMacOS() {
+  const [major, minor = '0'] = String(CLOUDFLARED_MANIFEST.minimumMacOS || '12.0').split('.');
+  const packed = (Number(major) << 16) | (Number(minor) << 8);
+  if (!Number.isInteger(Number(major)) || Number(major) < 12 || Number(major) > 99) fail('Invalid cloudflared minimum macOS version.');
+  return packed;
+}
 function exactGo(command) {
   const result = spawnSync(command, ['version'], { encoding: 'utf8', timeout: 15_000, shell: false, env: { ...process.env, GOENV: 'off', GOTOOLCHAIN: 'local' } });
   return result.status === 0 && result.stdout.startsWith(`go version go${CLOUDFLARED_MANIFEST.goVersion} `);
@@ -269,7 +278,7 @@ export function cloudflaredBuild(target, { source, destination, cache, go }) {
   return {
     command: go,
     args: ['build', '-trimpath', '-buildvcs=false', '-mod=readonly', '-tags=netgo,osusergo',
-      '-ldflags', `-X main.Version=${spec.version} -X main.BuildTime=2026-10-05-17:37UTC -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=toris-studio`,
+      '-ldflags', `-X main.Version=${spec.version} -X main.BuildTime=${CLOUDFLARED_MANIFEST.buildTime} -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=toris-studio`,
       '-o', destination, './cmd/cloudflared'],
     cwd: source,
     env: { ...process.env, GOENV: 'off', GOTOOLCHAIN: 'local', GOWORK: 'off', GOFLAGS: '',
@@ -314,10 +323,10 @@ async function prepareCloudflaredSource(target, { root, fetcher }) {
     console.log(`Building cloudflared ${CLOUDFLARED_MANIFEST.version} from pinned source with Go ${CLOUDFLARED_MANIFEST.goVersion}, CGO disabled (${target}).`);
     await runBounded(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env });
     const binary = await regularFile(destination);
-    verifyBinary(binary, target);
+    verifyBinary(binary, target, cloudflaredMacOS());
     const file = path.join(directory, `cloudflared-${target}`);
     await atomicWrite(file, binary, 0o755);
-    console.log(`Prepared cloudflared ${CLOUDFLARED_MANIFEST.version}; verified pinned source, architecture, and macOS 12 deployment target.`);
+    console.log(`Prepared cloudflared ${CLOUDFLARED_MANIFEST.version}; verified pinned source, architecture, and macOS ${CLOUDFLARED_MANIFEST.minimumMacOS} deployment target.`);
     return file;
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
@@ -337,7 +346,7 @@ export async function prepareTarget(target, { root = ROOT, fetcher = fetch, runt
     await atomicWrite(cachedArchive, archive, 0o600);
   }
   const { binary, license } = extractArchive(archive, spec);
-  verifyBinary(binary, target);
+  verifyBinary(binary, target, cloudflaredMacOS());
   const committedLicense = await regularFile(path.join(root, `desktop/src-tauri/resources/${runtime}/LICENSE`), 16 * 1024);
   if (license && !licenseMatches(license, committedLicense)) fail('runtime archive LICENSE differs from the committed license.');
   if (runtime === 'cloudflared') verifyCloudflaredLicense(committedLicense);
@@ -372,7 +381,7 @@ export async function verifyStaged(target, directory, { root = ROOT } = {}) {
     const spec = targetSpec(target, runtime);
     const binary = path.join(directory, mac ? `Contents/MacOS/${runtime}` : `${runtime}.exe`);
     const resources = path.join(directory, mac ? `Contents/Resources/${runtime}-notices` : `${runtime}-notices`);
-    verifyBinary(await regularFile(binary), target);
+    verifyBinary(await regularFile(binary), target, cloudflaredMacOS());
     for (const name of ['LICENSE', 'NOTICE', 'manifest.json']) {
       if (!(await regularFile(path.join(resources, name), 32 * 1024)).equals(await regularFile(path.join(root, `desktop/src-tauri/resources/${runtime}`, name), 32 * 1024))) fail(`Bundled ${runtime} ${name} differs from the verified source.`);
     }
@@ -387,10 +396,19 @@ export async function verifyStaged(target, directory, { root = ROOT } = {}) {
     console.log(`Verified bundled ${runtime} ${spec.version}: ${target} executable, architecture, license, and pinned metadata.`);
   }
 }
-async function prepareBundled(target) { for (const runtime of ['cloudflared']) await prepareTarget(target, { runtime }); await prepareBrowser(target); await prepareMedia(target); }
+const AGENT_BUNDLE = 'desktop/src-tauri/resources/agent-runtime';
+/** The bundled LangGraph agent runtime must be byte-identical to the verified build. */
+export async function verifyAgentRuntimeStaged(target, directory, { root = ROOT } = {}) {
+  const staged = path.join(directory, target.includes('darwin') ? 'Contents/Resources/agent-runtime' : 'agent-runtime');
+  const bundle = await regularFile(path.join(staged, 'agent.mjs'));
+  const expected = (await readFile(path.join(root, AGENT_BUNDLE, 'agent.mjs.sha256'), 'utf8')).trim();
+  if (sha256(bundle) !== expected || (await readFile(path.join(staged, 'agent.mjs.sha256'), 'utf8')).trim() !== expected) fail('Bundled agent runtime differs from the verified build.');
+  console.log(`Verified bundled agent runtime (${expected.slice(0, 12)}).`);
+}
+async function prepareBundled(target) { for (const runtime of ['cloudflared']) await prepareTarget(target, { runtime }); await prepareBrowser(target); await prepareMedia(target); await buildAgentRuntime(); }
 async function main([command = 'prepare', ...args]) {
   if (command === 'prepare') { if (args.length > 1) fail('Usage: prepare-desktop.mjs prepare [target]'); await prepareBundled(args[0] || hostTarget()); }
-  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-desktop.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); await verifyBrowserStaged(args[0], path.resolve(args[1])); await verifyMedia(path.join(path.resolve(args[1]), args[0].includes("darwin") ? "Contents/Resources/media-runtime" : "media-runtime")); }
+  else if (command === 'verify') { if (args.length !== 2) fail('Usage: prepare-desktop.mjs verify <target> <bundle-or-stage-directory>'); await verifyStaged(args[0], path.resolve(args[1])); await verifyBrowserStaged(args[0], path.resolve(args[1])); await verifyMedia(path.join(path.resolve(args[1]), args[0].includes("darwin") ? "Contents/Resources/media-runtime" : "media-runtime")); await verifyAgentRuntimeStaged(args[0], path.resolve(args[1])); }
   else if (command === 'build' || command === 'preview') {
     const invocation = buildInvocation(args, { preview: command === 'preview' });
     await prepareBundled(invocation.target);

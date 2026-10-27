@@ -6,7 +6,7 @@
 
 ## ChatGPT 초안과 에셋
 
-게시 화면에서 Remote Desktop Commander 전달문을 실제 ChatGPT 대화에 붙여넣으세요. 전달문에는 초안 요청 ID와 revision이 포함됩니다. ChatGPT는 `studio_publication_draft_receive`로 제목·설명·태그·해시태그를 반환합니다. 수신된 초안은 적용·편집·저장할 수 있으며 자동 승인되지 않습니다. 이미지 생성은 기존 `studio_asset_request` / `studio_asset_receive` 경로로 요청·수신하고 게시 썸네일 선택에 사용합니다.
+**AI로 문구 작성**을 누르면 Agent 탭에서 고른 콘텐츠 작성 모델이 제목·설명·태그·해시태그를 JSON으로 작성합니다. 결과는 앱 요청 ID에 연결된 미승인 초안으로 저장되며, 초안 적용·편집·게시 승인은 사용자가 직접 합니다. Studio MCP(`studio_publication_draft_receive`)를 연결한 외부 AI 도구도 같은 수신 경로를 쓸 수 있습니다.
 
 전달 저장, ChatGPT의 요청 수신, 답변, 파일 수신은 별도 상태입니다. 메시지 저장만으로 모델이 실행됐다고 표시하지 않습니다. 대화가 쉬고 있거나 연결이 끊겼으면 실제 ChatGPT에서 대화를 재개해야 합니다. ChatGPT 사용 한도는 그대로 적용됩니다. Open WebUI와 직접 모델 API·CLI 호출은 데스크톱에서 제거했습니다. 이전 앱 소유 컨테이너는 중지하고 대화 데이터 볼륨은 보존합니다.
 

@@ -1,6 +1,6 @@
 [package]
 name = "toris-studio-desktop"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.90"
 default-run = "toris-studio-desktop"
@@ -53,6 +53,8 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 fs2 = "0.4"
 lcms2 = { version = "6.2", features = ["static"] }
+# Already in the tree via rustls; used directly only to sign the Play service-account JWT (RS256).
+ring = "=0.17.14"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

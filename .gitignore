@@ -50,3 +50,7 @@ desktop/.env*
 /desktop/src-tauri/browser-runtime/
 
 /desktop/src-tauri/media-runtime/
+# Generated agent runtime bundle (pnpm agent:build)
+/desktop/src-tauri/resources/agent-runtime/
+# Held while scripts/mutation-check.mjs has a mutated source file in the tree
+/.mutation-check.lock

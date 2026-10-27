@@ -1,0 +1,89 @@
+/* Agent office: pixel scene, desk cards and the procedure strip. UI tokens follow DESIGN.md. */
+.office { --o-ok: #8ae3bb; --o-attn: #e6be83; --o-mono: ui-monospace, SFMono-Regular, Menlo, monospace; display: grid; gap: 12px; }
+.office-code { font: 600 10px/1 var(--o-mono); letter-spacing: .08em; color: var(--social-muted); text-transform: uppercase; font-variant-numeric: tabular-nums; }
+
+.office-head { display: grid; gap: 8px; }
+.office-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.office-steps li { counter-increment: step; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 6px 8px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-inset); color: var(--social-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.office-steps li::before { content: counter(step, decimal-leading-zero); font: 600 10px var(--o-mono); opacity: .7; }
+.office-steps li[data-state="done"] { color: var(--social-text); }
+.office-steps li[data-state="done"]::before { display: none; }
+.office-steps li[data-state="done"] svg { color: var(--o-ok); flex: none; }
+.office-steps li[data-state="current"] { color: var(--social-text); border-color: var(--social-accent); box-shadow: inset 0 -2px 0 var(--social-accent); font-weight: 600; }
+@media (max-width: 900px) { .office-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Pixel scene: one SVG, scaled with hard pixel edges. */
+.office-floor { overflow: hidden; border: 1px solid var(--social-line); border-radius: 12px; background: #0b1017; }
+.pixel-office { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.pixel-plate { font: 700 4px var(--o-mono); fill: #e8eef5; letter-spacing: .4px; }
+.pixel-person.is-away, .pixel-person.is-walking { opacity: 0; }
+
+/* A walk: out to the other desk, a short stop, back. Whole-pixel steps keep the pixel look.
+   --walk sets the whole trip; one leg swap takes 0.5s, so 10 swaps fill it. */
+.pixel-walker { --walk: 5s; animation: pixel-walk var(--walk) steps(16, jump-none) 1 both; }
+@keyframes pixel-walk {
+  0% { transform: translate(var(--fx), var(--fy)); }
+  40%, 60% { transform: translate(var(--tx), var(--ty)); }
+  100% { transform: translate(var(--fx), var(--fy)); }
+}
+.pixel-walker .f-stride { opacity: 0; animation: pixel-step .5s steps(1) 10; }
+.pixel-walker .f-stand { animation: pixel-step-back .5s steps(1) 10; }
+@keyframes pixel-step { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pixel-step-back { 0% { opacity: 0; } 50% { opacity: 1; } }
+.pixel-carried { animation: pixel-drop var(--walk) steps(1) 1 both; }
+.pixel-walker[data-kind="order"] .pixel-carried { animation-name: pixel-pick; }
+@keyframes pixel-drop { 0% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes pixel-pick { 0% { opacity: 0; } 50%, 100% { opacity: 1; } }
+
+/* A new event makes the bubble hop twice and a busy screen flicker; then both hold still. */
+.pixel-bubble-anim { animation: pixel-pop .2s steps(1) 4 alternate; }
+@keyframes pixel-pop { 50% { transform: translateY(-1px); } }
+[data-activity="coding"] .pixel-screen, [data-activity="testing"] .pixel-screen { animation: pixel-flicker .2s steps(1) 4; }
+@keyframes pixel-flicker { 50% { opacity: .55; } }
+
+/* Desk cards under the scene: what each person is doing, in words. */
+.office-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.office-desk { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "art head" "art meta" "state state" "paper paper" "counts counts" "note note"; column-gap: 8px; row-gap: 3px; align-items: center;
+  padding: 10px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); color: var(--social-text); text-align: left; font: inherit; cursor: pointer; transition: border-color .15s ease; }
+.office-desk > * { min-width: 0; }
+.office-desk:hover { border-color: color-mix(in srgb, var(--social-accent) 55%, var(--social-line)); }
+.office-desk:focus-visible { outline: 2px solid var(--social-accent); outline-offset: 4px; }
+.office-desk[aria-pressed="true"] { border-color: var(--social-accent); background: color-mix(in srgb, var(--social-accent) 7%, var(--social-panel)); }
+.pixel-portrait { grid-area: art; image-rendering: pixelated; background: var(--social-inset); border: 1px solid var(--social-line); border-radius: 4px; }
+.office-desk-head { grid-area: head; display: grid; gap: 3px; }
+.office-desk-head strong { font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.office-meta { grid-area: meta; color: var(--social-muted); font-size: 11px; line-height: 1.35; }
+.office-state { grid-area: state; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; font-weight: 600; }
+.office-dot { width: 7px; height: 7px; background: var(--social-line); flex: none; }
+.office-paper-chip { grid-area: paper; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 11px var(--o-mono); color: var(--social-muted); }
+.office-counts { grid-area: counts; font-size: 11px; color: var(--social-muted); font-variant-numeric: tabular-nums; }
+.office-counts b { color: var(--social-text); font-weight: 600; }
+.office-note { grid-area: note; margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--social-line); font-size: 12px; color: var(--social-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) { border-color: var(--social-accent); }
+.office-desk:is([data-activity="thinking"], [data-activity="reading"], [data-activity="coding"], [data-activity="testing"], [data-activity="reviewing"]) .office-dot { background: var(--social-accent); }
+.office-desk[data-activity="approval"] { border-color: var(--o-attn); }
+.office-desk[data-activity="approval"] .office-state { color: var(--o-attn); }
+.office-desk[data-activity="done"] .office-state { color: var(--o-ok); }
+.office-desk[data-activity="away"] { color: var(--social-muted); }
+.office-desk[data-activity="away"] .pixel-portrait { opacity: .5; }
+
+.office-tray { display: grid; align-content: center; justify-items: start; gap: 4px; padding: 10px; border: 1px dashed var(--social-line); border-radius: 8px; background: var(--social-inset); font-size: 12px; color: var(--social-muted); min-width: 0; }
+.office-tray strong { color: var(--social-text); font-size: 13px; }
+.office-tray span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.office-tray.waiting { border-style: solid; border-color: var(--o-attn); color: var(--o-attn); }
+
+.office-log h3 { margin: 0 0 6px; font-size: 12px; color: var(--social-muted); font-weight: 600; }
+.office-log ol { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.office-log li { display: flex; gap: 8px; align-items: baseline; min-width: 0; padding: 4px 8px; border-left: 2px solid var(--social-line); }
+.office-log li:first-child { border-left-color: var(--social-accent); color: var(--social-text); }
+.office-log li[data-kind="sendBack"], .office-log li[data-kind="approval"] { border-left-color: var(--o-attn); }
+.office-log li[data-kind="final"] { border-left-color: var(--o-ok); }
+.office-log li:not(:first-child) { color: var(--social-muted); }
+
+.agent-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--social-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .office *, .office *::before, .office *::after { animation: none !important; transition: none !important; }
+  .pixel-walker { display: none; }
+  .pixel-person.is-walking { opacity: 1; }
+}

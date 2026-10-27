@@ -1,0 +1,67 @@
+{
+ "name": "weekly content: no usable model draft falls back to labelled templates",
+ "workflow": "weekly-content",
+ "task": "",
+ "input": {
+  "now": "2026-10-27T00:00:00Z",
+  "channels": [
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "platform": "threads",
+    "name": "토리스"
+   }
+  ],
+  "content": [
+   {
+    "title": "이미 쓴 글"
+   }
+  ],
+  "trends": [
+   {
+    "keyword": "AI 영상",
+    "title": "짧은 AI 영상 편집 팁",
+    "url": "https://www.youtube.com/watch?v=aaa",
+    "source": "youtube",
+    "metric": "조회수 12만"
+   },
+   {
+    "keyword": "1인 창업",
+    "title": "1인 창업 첫 달 회고",
+    "url": "https://blog.naver.com/x/1",
+    "source": "naver_blog",
+    "metric": ""
+   }
+  ],
+  "events": [
+   {
+    "startsAt": "2026-10-28T05:00:00Z",
+    "title": "촬영"
+   }
+  ],
+  "work": [
+   {
+    "title": "스토어 문구 검토",
+    "dueAt": null
+   }
+  ]
+ },
+ "files": {},
+ "script": {
+  "content": [
+   "{\"drafts\":[]}",
+   "{\"drafts\":[]}"
+  ]
+ },
+ "decisions": [
+  "approve",
+  "approve"
+ ],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "템플릿 초안 2건",
+   "저장했습니다: \\[템플릿\\]"
+  ],
+  "maxModelCalls": 2
+ }
+}

@@ -45,7 +45,7 @@ try {
     await client.query("INSERT INTO publication_jobs(id,publication_id,revision,target_id,approval_hash,snapshot,mode,status) VALUES ($1,$2,1,$3,$4,$5,$6,$7)", [jobIds[index], publicationIds[index], randomUUID(), "a".repeat(64), { fixture: true, platform: index === 0 ? "youtube" : "naver_blog" }, mode, index === 0 ? "queued" : "needs_human_publish"]);
   }
   const before = (await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows;
-  const versions=["004_opal_research","005_opal_result_shape","006_keyword_explorer","007_publications","008_publication_handoffs","009_oauth_connections","010_analytics","011_sns_workspace"];
+  const versions=["004_opal_research","005_opal_result_shape","006_keyword_explorer","007_publications","008_publication_handoffs","009_oauth_connections","010_analytics","011_sns_workspace","012_planner","013_ops_status"];
   async function upgrade(){
     await client.query("BEGIN");
     try{
@@ -70,16 +70,32 @@ try {
   await client.query("REVOKE ALL ON analytics_settings,analytics_sources,analytics_previews,analytics_observations,analytics_jobs FROM toris_app");
   await upgrade();
   assert.equal((await client.query("SELECT has_table_privilege('toris_app','analytics_sources','SELECT') AS allowed")).rows[0].allowed,true);
-  assert.equal((await client.query("SELECT count(*)::int AS n FROM social_schema_migrations")).rows[0].n,9);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM social_schema_migrations")).rows[0].n,11);
   assert.deepEqual((await client.query("SELECT * FROM publication_jobs ORDER BY id")).rows,upgraded);
   assert.equal((await client.query("SELECT count(*)::int AS n FROM social_channels WHERE id=ANY($1::uuid[])",[channelIds])).rows[0].n,2);
+  // Planner and ops constraints: a link needs an id, ends follow starts, Google ids are unique, states are closed.
+  const eventId = randomUUID();
+  await client.query("INSERT INTO calendar_events(id,title,starts_at,ends_at,google_id) VALUES ($1,'회의',now(),now()+interval '1 hour','g1')", [eventId]);
+  await assert.rejects(client.query("INSERT INTO calendar_events(id,title,starts_at,ends_at,google_id) VALUES ($1,'중복',now(),now(),'g1')", [randomUUID()]), { code: "23505" });
+  await assert.rejects(client.query("INSERT INTO calendar_events(id,title,starts_at,ends_at) VALUES ($1,'거꾸로',now(),now()-interval '1 hour')", [randomUUID()]), { code: "23514" });
+  await assert.rejects(client.query("INSERT INTO calendar_events(id,title,starts_at,ends_at,link_kind) VALUES ($1,'고아',now(),now(),'publication_job')", [randomUUID()]), { code: "23514" });
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM calendar_sync_state")).rows[0].n, 1, "sync state is a single row, kept on reapply");
+  await assert.rejects(client.query("INSERT INTO calendar_sync_state(id) VALUES (2)"), { code: "23514" });
+  const productId = randomUUID();
+  await client.query("INSERT INTO products(id,name,kind,github_repo,health_url,play_package) VALUES ($1,'앱','app','torisKR/toris_app','https://toris.kr/health','com.toris.app')", [productId]);
+  await assert.rejects(client.query("INSERT INTO products(id,name,kind,health_url) VALUES ($1,'평문','web','http://example.com')", [randomUUID()]), { code: "23514" });
+  await assert.rejects(client.query("INSERT INTO products(id,name,kind,github_repo) VALUES ($1,'경로','web','../../etc')", [randomUUID()]), { code: "23514" });
+  await assert.rejects(client.query("INSERT INTO product_status_snapshots(id,product_id,source,state) VALUES ($1,$2,'play','published')", [randomUUID(), productId]), { code: "23514" });
+  for (const version of ["012_planner", "013_ops_status"]) await client.query(await readFile(resolve(`db/migrations/${version}.sql`), "utf8"));
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM calendar_events")).rows[0].n, 1, "reapplying 012 keeps events");
+  await client.query("DELETE FROM calendar_events; DELETE FROM products;");
   await assert.rejects(client.query("UPDATE publication_jobs SET status='queued' WHERE id=$1", [jobIds[1]]), { code: "23514" });
   await assert.rejects(client.query("UPDATE publication_jobs SET status='needs_human_publish' WHERE id=$1", [jobIds[0]]), { code: "23514" });
   await assert.rejects(client.query("UPDATE publication_jobs SET scheduled_at=now() WHERE id=$1", [jobIds[1]]), { code: "23514" });
   await client.query("DELETE FROM publications WHERE id=ANY($1::uuid[])", [publicationIds]);
   await client.end(); client = null;
   console.log("Isolated PostgreSQL migrations applied twice; running real queue tests (no SNS calls).");
-  run("cargo", ["test", "--manifest-path", "desktop/src-tauri/Cargo.toml", "--no-default-features", "--lib", "publications::tests", "--", "--ignored", "--test-threads=1"], {
+  run("cargo", ["test", "--manifest-path", "desktop/src-tauri/Cargo.toml", "--no-default-features", "--lib", "--", "--ignored", "--test-threads=1", "publications::tests", "planner::tests::postgres", "ops_status::tests::postgres"], {
     ...process.env,
     // The application deliberately rejects password-less URLs even for trust fixtures.
     TORIS_PUBLICATIONS_TEST_DB: `postgresql://toris_app:fixture-only@127.0.0.1:${port}/${name}`,

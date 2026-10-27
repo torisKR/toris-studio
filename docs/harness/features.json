@@ -1,0 +1,329 @@
+{
+ "$comment": "Which code each feature owns and what proves it works. scripts/harness-check.mjs keeps this honest.",
+ "features": [
+  {
+   "id": "agent-runtime",
+   "label": "Agent 탭 LangGraph 런타임과 하네스",
+   "paths": [
+    "desktop/agent-runtime/**",
+    "scripts/build-agent-runtime.mjs"
+   ],
+   "verify": [
+    "pnpm agent:typecheck",
+    "pnpm agent:test"
+   ],
+   "mutants": [
+    "desktop/agent-runtime/test/mutants.json"
+   ]
+  },
+  {
+   "id": "agent-ui",
+   "label": "Agent 탭 화면",
+   "paths": [
+    "desktop/src/Agent*",
+    "desktop/src/agent-*.ts",
+    "desktop/src/PixelOffice.tsx",
+    "desktop/src/pixel-*.ts",
+    "scripts/verify-agent-ui.mjs"
+   ],
+   "verify": [
+    "node --import tsx --test tests/agent-client.test.ts tests/agent-office.test.ts tests/pixel-office.test.ts",
+    "node scripts/verify-agent-ui.mjs"
+   ],
+   "mutants": [
+    "desktop/agent-runtime/test/ui-mutants.json"
+   ]
+  },
+  {
+   "id": "video",
+   "label": "영상 제작·모션·렌더",
+   "paths": [
+    "desktop/src/Video*",
+    "desktop/src/video-*.ts",
+    "desktop/src/NativeRenderPreview*",
+    "desktop/src-tauri/src/media.rs",
+    "desktop/src-tauri/src/motion.rs",
+    "desktop/src-tauri/src/video_*.rs",
+    "lib/video/**",
+    "lib/render/**",
+    "remotion/**",
+    "skills/toris-video-motion/**",
+    "scripts/verify-video-templates.mjs",
+    "scripts/render-*.ts",
+    "desktop/src/motion/**",
+    "scripts/verify-motion-*.mjs",
+    "scripts/build-media-runtime.sh"
+   ],
+   "verify": [
+    "node --import tsx --test tests/video-*.test.ts tests/editing.test.ts tests/update-scene.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion:: media:: video_"
+   ]
+  },
+  {
+   "id": "voice",
+   "label": "로컬 TTS·STT",
+   "paths": [
+    "lib/tts/**",
+    "lib/stt/**",
+    "scripts/*qwen*",
+    "scripts/*whisper*",
+    "scripts/qwen_tts_*.py"
+   ],
+   "verify": [
+    "node --import tsx --test tests/tts-*.test.ts tests/voice-generation.test.ts"
+   ]
+  },
+  {
+   "id": "publishing",
+   "label": "SNS 게시·예약·OAuth",
+   "paths": [
+    "desktop/src/Publication*",
+    "desktop/src/publication-client.ts",
+    "desktop/src/OAuth*",
+    "desktop/src/YouTube*",
+    "desktop/src/Integration*",
+    "desktop/src-tauri/src/publication*.rs",
+    "desktop/src-tauri/src/publishing*.rs",
+    "desktop/src-tauri/src/oauth*.rs",
+    "desktop/src-tauri/src/youtube.rs",
+    "desktop/src-tauri/src/chatgpt_drafts.rs",
+    "desktop/src-tauri/src/integration_native.rs",
+    "infrastructure/oauth-callback/**",
+    "scripts/verify-publication-*.mjs",
+    "scripts/publication-*.mjs",
+    "lib/youtube/**",
+    "desktop/src/sns/**",
+    "scripts/verify-sns-workspace.mjs",
+    "desktop/src/ChatGPTHandoff.tsx",
+    "desktop/src/creation-client.ts",
+    "scripts/creation-native-fixture.mjs"
+   ],
+   "verify": [
+    "node --import tsx --test tests/publication-*.test.ts tests/youtube-upload.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib publish oauth"
+   ]
+  },
+  {
+   "id": "planner",
+   "label": "일정·작업·Google Calendar",
+   "paths": [
+    "desktop/src/Planner*",
+    "desktop/src/planner-*.ts",
+    "desktop/src-tauri/src/planner*.rs",
+    "desktop/src-tauri/src/calendar*.rs",
+    "db/migrations/012_*",
+    "scripts/verify-planner-ui.mjs",
+    "desktop/src/CalendarConnection.tsx"
+   ],
+   "verify": [
+    "node --import tsx --test tests/planner-client.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib planner::",
+    "node scripts/verify-planner-ui.mjs"
+   ]
+  },
+  {
+   "id": "ops",
+   "label": "제품 운영 상태 대시보드",
+   "paths": [
+    "desktop/src/Ops*",
+    "desktop/src/ops-*.ts",
+    "desktop/src-tauri/src/ops_status*.rs",
+    "desktop/src-tauri/src/ops_native.rs",
+    "db/migrations/013_*",
+    "scripts/verify-ops-ui.mjs"
+   ],
+   "verify": [
+    "node --import tsx --test tests/ops-*.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib ops_status",
+    "node scripts/verify-ops-ui.mjs",
+    "node scripts/verify-publication-db.mjs"
+   ]
+  },
+  {
+   "id": "social-core",
+   "label": "채널·콘텐츠·트렌드·키워드·DB",
+   "paths": [
+    "desktop/src/ContentBoard*",
+    "desktop/src/Overview*",
+    "desktop/src/Keyword*",
+    "desktop/src/AiDiscovery*",
+    "desktop/src/ai-*.ts",
+    "desktop/src-tauri/src/social.rs",
+    "desktop/src-tauri/src/trends.rs",
+    "desktop/src-tauri/src/keyword.rs",
+    "desktop/src-tauri/src/models.rs",
+    "desktop/src-tauri/src/ai.rs",
+    "desktop/src-tauri/src/scheduler.rs",
+    "desktop/src-tauri/src/agent_native.rs",
+    "desktop/src-tauri/src/agent_runtime.rs",
+    "desktop/src-tauri/src/hub*.rs",
+    "lib/social/**",
+    "lib/ai/**",
+    "lib/storage/**",
+    "lib/security/**",
+    "db/**",
+    "app/**",
+    "components/**",
+    "mcp/**",
+    "infrastructure/keyword-crawler/**",
+    "scripts/trend-worker*",
+    "scripts/db-*",
+    "proxy.ts",
+    "supabase/**"
+   ],
+   "verify": [
+    "pnpm test",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib social"
+   ]
+  },
+  {
+   "id": "assets",
+   "label": "이미지 생성기·에셋",
+   "paths": [
+    "desktop/src/assets/**",
+    "desktop/src-tauri/src/assets/**",
+    "desktop/src-tauri/src/mcp_bridge.rs",
+    "scripts/verify-asset-*.mjs",
+    "scripts/audit-desktop-functional.mjs"
+   ],
+   "verify": [
+    "pnpm assets:test"
+   ]
+  },
+  {
+   "id": "desktop-shell",
+   "label": "데스크톱 셸·창·업데이트·브라우저·키체인",
+   "paths": [
+    "desktop/src/App.tsx",
+    "desktop/src/main.tsx",
+    "desktop/src/style.css",
+    "desktop/src/types.ts",
+    "desktop/src/*Settings*",
+    "desktop/src/Update*",
+    "desktop/src/update-session.ts",
+    "desktop/src/native-*.ts",
+    "desktop/src/desktop-interactions.ts",
+    "desktop/src/DesktopCommandMenu*",
+    "desktop/src/ActivityStatus*",
+    "desktop/src/BrandAtmosphere*",
+    "desktop/src/External.tsx",
+    "desktop/src/browser-types.ts",
+    "desktop/src-tauri/**",
+    "desktop/browser-runtime/**",
+    "desktop/public/**",
+    "desktop/*.json",
+    "desktop/*.ts",
+    "desktop/*.html",
+    "scripts/prepare-*",
+    "scripts/release*",
+    "scripts/release-verify/**",
+    "scripts/verify-desktop-*.mjs",
+    "scripts/verify-browser-ui.mjs",
+    "scripts/verify-native-preview.mjs",
+    "scripts/setup-linux.sh",
+    "scripts/local-services.mjs",
+    "runtime/**",
+    "infrastructure/agent-vector-db/**",
+    "desktop/*.png",
+    "desktop/src/OperationTray.tsx",
+    "desktop/src/StartupErrorBoundary.tsx",
+    "desktop/src/Workspace.css",
+    "desktop/src/workspace-navigation.ts",
+    "scripts/verify-startup-error.mjs",
+    "scripts/verify-webkit-startup.mjs",
+    "scripts/ui-fixture-helpers.mjs",
+    "scripts/download-verified-release*",
+    "scripts/verify-release-resume*"
+   ],
+   "verify": [
+    "pnpm desktop:check"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json"
+   ]
+  },
+  {
+   "id": "harness",
+   "label": "저장소 하네스",
+   "paths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/harness/**",
+    "scripts/harness-check.mjs",
+    "scripts/mutation-check.mjs",
+    "scripts/verify.mjs",
+    ".github/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+    "next.config.ts",
+    "next-env.d.ts",
+    "compose.yaml",
+    ".gitignore",
+    ".env.example",
+    "scripts/check-secrets.sh",
+    "scripts/release-security.sh",
+    "scripts/harness-check.test.mjs"
+   ],
+   "verify": [
+    "node scripts/harness-check.mjs"
+   ]
+  },
+  {
+   "id": "docs-and-content",
+   "label": "문서·공개 자료·데모 스크립트",
+   "paths": [
+    "docs/**",
+    "README.md",
+    "DESIGN.md",
+    "public/**",
+    "attachments/**",
+    "scripts/prepare-devday*.ts",
+    "scripts/prepare-explainer-sample.ts",
+    "scripts/check-explainer-project.ts",
+    "scripts/cloud-*",
+    "scripts/verify-devday-30.py",
+    "scripts/verify-studio.py",
+    "scripts/verify-ai-workspace.mjs",
+    "scripts/verify-integration-ui.mjs",
+    "scripts/verify-live-web-upload.mjs",
+    "tests/**"
+   ],
+   "verify": []
+  },
+  {
+   "id": "agent-configs",
+   "label": "외부 에이전트 도구 설정",
+   "paths": [
+    ".agents/**",
+    ".claude/**",
+    ".kiro/**",
+    ".qwen/**",
+    ".codex/**",
+    ".cursor/**",
+    ".devin/**",
+    ".factory/**",
+    ".gemini/**",
+    ".junie/**",
+    ".roo/**",
+    ".zed/**",
+    ".amp/**",
+    ".augment/**",
+    ".mcp.json",
+    "kilo.json",
+    "opencode.json"
+   ],
+   "verify": []
+  },
+  {
+   "id": "local-workspace",
+   "label": "저장소에 올리지 않는 개인 작업 공간(캠페인 산출물, 별도 게임 프로젝트)",
+   "paths": [
+    "campaigns/**",
+    "pocket-circuit/**"
+   ],
+   "verify": []
+  }
+ ]
+}

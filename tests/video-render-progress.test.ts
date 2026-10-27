@@ -90,7 +90,8 @@ test("native video menu and persistent panel render in the desktop app", async (
     const markup = renderToStaticMarkup(createElement(App));
     assert.match(markup, /영상 제작/);
     assert.match(markup, /<div hidden=""><nav class="video-mode-tabs" aria-label="영상 제작 모드"/);
-    assert.match(markup, /ChatGPT에 영상 초안 요청/);
+    // Before the AI status check finishes no model is known, so the form offers the model-free template draft.
+    assert.match(markup, /템플릿 초안 만들기|AI로 영상 초안 만들기/);
     const source = readFileSync(new URL("../desktop/src/App.tsx", import.meta.url), "utf8");
     const { sectionFor, sectionItems } = await import("../desktop/src/workspace-navigation");
     assert.equal(sectionFor("video"), "creation");

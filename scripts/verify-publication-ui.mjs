@@ -14,7 +14,8 @@ const capabilities = { video: true, title: true, description: true, tags: true, 
 const accounts = ["youtube", "instagram", "facebook", "threads", "tiktok"].map(platform => ({ platform, connectionId:`${platform}-connection`, accountId: `${platform}-account`, name: `${platform} 검증 계정`, publishingAuthorized: true, capabilities, creatorInfo: platform === "tiktok" ? { privacyLevelOptions: ["SELF_ONLY", "PUBLIC_TO_EVERYONE"], commentDisabled: false, duetDisabled: true, stitchDisabled: false, maxVideoPostDurationSec: 180, checkedAt: now } : null }));
 const media = [];
 let fixturePublicationSequence = 0;
-let saved, aiRequest, submits = 0, clipboard="";
+let saved, aiRequest, submits = 0, clipboard="", modelFails = false;
+const prompts = [];
 const server = await createFixtureServer({ configFile: resolve("desktop/vite.config.ts"), server: { port: 0, strictPort: false } });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
@@ -25,6 +26,13 @@ try {
   await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     calls.push({ command, args });
     if (command === "get_dashboard") return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: "QA" } };
+    if (command === "ai_status") return { providers: [{ id: "codex-cli", label: "Codex CLI", kind: "subscription", available: true, detail: "QA", suggestedModels: [] }], contentModel: { provider: "codex-cli", model: "" }, agentModel: null, image: null };
+    if (command === "ai_generate") {
+      if (modelFails) throw new Error("codex 실행 실패 (코드 1): Not logged in");
+      prompts.push(args.input.prompt);
+      return { text: '초안입니다.\n```json\n{"title":"AI가 쓴 제목","description":"사용자가 적용해야 하는 초안","tags":["검증"],"hashtags":["#초안"]}\n```', provider: "codex-cli", model: "" };
+    }
+    if (command === "publication_ai_receive") { aiRequest = { ...aiRequest, status: "received", receivedAt: now, draft: { title: args.input.title, description: args.input.description, tags: args.input.tags, hashtags: args.input.hashtags } }; return aiRequest; }
     if (command === "publication_list") return { publications: saved ? [saved] : [], media, scheduler: { paused: false, running: false, message: "QA" } };
     if (command === "publication_media_sources") return { renders: [{ id: "render-qa", title: "기존 렌더 검증" }], assets: [{ id: "asset-qa", title: "ChatGPT 썸네일 검증" }] };
     if (command === "publication_preview_media") return { path: `qa://${args.id}`, kind: "thumbnail", mimeType: "image/png" };
@@ -115,7 +123,14 @@ try {
     if (command === "publication_ai_drafts") return { requests: aiRequest ? [aiRequest] : [] };
     if(command==="copy_text"){clipboard=args.text;return null;}
     if ( command === "open_external" || command === "publication_set_paused" || command.startsWith("plugin:event|")) return 0;
-    if (command === "ai_generate" || command === "ai_status" || command.startsWith("open_webui")) throw new Error(`Forbidden old AI path ${command}`);
+    if (command === "ai_status") return { providers: [{ id: "codex-cli", label: "Codex CLI", kind: "subscription", available: true, detail: "QA", suggestedModels: [] }], contentModel: { provider: "codex-cli", model: "" }, agentModel: null, image: null };
+    if (command === "ai_generate") {
+      if (modelFails) throw new Error("codex 실행 실패 (코드 1): Not logged in");
+      prompts.push(args.input.prompt);
+      return { text: '초안입니다.\n```json\n{"title":"AI가 쓴 제목","description":"사용자가 적용해야 하는 초안","tags":["검증"],"hashtags":["#초안"]}\n```', provider: "codex-cli", model: "" };
+    }
+    if (command === "publication_ai_receive") { assert.equal(args.input.revision, aiRequest.revision, "the receipt carries the request publication revision"); aiRequest = { ...aiRequest, status: "received", receivedAt: now, draft: { title: args.input.title, description: args.input.description, tags: args.input.tags, hashtags: args.input.hashtags } }; return aiRequest; }
+    if (command.startsWith("open_webui") || command.startsWith("codexify_")) throw new Error(`Forbidden removed AI path ${command}`);
     const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
     report.errors.push(`Unsupported fixture IPC ${command}`);throw new Error(`Unsupported QA IPC ${command}`);
   });
@@ -203,21 +218,19 @@ try {
   report.checks.push("Uncertain result reconciles with explicit external publication URL without resending");
 
   await studio.getByRole("button", { name: "초안 열기·수정", exact: true }).click();
-  const beforeRequests=calls.filter(item=>item.command==="publication_ai_request").length;
-  await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
-  await studio.getByText("요청 저장 · 실제 수신 대기", { exact: true }).waitFor();
-  await studio.getByText("SNS 문구 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.", { exact: true }).waitFor();
-  assert.equal(calls.filter(item=>item.command==="publication_ai_request").length,beforeRequests+1);
-  await studio.getByRole("button",{name:"전달문 복사",exact:true}).click();
-  assert.match(clipboard,/Remote Desktop Commander/);assert.match(clipboard,/studio_publication_draft_receive/);assert.match(clipboard,new RegExp(`revision=${saved.revision}`));
-  assert.equal(aiRequest.revision,saved.revision);
-  report.checks.push("Saved SNS draft request uses RDC copy with immutable publication revision and no automatic chat/API send");
-  aiRequest.status = "received"; aiRequest.receivedAt = now; aiRequest.draft = { title: "수신한 ChatGPT 제목", description: "사용자가 적용해야 하는 초안", tags: ["검증"], hashtags: ["초안"] };
-  await page.getByRole("button", { name: "워크스페이스 새로고침", exact: true }).click();
+  modelFails = true;
+  await studio.getByRole("button", { name: "AI로 문구 작성", exact: true }).click();
+  await studio.getByText(/Not logged in/).waitFor();
+  assert.equal(calls.filter(item => item.command === "publication_ai_receive").length, 0);
+  modelFails = false;
+  report.checks.push("A model failure surfaces its reason and stores no draft");
+  await studio.getByRole("button", { name: "AI로 문구 작성", exact: true }).click();
+  await studio.getByText(/초안을 받았습니다/).waitFor();
+  assert.equal(calls.filter(item => item.command === "publication_ai_receive").at(-1).args.input.requestId, aiRequest.id);
   await studio.getByRole("button", { name: "초안 적용", exact: true }).click();
-  assert.equal(await studio.getByLabel("게시 공통 제목", { exact: true }).inputValue(), "수신한 ChatGPT 제목");
+  assert.equal(await studio.getByLabel("게시 공통 제목", { exact: true }).inputValue(), "AI가 쓴 제목");
   assert.equal(submits, 1);
-  report.checks.push("Request-bound SNS receipt fixture requires explicit apply and remains editable and unapproved");
+  report.checks.push("AI copy is generated, stored against the app request, and applied only on explicit click without approval");
   const checkbox = studio.getByLabel("이 채널의 문구를 따로 편집", { exact: true }).first();
   assert.equal(await checkbox.locator("..").evaluate(element => getComputedStyle(element).display), "flex");
   await studio.getByLabel("YouTube 게시 방식", { exact: true }).selectOption("scheduled");
@@ -276,13 +289,15 @@ try {
   await studio.getByRole("button", { name: "사전 검사·대상 확인", exact: true }).click();
   assert.equal(saved.contentKind, "text"); assert.equal(saved.videoMediaId, null);
   report.checks.push("Text content offers Page/Threads without video controls and persists its content kind with no MP4");
-  await studio.getByRole("button", { name: "ChatGPT로 문구 작성", exact: true }).click();
-  await studio.getByText("SNS 문구 요청을 저장했습니다. RDC 전달문을 ChatGPT에 붙여넣고 수신 초안을 검토하세요.", { exact: true }).waitFor();
+  const promptsBefore = prompts.length;
+  await studio.getByRole("button", { name: "AI로 문구 작성", exact: true }).click();
+  await studio.getByText(/초안을 받았습니다/).waitFor();
+  assert.equal(prompts.length, promptsBefore + 1);
   assert.equal(JSON.parse(aiRequest.context).contentKind, "text");
   assert.deepEqual(JSON.parse(aiRequest.context).targets, ["facebook", "threads"]);
-  assert.equal(aiRequest.revision,saved.revision);
+  assert.match(prompts.at(-1), /콘텐츠 종류.*선택된 채널/);
   assert.equal(submits, 1);
-  report.checks.push("ChatGPT draft requests carry the current content kind and selected channels without assuming video or approving publication");
+  report.checks.push("AI draft requests carry the current content kind and selected channels without assuming video or approving publication");
   await studio.getByRole("button", { name: "새 초안", exact: true }).click();
   await studio.getByLabel("게시 콘텐츠 종류", { exact: true }).selectOption("article");
   await studio.getByLabel("게시 공통 제목", { exact: true }).fill("블로그 인계 검증");
@@ -432,12 +447,10 @@ try {
   assert.equal(new Set(saved.jobs.map(job => job.id)).size, saved.jobs.length);
   report.checks.push("Second subset approval adds only TikTok inbox while preserving prior YouTube job identity/status and leaving Instagram untouched");
   await page.screenshot({ path: resolve(out, "publication-partial-approval.png"), fullPage: true });
-  await openCreation(page,"문구");
-  assert.equal(await page.getByRole("button", { name: "AI로 작성", exact: true }).count(), 0);
-  await page.getByLabel("문구 · 직접 편집",{exact:true}).fill("사용자가 직접 붙여넣은 검토용 응답");
-  assert.equal(await page.getByLabel("문구 · 직접 편집",{exact:true}).inputValue(),"사용자가 직접 붙여넣은 검토용 응답");
-  assert.equal(calls.some(item => item.command === "ai_generate" || item.command === "ai_status" || item.command.startsWith("open_webui")), false);
-  report.checks.push("Desktop AI path never calls local providers/Open WebUI; literal user-pasted response can be edited without chat execution");
+  await openCreation(page, "문구");
+  assert.equal(await page.getByText("직접 작성에 사용할 로컬 AI 제공자", { exact: false }).count(), 0);
+  assert.equal(calls.some(item => item.command.startsWith("open_webui") || item.command.startsWith("codexify_")), false);
+  report.checks.push("Desktop AI path uses only the selected model command; no Open WebUI or Codexify calls");
   assert.deepEqual(report.errors, []);
   report.passed = true;
   console.log(JSON.stringify(report, null, 2));

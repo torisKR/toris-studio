@@ -199,7 +199,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
       dirtyFields.current.clear();
       applySavedSettings(next, false);
       setSecretResetToken((current) => current + 1);
-      setNotice("내 기기의 설정을 저장했습니다. DB 연결과 ChatGPT 수신 상태는 각 화면에서 확인할 수 있습니다.");
+      setNotice("내 기기의 설정을 저장했습니다. DB 연결과 AI 모델 상태는 각 화면에서 확인할 수 있습니다.");
       onSaved();
       try { setScheduler(await invoke<SchedulerStatus>("get_scheduler_status")); }
       catch { setFollowupNotice("설정은 저장되었습니다. 자동 수집 상태를 불러오지 못했으므로 아래의 상태 확인 버튼을 눌러 주세요."); }
@@ -286,7 +286,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
         <label htmlFor="settings-database">데이터베이스 연결 주소</label><input id="settings-database" type="password" value={form.databaseUrl} onChange={(event) => update("databaseUrl", event.target.value)} placeholder={settings.databaseConfigured ? "저장된 주소 사용 중 · 변경할 때만 입력" : "postgresql://사용자:비밀번호@127.0.0.1:포트/DB"} maxLength={2000} autoComplete="new-password" spellCheck={false} />
         <p className="social-form-hint">컨테이너가 실행 중이어야 연결됩니다. 주소를 저장하면 실제 DB 연결 상태를 다시 확인합니다.</p>
       </fieldset>
-      <section className="desktop-settings-section"><h2><Sparkles size={18} />ChatGPT 연결</h2><p>AI 작성과 이미지 생성은 실제 ChatGPT 대화에 요청합니다. 제작 화면에서 요청을 저장하고 RDC 전달문을 ChatGPT에 붙여넣어 시작·재개하세요.</p><p className="social-form-hint">제작 결과는 실제 수신한 뒤 검토·적용합니다. ChatGPT 사용 한도가 적용됩니다.</p></section>
+      <section className="desktop-settings-section"><h2><Sparkles size={18} />AI 모델</h2><p>AI 작성·이미지 생성·코드 에이전트의 모델은 Agent 탭의 모델 설정에서 고릅니다. 구독 CLI(Claude Code·Codex·Gemini·Cursor·Kiro) 또는 API 키를 사용할 수 있습니다.</p><p className="social-form-hint">API 키는 OS 키체인에 저장하며 일반 설정 파일에는 넣지 않습니다. 각 공급자의 요금과 사용 한도가 적용됩니다.</p></section>
       <fieldset disabled={locked} className="desktop-settings-section"><legend><KeyRound size={18} />수집 API</legend>
         <p>Google 트렌드는 키 없이 수집합니다. YouTube와 네이버 블로그 수집에 필요한 API 정보를 추가하세요.</p>
         <p className="social-form-hint">저장됨 표시로 등록 여부를 확인하고, 보기 버튼으로 저장된 값을 확인하세요. 저장된 값은 읽기 전용이며 변경 입력과 구분됩니다.</p>

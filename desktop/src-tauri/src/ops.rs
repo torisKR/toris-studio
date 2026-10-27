@@ -13,9 +13,67 @@ const OAUTH_SCHEMA: &str = include_str!("../../../db/migrations/009_oauth_connec
 const ANALYTICS_SCHEMA: &str = include_str!("../../../db/migrations/010_analytics.sql");
 const WORKSPACE_SCHEMA: &str = include_str!("../../../db/migrations/011_sns_workspace.sql");
 const HANDOFF_SCHEMA: &str = include_str!("../../../db/migrations/008_publication_handoffs.sql");
+const PLANNER_SCHEMA: &str = include_str!("../../../db/migrations/012_planner.sql");
+const OPS_STATUS_SCHEMA: &str = include_str!("../../../db/migrations/013_ops_status.sql");
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
 const CRAWLER_COMPOSE: &str = include_str!("../../../infrastructure/keyword-crawler/compose.yaml");
+const VECTOR_COMPOSE: &str = include_str!("../../../infrastructure/agent-vector-db/compose.yaml");
+
+/// Start (or keep) the local ChromaDB container for agent code search.
+pub async fn start_vector_db() -> Result<Value, String> {
+    crate::config::prepare_portable_data()?;
+    let root = config_path()
+        .parent()
+        .ok_or("설정 경로 오류")?
+        .join("vector-stack");
+    fs::create_dir_all(&root).map_err(|_| "벡터 DB 설정 폴더 생성 실패")?;
+    if !fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.is_dir()) {
+        return Err("벡터 DB 설정 폴더의 형식이 올바르지 않습니다.".into());
+    }
+    let compose_path = root.join("compose.yaml");
+    fs::write(&compose_path, VECTOR_COMPOSE).map_err(|_| "벡터 DB 구성 저장 실패")?;
+    let mut command = Command::new(docker_program());
+    command
+        .current_dir(&root)
+        .args(["compose", "-f"])
+        .arg(&compose_path)
+        .args(["up", "-d", "chroma"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let status = tokio::time::timeout(Duration::from_secs(300), command.status())
+        .await
+        .map_err(|_| "벡터 DB 시작 시간이 초과되었습니다. Docker/OrbStack에서 이미지 다운로드 상태를 확인하세요.")?
+        .map_err(|_| "Docker/OrbStack을 설치하고 실행하세요.")?;
+    if !status.success() {
+        return Err(
+            "벡터 DB 시작에 실패했습니다. Docker/OrbStack과 로컬 포트 18765를 확인하세요.".into(),
+        );
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "벡터 DB 확인 실패")?;
+    for _ in 0..40 {
+        if client
+            .get(format!(
+                "{}/api/v2/heartbeat",
+                crate::agent_runtime::CHROMA_URL
+            ))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+        {
+            return Ok(
+                json!({"ok":true,"url":crate::agent_runtime::CHROMA_URL,"message":"로컬 ChromaDB가 준비되었습니다."}),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Err("벡터 DB 컨테이너는 실행됐지만 응답하지 않습니다. 잠시 후 다시 확인하세요.".into())
+}
 
 fn stack_root() -> Result<PathBuf, String> {
     crate::config::prepare_portable_data()?;
@@ -58,6 +116,8 @@ fn stack_root() -> Result<PathBuf, String> {
         ("009_oauth_connections.sql", OAUTH_SCHEMA),
         ("010_analytics.sql", ANALYTICS_SCHEMA),
         ("011_sns_workspace.sql", WORKSPACE_SCHEMA),
+        ("012_planner.sql", PLANNER_SCHEMA),
+        ("013_ops_status.sql", OPS_STATUS_SCHEMA),
     ] {
         fs::write(root.join("db/migrations").join(name), schema)
             .map_err(|_| "SNS 스키마 저장 실패")?;
@@ -299,6 +359,8 @@ pub async fn migrate_database() -> Result<(), String> {
         ("009_oauth_connections", OAUTH_SCHEMA),
         ("010_analytics", ANALYTICS_SCHEMA),
         ("011_sns_workspace", WORKSPACE_SCHEMA),
+        ("012_planner", PLANNER_SCHEMA),
+        ("013_ops_status", OPS_STATUS_SCHEMA),
     ] {
         let applied: bool = transaction
             .query_one(
@@ -344,7 +406,7 @@ pub async fn migrate_configured_publications(config: &AppConfig) -> Result<(), S
         .map_err(|_| "DB 스키마 상태를 확인하지 못했습니다.")?
         .get::<_, Option<String>>(0)
         .is_some();
-    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='011_sns_workspace') AND to_regclass('public.analytics_report_owners') IS NOT NULL",&[]).await
+    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='013_ops_status') AND to_regclass('public.analytics_report_owners') IS NOT NULL",&[]).await
         .map_err(|_|"DB 마이그레이션 상태를 확인하지 못했습니다.")?.get::<_,bool>(0) {return Ok(());}
     drop(session);
     let raw = config
@@ -425,4 +487,27 @@ pub async fn backup_database() -> Result<Value, String> {
     Ok(
         json!({"ok":true,"path":path.to_string_lossy(),"bytes":fs::metadata(&path).map_err(|_| "백업 확인 실패")?.len()}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn vector_db_listens_only_on_loopback_and_pins_the_image_digest() {
+        let compose = super::VECTOR_COMPOSE;
+        let ports: Vec<&str> = compose
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- \"") && l.contains(':'))
+            .collect();
+        assert_eq!(ports, vec!["      - \"127.0.0.1:18765:8000\""]);
+        assert!(compose.contains("image: chromadb/chroma:1.5.9@sha256:"));
+        assert!(
+            compose.contains("chroma-data:/data"),
+            "index survives container restarts"
+        );
+        assert!(super::VECTOR_COMPOSE.contains(
+            &crate::agent_runtime::CHROMA_URL
+                .replace("http://", "")
+                .replace(":18765", ":18765:8000")
+        ));
+    }
 }

@@ -18,6 +18,7 @@ try {
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 UI 검증' } };
+    if (command === 'ai_status') return { providers: [], contentModel: null, agentModel: null, image: null };
     if (command === 'video_list_projects') return [];
     if (command === 'video_template_library_get') return {version:1,favorites:[],recent:[]};
     // This lifecycle fixture deliberately exercises unavailable catalog recovery.

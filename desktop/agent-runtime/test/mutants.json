@@ -1,0 +1,647 @@
+[
+ {
+  "id": "fs.traversal-allowed",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (clean === \"..\" || clean.startsWith(\"../\")) throw",
+  "replace": "if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "fs.secret-files-readable",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (rel && (SECRET_FILE.test(rel) || BLOCKED_DIR.test(rel))) throw",
+  "replace": "if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "fs.symlink-escape",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (real !== root && !real.startsWith(root + path.sep)) throw",
+  "replace": "if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "fs.write-into-node_modules",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (write && NO_WRITE_DIR.test(rel)) throw",
+  "replace": "if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "fs.edit-ambiguous-match",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (count !== 1) throw",
+  "replace": "if (count < 1) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "fs.apply-ignores-conflict",
+  "file": "desktop/agent-runtime/src/tools/fs.ts",
+  "find": "if (current !== proposal.baseHash) throw",
+  "replace": "if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "term.any-program",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "  if (!rule) throw new UserError(",
+  "replace": "  if (!rule) return argv; if (false) throw new UserError(",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "term.shell-chars",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "    if (!ARG.test(arg)) throw",
+  "replace": "    if (false) throw",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "term.cargo-fmt-write",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "&& (a[0] !== \"fmt\" || a.includes(\"--check\"))",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "util.json-ignores-strings",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "      if (ch === '\"') inString = true;\n      else if",
+  "replace": "      if (false) inString = true;\n      else if",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "util.redact-off",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, \"[숨김]\");",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "rag.shared-collection",
+  "file": "desktop/agent-runtime/src/rag/index.ts",
+  "find": "return `toris_proj_${sha1(realProjectPath).slice(0, 24)}`;",
+  "replace": "return `toris_proj_${sha1(\"shared\").slice(0, 24)}`;",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "rag.chunk-no-overlap",
+  "file": "desktop/agent-runtime/src/rag/index.ts",
+  "find": "start += CHUNK_LINES - OVERLAP",
+  "replace": "start += CHUNK_LINES",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "rag.reembeds-unchanged",
+  "file": "desktop/agent-runtime/src/rag/index.ts",
+  "find": "      if (known.get(rel) === fileHash) continue;",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/rag.live.test.ts"
+ },
+ {
+  "id": "rag.keeps-removed-chunks",
+  "file": "desktop/agent-runtime/src/rag/index.ts",
+  "find": "await client.deleteWhere(id, { path: rel });",
+  "replace": "void 0;",
+  "test": "desktop/agent-runtime/test/rag.live.test.ts"
+ },
+ {
+  "id": "embed.ignores-identifiers",
+  "file": "desktop/agent-runtime/src/rag/embed.ts",
+  "find": "tokens.forEach((token, i) => { add(token, 1); if (i > 0) add(`${tokens[i - 1]}_${token}`, 0.5); });",
+  "replace": "add(String(text.length), 1);",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "cli.claude-tools-on",
+  "file": "desktop/agent-runtime/src/llm/cli.ts",
+  "find": "\"--restricted\", \"--tools\", \"\",",
+  "replace": "\"--restricted\",",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "cli.codex-writable",
+  "file": "desktop/agent-runtime/src/llm/cli.ts",
+  "find": "\"--sandbox\", \"read-only\", \"--color\"",
+  "replace": "\"--sandbox\", \"workspace-write\", \"--color\"",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "settings.unknown-provider",
+  "file": "desktop/agent-runtime/src/runtime.ts",
+  "find": "  if (!isProvider(v.provider)) throw new UserError(\"지원하지 않는 모델 공급자입니다.\");",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "graph.write-without-approval",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "    const decision = await ctx.approve(pending, `${pending.path} 변경 승인을 기다립니다.`);",
+  "replace": "    applyWrite(ctx.projectRoot, pending); const decision = await ctx.approve(pending, `${pending.path} 변경 승인을 기다립니다.`);",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "graph.reject-applies-anyway",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "return decision.actionId === pending.id && decision.decision === \"approve\";",
+  "replace": "return true;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "graph.qa-never-returns",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "if (verdict === \"fail\" && iterations < MAX_QA_ROUNDS) {",
+  "replace": "if (false) {",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "runs.stale-approval",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "    const waiter = run.waiters.get(decision.actionId);",
+  "replace": "    const waiter = run.waiters.get(decision.actionId) ?? [...run.waiters.values()][0];",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "runs.concurrent-project",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "    if ([...this.runs.values()].some(run => slot(run) === slot({ project, workflow: spec.id }) && !isTerminal(run.phase))) throw",
+  "replace": "    if (false) throw",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "ui.event-rewind",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  if (event.seq <= last) return run;",
+  "replace": "",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "ui.foreign-event",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  if (!run || run.runId !== event.runId) return run;",
+  "replace": "  if (!run) return run;",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "ui.diff-types",
+  "file": "desktop/src/agent-client.ts",
+  "find": "text.startsWith(\"+\") ? \"add\" : text.startsWith(\"-\") ? \"del\"",
+  "replace": "text.startsWith(\"+\") ? \"ctx\" : text.startsWith(\"-\") ? \"del\"",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "ai.empty-prompt-sent",
+  "file": "desktop/src/ai-client.ts",
+  "find": "  if (!prompt.trim()) throw new Error(\"AI에 요청할 내용을 입력하세요.\");",
+  "replace": "",
+  "test": "tests/ai-client.test.ts"
+ },
+ {
+  "id": "ai.content-fallback",
+  "file": "desktop/src/ai-client.ts",
+  "find": "const choice = status?.contentModel ?? status?.agentModel;",
+  "replace": "const choice = status?.agentModel;",
+  "test": "tests/ai-client.test.ts"
+ },
+ {
+  "id": "p.cmd-inherits-env",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "const child = spawn(argv[0], argv.slice(1), { cwd, env: commandEnv(searchPath),",
+  "replace": "const child = spawn(argv[0], argv.slice(1), { cwd, env: { ...process.env, ...commandEnv(searchPath) },",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.cmd-log-unmasked",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "log: redact(clip(log, MAX_LOG), secrets)",
+  "replace": "log: clip(log, MAX_LOG)",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.cmd-exit-lost",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "resolve({ exitCode: code ?? 1,",
+  "replace": "resolve({ exitCode: 0,",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.cli-claude-error-as-answer",
+  "file": "desktop/agent-runtime/src/llm/cli.ts",
+  "find": "    if (value.is_error) throw new UserError(",
+  "replace": "    if (false) throw new UserError(",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.cli-reason-first-line",
+  "file": "desktop/agent-runtime/src/llm/cli.ts",
+  "find": "  return clip(reason ?? lines[0] ?? \"로그인 상태를 확인하세요.\", 300);",
+  "replace": "  return clip(lines[0] ?? \"로그인 상태를 확인하세요.\", 300);",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.cli-gemini-raw-json",
+  "file": "desktop/agent-runtime/src/llm/cli.ts",
+  "find": "if (typeof value.response === \"string\") return value.response;",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.http-anthropic-header",
+  "file": "desktop/agent-runtime/src/llm/http.ts",
+  "find": "headers: { \"x-api-key\": this.key, \"anthropic-version\": \"2023-06-01\" } },\n      { model: this.model",
+  "replace": "headers: { authorization: this.key, \"anthropic-version\": \"2023-06-01\" } },\n      { model: this.model",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.http-openai-token-field",
+  "file": "desktop/agent-runtime/src/llm/http.ts",
+  "find": "const tokenField = this.provider === \"openai\" ? \"max_completion_tokens\" : \"max_tokens\";",
+  "replace": "const tokenField = \"max_tokens\";",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.http-error-unredacted",
+  "file": "desktop/agent-runtime/src/llm/http.ts",
+  "find": "${redact(String(message), secrets)}",
+  "replace": "${String(message)}",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.http-ollama-remote",
+  "file": "desktop/agent-runtime/src/llm/http.ts",
+  "find": "if (url.protocol !== \"http:\" || ![\"127.0.0.1\", \"localhost\", \"[::1]\"].includes(url.hostname) || url.username || url.password) {",
+  "replace": "if (false) {",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.chroma-remote",
+  "file": "desktop/agent-runtime/src/rag/chroma.ts",
+  "find": "if (url.protocol !== \"http:\" || ![\"127.0.0.1\", \"localhost\"].includes(url.hostname) || url.username || url.password) {",
+  "replace": "if (false) {",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.image-size-ignored",
+  "file": "desktop/agent-runtime/src/llm/image.ts",
+  "find": "size: SIZES.has(size) ? size : \"1024x1024\"",
+  "replace": "size: \"1024x1024\"",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.image-no-key-check",
+  "file": "desktop/agent-runtime/src/llm/image.ts",
+  "find": "    if (!key) throw new UserError(\"이미지 생성에 OpenAI API 키가 필요합니다.\");",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "p.complete-no-fallback",
+  "file": "desktop/agent-runtime/src/runtime.ts",
+  "find": "this.settings.contentModel ?? this.settings.agentModel",
+  "replace": "this.settings.contentModel",
+  "test": "desktop/agent-runtime/test/providers.test.ts"
+ },
+ {
+  "id": "g.no-step-budget",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "      if (steps >= MAX_TOTAL_STEPS) return",
+  "replace": "      if (steps >= 10_000) return",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "g.unverified-is-done",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "const ok = !state.failed && state.verdict === \"pass\";",
+  "replace": "const ok = !state.failed;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "g.unlimited-sendbacks",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "if (verdict === \"fail\" && iterations < MAX_QA_ROUNDS) {",
+  "replace": "if (verdict === \"fail\" && iterations < 4) {",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "t.projects-no-stacks",
+  "file": "desktop/agent-runtime/src/projects.ts",
+  "find": "MARKERS.filter(([file]) => existsSync(path.join(dir, file)))",
+  "replace": "MARKERS.filter(() => false)",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "t.projects-no-scripts",
+  "file": "desktop/agent-runtime/src/projects.ts",
+  "find": "Object.entries(pkg.scripts ?? {})",
+  "replace": "Object.entries({})",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "t.projects-dot-allowed",
+  "file": "desktop/agent-runtime/src/projects.ts",
+  "find": " || name.startsWith(\".\"))",
+  "replace": ")",
+  "test": "desktop/agent-runtime/test/tools.test.ts"
+ },
+ {
+  "id": "prep.agent-hash-unchecked",
+  "file": "scripts/prepare-desktop.mjs",
+  "find": "if (sha256(bundle) !== expected ||",
+  "replace": "if (false ||",
+  "cmd": [
+   "node",
+   "--test",
+   "scripts/prepare-desktop.test.mjs"
+  ]
+ },
+ {
+  "id": "prep.agent-not-in-overlay",
+  "file": "desktop/src-tauri/tauri.runtime.conf.json",
+  "find": "      \"resources/agent-runtime/agent.mjs\": \"agent-runtime/agent.mjs\",\n",
+  "replace": "",
+  "cmd": [
+   "node",
+   "--test",
+   "scripts/prepare-desktop.test.mjs"
+  ]
+ },
+ {
+  "id": "asset.request-missing",
+  "file": "desktop/src/assets/contracts.ts",
+  "find": "export function imageGenerationRequest(",
+  "replace": "function imageGenerationRequestRemoved(",
+  "test": "tests/asset-ui.test.ts"
+ },
+ {
+  "id": "asset.always-square",
+  "file": "desktop/src/assets/contracts.ts",
+  "find": "const size = width > height * 1.15 ? \"1536x1024\" : height > width * 1.15 ? \"1024x1536\" : \"1024x1024\";",
+  "replace": "const size = \"1024x1024\";",
+  "test": "tests/asset-ui.test.ts"
+ },
+ {
+  "id": "asset.wrong-job",
+  "file": "desktop/src/assets/contracts.ts",
+  "find": "return { jobId: job.id, prompt, size };",
+  "replace": "return { jobId: \"\", prompt, size };",
+  "test": "tests/asset-ui.test.ts"
+ },
+ {
+  "id": "protocol.approval-content-leaks",
+  "file": "desktop/agent-runtime/src/protocol.ts",
+  "find": "if (action.kind !== \"write_file\") return action;",
+  "replace": "return action;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "qa.model-overrules-failed-command",
+  "file": "desktop/agent-runtime/src/harness/verify.ts",
+  "find": "review === \"pass\" && !factsFailed ? \"pass\"",
+  "replace": "review === \"pass\" ? \"pass\"",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "util.timeout-timer-kept",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "    clearTimeout(timer);\n    parent?.removeEventListener",
+  "replace": "    parent?.removeEventListener",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "util.parent-abort-ignored",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "else parent?.addEventListener(\"abort\", onAbort, { once: true });",
+  "replace": "else void onAbort;",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "terminal.listener-kept-on-error",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "const settle = () => { settled = true; clearTimeout(timer); signal?.removeEventListener(\"abort\", abort); };",
+  "replace": "const settle = () => { settled = true; clearTimeout(timer); };",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "client.early-runs-unbounded",
+  "file": "desktop/src/agent-client.ts",
+  "find": "while (buffer.size > EARLY_RUNS)",
+  "replace": "while (false)",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "office.sendback-as-report",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (from === \"qa\" && WORKERS.includes(to)) return \"sendBack\";",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.no-final-report",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (TERMINAL.includes(event.phase)) add(event.agent, \"user\", \"final\", event.seq);",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.no-approval-paper",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (event.phase === \"awaiting_approval\" && event.approval) add(",
+  "replace": "if (false) add(",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.everyone-busy",
+  "file": "desktop/src/agent-office.ts",
+  "find": "asking ? \"approval\" : active.has(agent.id) ? ACTIVITY[latest.phase] ?? \"thinking\" : \"waiting\"",
+  "replace": "asking ? \"approval\" : ACTIVITY[latest.phase] ?? \"thinking\"",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.written-double-counted",
+  "file": "desktop/src/agent-office.ts",
+  "find": "      if (seen.has(file)) continue;\n",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "pixel.runs-not-merged",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "while (end < row.length && row[end] === ch) end++;",
+  "replace": "",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.user-walks",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "const walker = handoff.from === \"user\" ? handoff.to : handoff.from;",
+  "replace": "const walker = handoff.from;",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.tray-ignored",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "to: other === \"user\" ? TRAY_SPOT : DESK_SPOTS[other].visit",
+  "replace": "to: DESK_SPOTS[walker].visit",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "pixel.same-look",
+  "file": "desktop/src/pixel-office.ts",
+  "find": "frontend: \"youngWoman\"",
+  "replace": "frontend: \"youngMan\"",
+  "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "par.lanes-serial",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "const settled = await Promise.allSettled(active.map(plan => runLane(plan, state, shared)));",
+  "replace": "const settled: PromiseSettledResult<LaneResult>[] = []; for (const plan of active) settled.push(await runLane(plan, state, shared).then(value => ({ status: \"fulfilled\" as const, value }), reason => ({ status: \"rejected\" as const, reason })));",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.one-lane-only",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "  return lanes.length ? lanes : [{ role:",
+  "replace": "  return lanes.length ? lanes.slice(0, 1) : [{ role:",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.qa-commands-serial",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "outcomes = await Promise.all(commands.map(argv => command(\"qa\", argv, \"변경 사항 검증\")));",
+  "replace": "outcomes = []; for (const argv of commands) outcomes.push(await command(\"qa\", argv, \"변경 사항 검증\"));",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.rework-everyone",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "  return named.length ? named : all;",
+  "replace": "  return all;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.approved-command-asks-again",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "      trusted.add(key);\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.manifest-keeps-trust",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "    if (isManifest(pending.path)) trusted.clear();",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.resolve-clears-all",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "    run.approvals = run.approvals.filter(a => a.id !== decision.actionId);",
+  "replace": "    run.approvals = [];",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.run-phase-follows-lane",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "  return !isTerminal(phase) && approvals > 0 ? \"awaiting_approval\" : phase;",
+  "replace": "  return phase;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.qa-plans-every-round",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "      if (!commands.length && !planned) {",
+  "replace": "      if (!commands.length) {",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.ui-other-lane-clears-approval",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  let approvals = event.approval ? [...run.approvals.filter(a => a.id !== event.approval!.id), event.approval] : run.approvals;",
+  "replace": "  let approvals = event.approval ? [event.approval] : [];",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "par.ui-resolved-ignored",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  if (event.resolved) approvals = approvals.filter(a => a.id !== event.resolved);",
+  "replace": "",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "par.office-one-busy-desk",
+  "file": "desktop/src/agent-office.ts",
+  "find": "active.has(agent.id) ? ACTIVITY[latest.phase]",
+  "replace": "run.events.at(-1)?.agent === agent.id ? ACTIVITY[latest.phase]",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "par.office-lane-to-lane-paper",
+  "file": "desktop/src/agent-office.ts",
+  "find": "    else if (next !== stage) { previous = current; current = []; }",
+  "replace": "    else { previous = current.slice(-1); current = []; }",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "harness.unknown-workflow-runs-coding",
+  "file": "desktop/agent-runtime/src/harness/workflow.ts",
+  "find": "    if (!spec) throw new UnknownWorkflow(id);",
+  "replace": "    if (!spec) return [...this.specs.values()][0];",
+  "test": "desktop/agent-runtime/test/harness.test.ts"
+ },
+ {
+  "id": "harness.check-failure-ignored",
+  "file": "desktop/agent-runtime/src/harness/verify.ts",
+  "find": "  const failedChecks = checks.filter(check => !check.ok);",
+  "replace": "  const failedChecks: CheckResult[] = [];",
+  "test": "desktop/agent-runtime/test/harness.test.ts"
+ },
+ {
+  "id": "hub.invented-links-kept",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "const sources = [...new Set(urls.filter(u => known.has(u)))];",
+  "replace": "const sources = [...new Set(urls)];",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.duplicate-title-allowed",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "if (seen.has(title.toLowerCase())) {",
+  "replace": "if (false) {",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.template-unlabelled",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "title: (\"[템플릿] \" + (t.keyword",
+  "replace": "title: (\"\" + (t.keyword",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.draft-saved-as-scheduled",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "status: \"draft\", scheduledAt: draft.scheduledAt",
+  "replace": "status: draft.scheduledAt ? \"scheduled\" : \"draft\", scheduledAt: draft.scheduledAt",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.triage-invented-product",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "if (!f) { problems.push(",
+  "replace": "if (!f && false) { problems.push(",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.skipped-failure-dropped",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "    if (tasks.some(t => t.productId === f.productId && t.source === f.source)) continue;\n    problems.push(",
+  "replace": "    continue;\n    problems.push(",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.ui-can-start-without-host",
+  "file": "desktop/agent-runtime/src/runtime.ts",
+  "find": "return needsProject || p.host === true;",
+  "replace": "return true;",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ }
+]

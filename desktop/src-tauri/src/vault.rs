@@ -1261,6 +1261,16 @@ pub(crate) mod tests {
         assert!(slot(OAUTH_SERVICE, "upload:facebook").is_err());
     }
 
+    #[test]
+    fn an_envelope_written_by_the_released_app_still_decodes() {
+        // 0.3.2 stores multi-connection OAuth records in the shared envelope.
+        let raw = r#"{"schemaVersion":2,"entries":{"oauth:connections:v2":"[]","oauth:legacy-client-changed:youtube":null,"settings:youtubeApiKey":"k"}}"#;
+        assert!(Envelope::decode(raw).is_ok());
+        // Agent keys live in their own Keychain items: an agent slot here would
+        // make the released app reject the whole envelope.
+        assert!(!valid_slot("agent:openai"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn coordination_file_is_private_and_rejects_symlinks() {

@@ -28,7 +28,7 @@
 .desktop-video-editor-heading h2 { font-size: 17px; font-weight: 600; letter-spacing: -.025em; line-height: 1.6; overflow-wrap: anywhere; }
 .desktop-video-editor-heading span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; color: #a0b1c1; font-size: 9px; }
 .desktop-video-editor-heading i { width: 3px; height: 3px; border-radius: 50%; background: #667d85; margin: 0 2px; }
-.desktop-video-editor-heading > div:last-child { display: flex; gap: 7px; flex-shrink: 0; }
+.desktop-video-editor-heading > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; min-width: 0; }
 .desktop-video-editor-heading .social-button { min-height: 36px; padding: 8px 10px; font-size: 11px !important; }
 .desktop-video-project-fields, .desktop-video-scene-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .desktop-video-project-fields label, .desktop-video-scene-fields > label { font-size: 11px; }
@@ -169,6 +169,14 @@
 .desktop-video-motion-controls select { margin-top: 8px; font-size: 12px; }
 .desktop-video-motion-controls output { float: right; color: #afcfbc; font-size: 10px; }
 .desktop-video-motion-controls input[type="range"] { display: block; width: 100%; min-height: 28px; margin-top: 10px; padding: 0; accent-color: #8ae3bb; }
+.desktop-video-motion-data { min-width: 0; margin: 14px 0 0; padding: 16px; border: 1px solid #364655; border-radius: 7px; background: #141f28; }
+.desktop-video-motion-data legend { padding: 0 6px; color: #bfccd9; font-size: 11px; }
+.desktop-video-data-grid { display: grid; gap: 14px; }
+.desktop-video-data-grid label { font-size: 11px; }
+.desktop-video-data-grid small { margin-left: 6px; color: #8ea1b3; font-size: 10px; }
+.desktop-video-data-grid select, .desktop-video-data-grid input:not([type="checkbox"]), .desktop-video-data-grid textarea { margin-top: 7px; font-size: 12px; }
+.desktop-video-data-check { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.desktop-video-data-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .desktop-video-motion-preview { margin-top: 19px; padding: 14px; border: 1px solid #344454; border-radius: 7px; background: #111923; }
 .desktop-video-motion-preview-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 9px; margin-bottom: 14px; }
 .desktop-video-motion-preview-heading strong { color: #b9c9dc; font-size: 11px; font-weight: 550; }
@@ -204,6 +212,10 @@
 .desktop-video-motion-stage.playing.orbit-cards .desktop-video-motion-orbit span { animation: desktop-video-orbit 2.2s ease-in-out both; }
 .desktop-video-motion-stage.playing.orbit-cards .desktop-video-motion-orbit span:nth-child(2) { animation-direction: reverse; }
 .desktop-video-motion-stage.playing.orbit-cards h4 { animation: desktop-video-rise .8s ease-out both; }
+/* Editor presets reuse the preview keyframes; the MP4 frames are the real evidence. */
+.desktop-video-motion-stage.playing:is(.lower-third, .bar-chart) h4 { animation: desktop-video-slide 1s cubic-bezier(.2,.8,.2,1) both; }
+.desktop-video-motion-stage.playing:is(.count-up, .progress-steps, .logo-reveal) h4, .desktop-video-motion-stage.playing:is(.lower-third, .count-up, .bar-chart, .progress-steps, .logo-reveal) p { animation: desktop-video-rise .8s .2s ease-out both; }
+.desktop-video-motion-stage.playing.quote-card p { animation: desktop-video-pulse 1.6s ease-out both; }
 @keyframes desktop-video-kinetic { 0% { opacity: 0; transform: translateY(calc(24px * var(--motion-intensity))) scale(calc(1 - .12 * var(--motion-intensity))); letter-spacing: .06em; } 70% { opacity: 1; transform: translateY(0) scale(calc(1 + .025 * var(--motion-intensity))); } 100% { opacity: 1; transform: none; letter-spacing: normal; } }
 @keyframes desktop-video-rise { from { opacity: 0; transform: translateY(calc(32px * var(--motion-intensity))); } to { opacity: 1; transform: translateY(0); } }
 @keyframes desktop-video-slide { from { opacity: 0; transform: translateX(calc(-45px * var(--motion-intensity))); } to { opacity: 1; transform: translateX(0); } }
@@ -225,6 +237,7 @@
   .desktop-video-idea-options-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .desktop-video-idea-footer > button { width: 100%; justify-content: center; }
   .desktop-video-motion-controls { grid-template-columns: 1fr; }
+  .desktop-video-data-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1150px) {

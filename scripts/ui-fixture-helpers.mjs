@@ -27,6 +27,7 @@ export function shellFixture(command,args={}){
  if(command==='set_main_activity'||command.startsWith('plugin:event|'))return 0;
  return unhandled;
 }
+export async function openSection(page,section,label){await page.getByRole('navigation',{name:'주 메뉴',exact:true}).getByRole('button',{name:section,exact:true}).click();if(label)await page.getByRole('navigation',{name:section+' 화면',exact:true}).getByRole('button',{name:label,exact:true}).click();}
 export async function openCreation(page,label){await page.getByRole('navigation',{name:'주 메뉴',exact:true}).getByRole('button',{name:'제작',exact:true}).click();await page.getByRole('button',{name:label,exact:true}).click();}
 
 export async function createFixtureServer(options={}){

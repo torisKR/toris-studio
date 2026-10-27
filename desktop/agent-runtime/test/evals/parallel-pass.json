@@ -1,0 +1,40 @@
+{
+ "name": "two experts in parallel, both writes approved, QA passes",
+ "task": "화면과 API를 함께 고쳐줘",
+ "files": {
+  "src/a.ts": "export const a = 1;\n",
+  "package.json": "{\"name\":\"demo\",\"scripts\":{\"test\":\"node -e \\\"console.log('ok')\\\"\"}}"
+ },
+ "script": {
+  "supervisor": [
+   "{\"lanes\":[{\"role\":\"frontend\",\"share\":\"화면\"},{\"role\":\"backend\",\"share\":\"API\"}],\"plan\":\"p\",\"testCommands\":[[\"npm\",\"test\"]]}"
+  ],
+  "frontend": [
+   "{\"action\":\"write_file\",\"args\":{\"path\":\"src/ui.ts\",\"content\":\"ui\\n\"}}",
+   "{\"action\":\"finish\",\"args\":{\"summary\":\"화면\"}}"
+  ],
+  "backend": [
+   "{\"action\":\"write_file\",\"args\":{\"path\":\"src/api.ts\",\"content\":\"api\\n\"}}",
+   "{\"action\":\"finish\",\"args\":{\"summary\":\"API\"}}"
+  ],
+  "qaReview": [
+   "{\"verdict\":\"pass\",\"summary\":\"통과\"}"
+  ]
+ },
+ "decisions": [
+  "approve",
+  "approve",
+  "approve"
+ ],
+ "expect": {
+  "phase": "done",
+  "changes": [
+   "src/ui.ts",
+   "src/api.ts"
+  ],
+  "messages": [
+   "동시에 배정"
+  ],
+  "maxModelCalls": 6
+ }
+}

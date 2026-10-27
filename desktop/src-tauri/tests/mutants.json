@@ -1,0 +1,378 @@
+[
+ {
+  "id": "rs.compose-all-interfaces",
+  "file": "infrastructure/agent-vector-db/compose.yaml",
+  "find": "\"127.0.0.1:18765:8000\"",
+  "replace": "\"18765:8000\"",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.compose-unpinned",
+  "file": "infrastructure/agent-vector-db/compose.yaml",
+  "find": "image: chromadb/chroma:1.5.9@sha256:",
+  "replace": "image: chromadb/chroma:latest #",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ui-calls-configure",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        if !UI_METHODS.contains(&method) {",
+  "replace": "        if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.error-as-ok",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "let result = if value[\"ok\"] == true {",
+  "replace": "let result = if true {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.events-dropped",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "                    this.emit(value);",
+  "replace": "                    let _ = value;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.waiters-hang-on-exit",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "                    let _ = tx.send(Err(\n                        \"에이전트 런타임이 종료되었습니다. 다시 시도하세요.\".into()\n                    ));",
+  "replace": "                    std::mem::forget(tx);",
+  "cmd": [
+   "timeout",
+   "300",
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.svg-accepted",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "    } else {\n        None\n    }\n}",
+  "replace": "    } else {\n        Some(\"png\")\n    }\n}",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.empty-model-sent",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "\"contentModel\": settings.content_model.as_ref().filter(|c| !c.provider.is_empty()),",
+  "replace": "\"contentModel\": settings.content_model,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.dead-process-fails-all-waiters",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": ".filter(|(_, (owner, _))| *owner == generation)",
+  "replace": ".filter(|(_, (_owner, _))| true)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.waiter-left-without-process",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        let (tx, rx) = oneshot::channel();\n        {",
+  "replace": "        let (tx, rx) = oneshot::channel();\n        self.pending.lock().await.insert(id.clone(), (0, oneshot::channel().0));\n        {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.template-labelled-as-ai",
+  "file": "desktop/src-tauri/src/video_idea.rs",
+  "find": "\"주제·카테고리로 만든 템플릿 모션 영상 초안 (AI 미사용)\"",
+  "replace": "\"주제·카테고리로 AI가 만든 검토용 모션 영상 초안\"",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "video_idea::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.agent-script-unchecked",
+  "file": "desktop/src-tauri/src/video_research.rs",
+  "find": "        Ok(scenes) => (requested.to_owned(), scenes, warnings),",
+  "replace": "        Ok(scenes) => (requested.to_owned(), scenes, warnings),\n        Err(_) if requested == \"agent-model\" => (requested.to_owned(), local, warnings),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "video_research::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.chart-unbounded",
+  "file": "desktop/src-tauri/src/motion.rs",
+  "find": "!(2..=8).contains(&bars.len())",
+  "replace": "!(1..=99).contains(&bars.len())",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.count-unbounded",
+  "file": "desktop/src-tauri/src/motion.rs",
+  "find": "|| data.decimals > 2",
+  "replace": "|| data.decimals > 9",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.transition-long-fade",
+  "file": "desktop/src-tauri/src/motion.rs",
+  "find": "let length = f64::min(length, duration / 3.0);",
+  "replace": "let length = length;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.caption-always-on",
+  "file": "desktop/src-tauri/src/motion.rs",
+  "find": "        if let LayerRole::Caption { start_ms, end_ms } = layer.role {",
+  "replace": "        if let (false, LayerRole::Caption { start_ms, end_ms }) = (true, layer.role) {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-review-is-public",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "            _,\n        ) => \"in_review\",",
+  "replace": "            _,\n        ) => \"public\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-unknown-lifecycle-falls-back",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "        (Some(_), _) => \"unknown\",\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-health-allows-private-ipv4",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "ip.is_private() || ip.is_loopback()",
+  "replace": "ip.is_loopback()",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-health-follows-plain-http",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "    if parsed.scheme() != \"https\"\n        || private",
+  "replace": "    if private",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-deploy-counts-as-healthy",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "Some(\"success\") => status(\"cloudflare\", \"deployed\"",
+  "replace": "Some(\"success\") => status(\"cloudflare\", \"healthy\"",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ops-product-accepts-any-field",
+  "file": "desktop/src-tauri/src/ops_status.rs",
+  "find": "if let Some(key) = object.keys().find(|k| !allowed.contains(&k.as_str())) {",
+  "replace": "if let Some(key) = object.keys().find(|k| k.is_empty() && !allowed.contains(&k.as_str())) {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status::"
+  ],
+  "timeoutMs": 900000
+ }
+]

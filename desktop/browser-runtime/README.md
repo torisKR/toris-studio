@@ -42,5 +42,5 @@ The fixture infers macOS native Helpers from the Resources root;
 `STUDIO_BROWSER_TEST_NATIVE_RUNTIME` can supply the native directory explicitly.
 `prepare-desktop.mjs verify <target> <app-or-stage>` verifies browser sources,
 licenses, versions, architecture, relative links and macOS signatures alongside
-the shared cloudflared checks. Cross-target archive validation is
+the shared cloudflared and agent runtime checks. Cross-target archive validation is
 separate from execution evidence on each supported OS.

@@ -1,7 +1,7 @@
 {
   "adapter": "Actual React application in headless Chromium with explicit sanitized IPC fixtures; native/provider/real RDC execution is separate",
   "checks": [
-    "Actual Vite worktree policy serves app and rejects a user-home credential path before content exposure",
+    "Actual Vite worktree policy serves app and rejects an existing owned credential-path fixture outside allowed roots without exposing its content",
     "Four primary destinations, eight platform navigation, original definition/timezone, and zero versus unavailable are distinct",
     "Pending or rejected B-account reads clear A rows and CSV actions; recovery exports only the exact B account",
     "Same-name accounts remain independently keyed; exact connectionId + accountId binds channel and detailed reports",
@@ -12,7 +12,7 @@
     "A remote-A legacy report remains visible under its stable local channel after binding account B; import reads and history use channelId once",
     "Changing the correction selection while mapped preview is deferred never revives review or commit",
     "Reselected correction preview and commit pin the original report owner/replacement; reviewed 17 replaces imported 11 while B API 72 remains separate",
-    "Keyboard navigation and remembered section context preserve unsaved work; RDC copy stays saved-only and platform or topic changes make received prose stale without overwriting edited context"
+    "Keyboard navigation and remembered section context preserve unsaved work; AI로 작성 uses the selected model, and a draft received through Studio MCP is reviewed with confirmation and without a model call"
   ],
   "screenshots": [
     "overview-1380.png",
@@ -79,7 +79,7 @@
       "command": "get_dashboard"
     },
     {
-      "command": "creation_bridge_info"
+      "command": "ai_status"
     },
     {
       "command": "analytics_dispatch",
@@ -302,16 +302,13 @@
       "command": "creation_request_list"
     },
     {
-      "command": "set_main_activity"
-    },
-    {
-      "command": "creation_request_create"
+      "command": "ai_generate"
     },
     {
       "command": "set_main_activity"
     },
     {
-      "command": "copy_text"
+      "command": "set_main_activity"
     },
     {
       "command": "oauth_connections"

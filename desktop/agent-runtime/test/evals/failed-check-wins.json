@@ -1,0 +1,36 @@
+{
+ "name": "a failing check can never be passed by the reviewer",
+ "task": "f 추가",
+ "files": {
+  "package.json": "{\"name\":\"demo\",\"scripts\":{\"test\":\"node -e \\\"process.exit(4)\\\"\"}}"
+ },
+ "script": {
+  "supervisor": [
+   "{\"lanes\":[{\"role\":\"backend\"}],\"plan\":\"p\",\"testCommands\":[[\"npm\",\"test\"]]}"
+  ],
+  "backend": [
+   "{\"action\":\"write_file\",\"args\":{\"path\":\"src/f.ts\",\"content\":\"f\\n\"}}",
+   "{\"action\":\"finish\",\"args\":{\"summary\":\"1\"}}",
+   "{\"action\":\"finish\",\"args\":{\"summary\":\"2\"}}",
+   "{\"action\":\"finish\",\"args\":{\"summary\":\"3\"}}"
+  ],
+  "qaReview": [
+   "{\"verdict\":\"pass\",\"summary\":\"a\"}",
+   "{\"verdict\":\"pass\",\"summary\":\"b\"}",
+   "{\"verdict\":\"pass\",\"summary\":\"c\"}"
+  ]
+ },
+ "decisions": [
+  "approve",
+  "approve"
+ ],
+ "expect": {
+  "phase": "failed",
+  "changes": [
+   "src/f.ts"
+  ],
+  "messages": [
+   "돌려보냅니다"
+  ]
+ }
+}

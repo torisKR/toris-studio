@@ -38,3 +38,5 @@ minimumReleaseAgeExclude:
   - '@remotion/zod-types@4.0.530'
   - lucide-react@1.49.0
   - remotion@4.0.530
+  - '@langchain/langgraph-sdk@1.12.8'
+  - '@langchain/langgraph@1.5.3'

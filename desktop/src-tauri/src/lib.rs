@@ -1,3 +1,6 @@
+#[cfg(feature = "desktop")]
+mod agent_native;
+pub mod agent_runtime;
 pub mod ai;
 pub mod analytics;
 pub mod assets;
@@ -29,12 +32,21 @@ pub mod native_windows;
 pub mod oauth;
 #[cfg(feature = "desktop")]
 mod oauth_native;
+pub mod planner;
+#[cfg(feature = "desktop")]
+mod planner_native;
 pub mod publications;
 pub mod shared_binary;
 pub mod workspace_export;
 #[cfg(feature = "desktop")]
 static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+pub mod hub;
+#[cfg(feature = "desktop")]
+mod hub_native;
 pub mod ops;
+#[cfg(feature = "desktop")]
+mod ops_native;
+pub mod ops_status;
 pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
@@ -446,30 +458,57 @@ mod desktop {
         window: tauri::WebviewWindow,
         state: State<'_, Arc<AppState>>,
         updates: State<'_, Arc<updater::UpdateController>>,
+        runtime: State<'_, Arc<agent_runtime::AgentRuntime>>,
         input: video_research::CreateInput,
     ) -> Result<video_research::ResearchResult, String> {
         updater::authorize(&window)?;
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 초안을 만드세요.".into());
         }
-        if input.provider.as_deref().unwrap_or("local") == "local" {
-            return video_research::create(&state.config_snapshot().await, input).await;
+        // Only the local draft and the Agent tab's content model are offered here.
+        let provider = input.provider.as_deref().unwrap_or("local");
+        if !matches!(provider, "local" | "agent-model") {
+            return Err("기본 초안 또는 Agent 탭의 콘텐츠 작성 모델을 선택하세요.".into());
         }
-        Err("ChatGPT 대화에서 영상 초안을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
+        let runtime = runtime.inner().clone();
+        let agent: video_research::AgentGenerate = Box::new(move |system, prompt| {
+            Box::pin(async move {
+                let result = runtime
+                    .call("complete", serde_json::json!({"system": system, "prompt": prompt, "purpose": "content"}))
+                    .await?;
+                result["text"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "AI 응답이 비어 있습니다.".to_string())
+            })
+        });
+        video_research::create(&state.config_snapshot().await, input, Some(agent)).await
     }
     #[tauri::command]
     pub async fn video_create_idea_project(
         window: tauri::WebviewWindow,
-        state: State<'_, Arc<AppState>>,
         updates: State<'_, Arc<updater::UpdateController>>,
+        runtime: State<'_, Arc<agent_runtime::AgentRuntime>>,
         input: video_idea::CreateInput,
     ) -> Result<Value, String> {
         updater::authorize(&window)?;
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 기획을 생성하세요.".into());
         }
-        let _ = (state, input);
-        Err("ChatGPT 대화에서 영상 기획을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
+        let runtime = runtime.inner().clone();
+        video_idea::create(input, |system, prompt| async move {
+            let result = runtime
+                .call(
+                    "complete",
+                    serde_json::json!({"system": system, "prompt": prompt, "purpose": "content"}),
+                )
+                .await?;
+            result["text"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "AI 응답이 비어 있습니다.".to_string())
+        })
+        .await
     }
     #[tauri::command]
     pub async fn video_render_project(
@@ -486,8 +525,8 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn video_generate_voice(input: Value) -> Result<Value, String> {
-        let _ = input;
-        Err("데스크톱 AI 요청은 실제 ChatGPT 대화를 사용합니다. 기존에 저장한 음성 파일은 영상에 유지됩니다.".into())
+        // Local Qwen3 TTS on 127.0.0.1:50010; no account or remote model involved.
+        media::generate_voice(input).await
     }
     #[tauri::command]
     pub async fn media_status() -> Result<Value, String> {
@@ -639,6 +678,7 @@ mod desktop {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .manage(state.clone())
             .manage(updater::shared())
+            .manage(agent_runtime::shared())
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
@@ -662,6 +702,14 @@ mod desktop {
             })
             .setup(move |app| {
                 crate::tray::setup(app)?;
+                {
+                    use tauri::{Emitter, Manager};
+                    let handle = app.handle().clone();
+                    app.state::<Arc<agent_runtime::AgentRuntime>>()
+                        .set_emitter(Arc::new(move |event| {
+                            let _ = handle.emit_to("main", "agent-event", event);
+                        }));
+                }
                 // Independent from uploads: a resume during a long request must
                 // still invalidate other reservations missed while asleep.
                 tauri::async_runtime::spawn(async move {
@@ -730,6 +778,8 @@ mod desktop {
                         }
                     }
                 });
+                let calendar_state = state.clone();
+                let ops_state = state.clone();
                 let state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
@@ -752,6 +802,20 @@ mod desktop {
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     }
                 });
+                tauri::async_runtime::spawn(async move {
+                    // Every 5 minutes; a missing DB or Google connection just records the reason.
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        let _ = crate::planner_native::sync_once(&calendar_state).await;
+                    }
+                });
+                tauri::async_runtime::spawn(async move {
+                    // Read-only status every 15 minutes; failures are stored as error snapshots.
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+                        let _ = crate::ops_native::refresh_once(&ops_state).await;
+                    }
+                });
                 Ok(())
             })
             .invoke_handler({
@@ -767,6 +831,7 @@ mod desktop {
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {
                     crate::publications::shutdown_media();
+                    app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();
                 }
                 if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
                     // The updater holds the publication barrier until this signed restart.
@@ -959,11 +1024,11 @@ pub fn run() {
             match action.as_str() {
                 "--self-check" => {
                     let dashboard = social::dashboard(&config).await?;
-                    let ai = serde_json::json!({"mode":"chatgpt-chat","providers":[],"message":"Remote Desktop Commander 전달문으로 실제 ChatGPT에 요청합니다."});
+                    let ai = serde_json::json!({"mode":"agent-runtime","settings":agent_runtime::load_settings().ok(),"node":agent_runtime::node_path(),"bundle":agent_runtime::bundle_path()});
                     Ok(serde_json::json!({"database":dashboard.database,"channelCount":dashboard.channels.len(),"contentCount":dashboard.content.len(),"trendCount":dashboard.trends.len(),"ai":ai}))
                 },
                 "--collect-trends" => serde_json::to_value(social::refresh_trends(&config,None).await?).map_err(|_| "직렬화 실패".into()),
-                "--verify-ai" => Err("제작 화면에서 RDC 전달문과 실제 초안 수신을 확인하세요. 직접 모델 호출은 제거되었습니다.".into()),
+                "--verify-ai" => Err("앱의 Agent 탭에서 모델을 선택하고 연결을 확인하세요.".into()),
                 "--db-start" => { let next = ops::start_database(&config).await?; next.save()?; Ok(serde_json::json!({"ok":true})) },
                 "--db-backup" => ops::backup_database().await,
                 "--db-migrate" => { ops::migrate_database().await?; Ok(serde_json::json!({"ok":true})) },

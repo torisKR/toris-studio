@@ -1,0 +1,90 @@
+[
+ {
+  "id": "ui.pub-draft-unbound",
+  "file": "desktop/src/PublicationPanel.tsx",
+  "find": "{input:{requestId:request.id,revision:saved.revision,title:",
+  "replace": "{input:{requestId:crypto.randomUUID(),revision:saved.revision,title:",
+  "cmd": [
+   "node",
+   "scripts/verify-publication-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-approve-wrong-id",
+  "file": "desktop/src/AgentPanel.tsx",
+  "find": "await decideAction(run, action.id, decision, feedback);",
+  "replace": "await decideAction(run, \"x\", decision, feedback);",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-early-events-lost",
+  "file": "desktop/src/AgentPanel.tsx",
+  "find": "const run = buffered.reduce<RunSummary>((acc, event) => applyEvent(acc, event) ?? acc, started);",
+  "replace": "const run = started;",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-key-not-cleared",
+  "file": "desktop/src/AgentSettingsCard.tsx",
+  "find": "useEffect(() => { setDraft(view.settings); setKeys({}); }, [view]);",
+  "replace": "useEffect(() => { setDraft(view.settings); }, [view]);",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.ai-write-not-sent",
+  "file": "desktop/src/App.tsx",
+  "find": "      const result = await generateText(chatBrief(aiPlatform, aiTopic, aiContext, aiReferences));",
+  "replace": "      const result = { text: \"\", provider: \"\", model: \"\" };",
+  "cmd": [
+   "node",
+   "scripts/verify-ai-workspace.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.office-desk-filter-ignored",
+  "file": "desktop/src/AgentRunView.tsx",
+  "find": ".filter(e => !focus || e.agent === focus)",
+  "replace": "",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.pixel-nobody-walks",
+  "file": "desktop/src/PixelOffice.tsx",
+  "find": "if (first || !plan || reducedMotion()) return;",
+  "replace": "return;",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.pixel-away-shown",
+  "file": "desktop/src/AgentOffice.css",
+  "find": ".pixel-person.is-away, .pixel-person.is-walking { opacity: 0; }",
+  "replace": ".pixel-person.is-walking { opacity: 0; }",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ }
+]

@@ -1,0 +1,17 @@
+name: toris-studio-vector
+services:
+  chroma:
+    # Pinned by digest; the agent runtime talks to the v2 REST API only.
+    image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18765:8000"
+    environment:
+      ANONYMIZED_TELEMETRY: "FALSE"
+      IS_PERSISTENT: "TRUE"
+    volumes:
+      - chroma-data:/data
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  chroma-data:

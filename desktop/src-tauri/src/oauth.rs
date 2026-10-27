@@ -39,6 +39,7 @@ const MAX_RESPONSE: usize = 262_144;
 const MAX_TOKEN: usize = 16_384;
 const DAY: u64 = 86_400;
 const YOUTUBE_UPLOAD_SCOPE: &str = "https://www.googleapis.com/auth/youtube.upload";
+pub(crate) const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.app.created";
 fn has_upload_scope(scopes: &[String]) -> bool {
     scopes.iter().any(|s| {
         [
@@ -98,14 +99,17 @@ enum Provider {
     Tiktok,
     Instagram,
     Facebook,
+    /// Google Calendar, scoped to calendars this app created (calendar.app.created).
+    GoogleCalendar,
 }
-const PROVIDERS: [Provider; 6] = [
+const PROVIDERS: [Provider; 7] = [
     Provider::Youtube,
     Provider::Threads,
     Provider::NaverBlog,
     Provider::Tiktok,
     Provider::Instagram,
     Provider::Facebook,
+    Provider::GoogleCalendar,
 ];
 
 impl Provider {
@@ -123,6 +127,7 @@ impl Provider {
             Self::Tiktok => "tiktok",
             Self::Instagram => "instagram",
             Self::Facebook => "facebook",
+            Self::GoogleCalendar => "google_calendar",
         }
     }
     fn label(self) -> &'static str {
@@ -133,13 +138,18 @@ impl Provider {
             Self::Tiktok => "TikTok",
             Self::Instagram => "Instagram",
             Self::Facebook => "Facebook Page",
+            Self::GoogleCalendar => "Google Calendar",
         }
     }
     fn meta(self) -> bool {
         matches!(self, Self::Threads | Self::Instagram | Self::Facebook)
     }
     fn secret_required(self) -> bool {
-        self != Self::Youtube
+        !self.google()
+    }
+    /// Google installed-app clients: PKCE, offline access, no client secret required.
+    fn google(self) -> bool {
+        matches!(self, Self::Youtube | Self::GoogleCalendar)
     }
     fn authorization_endpoint(self) -> &'static str {
         match self {
@@ -149,6 +159,7 @@ impl Provider {
             Self::Tiktok => "https://www.tiktok.com/v2/auth/authorize/",
             Self::Instagram => "https://www.instagram.com/oauth/authorize",
             Self::Facebook => "https://www.facebook.com/v25.0/dialog/oauth",
+            Self::GoogleCalendar => "https://accounts.google.com/o/oauth2/v2/auth",
         }
     }
     fn token_endpoint(self) -> &'static str {
@@ -159,6 +170,7 @@ impl Provider {
             Self::Tiktok => "https://open.tiktokapis.com/v2/oauth/token/",
             Self::Instagram => "https://api.instagram.com/oauth/access_token",
             Self::Facebook => "https://graph.facebook.com/v25.0/oauth/access_token",
+            Self::GoogleCalendar => "https://oauth2.googleapis.com/token",
         }
     }
     fn basic_scope(self) -> &'static str {
@@ -169,6 +181,8 @@ impl Provider {
             Self::Tiktok => "user.info.basic",
             Self::Instagram => "instagram_business_basic",
             Self::Facebook => "pages_show_list,pages_read_engagement",
+            // Only calendars this app creates; personal calendars stay unreadable.
+            Self::GoogleCalendar => CALENDAR_SCOPE,
         }
     }
     fn publishing_scope(self) -> Option<&'static str> {
@@ -179,6 +193,7 @@ impl Provider {
             Self::Facebook => Some("pages_show_list,pages_read_engagement,pages_manage_posts"),
             Self::Tiktok => Some("user.info.basic,video.publish,video.upload"),
             Self::NaverBlog => None,
+            Self::GoogleCalendar => None,
         }
     }
     fn publishing_authorized(self, scopes: &[String]) -> bool {
@@ -199,6 +214,7 @@ impl Provider {
                 .iter()
                 .any(|s| s == "video.publish" || s == "video.upload"),
             Self::NaverBlog => false,
+            Self::GoogleCalendar => false,
         }
     }
     fn permissions_endpoint(self) -> Option<&'static str> {
@@ -223,6 +239,7 @@ impl Provider {
         Self::Tiktok => "TikTok Login Kit Desktop 앱과 등록된 로컬 콜백이 필요합니다. user.info.basic 권한을 사용합니다.",
         Self::Facebook => "Facebook Login 앱과 등록된 HTTPS 콜백이 필요합니다. Page 조회 권한과 게시 권한은 각각 승인하며 개인 프로필에는 게시하지 않습니다.",
         Self::Instagram => "Instagram Business/Creator 계정과 Meta 앱의 등록된 HTTPS 콜백이 필요합니다. instagram_business_basic 권한으로 연결하세요.",
+        Self::GoogleCalendar => "Google 데스크톱 OAuth 클라이언트가 필요합니다. 앱이 만든 'Toris Studio' 캘린더만 읽고 씁니다(calendar.app.created). 개인 캘린더에는 접근하지 않습니다.",
     }
     }
 }
@@ -949,7 +966,7 @@ impl OAuthService {
             None
         };
         let state = random_secret();
-        let verifier = matches!(provider, Provider::Youtube | Provider::Tiktok).then(random_secret);
+        let verifier = (provider.google() || provider == Provider::Tiktok).then(random_secret);
         let authorization_url =
             authorization_url_for_mode(provider, &config, &state, verifier.as_deref(), upload)?;
         let (cancel, receiver) = watch::channel(false);
@@ -1359,7 +1376,7 @@ fn authorization_url_for_mode(
         };
         query.append_pair("scope", &scope);
     }
-    if provider == Provider::Youtube {
+    if provider.google() {
         query
             .append_pair("access_type", "offline")
             .append_pair("prompt", "consent");
@@ -1826,6 +1843,19 @@ pub async fn disconnect(platform: String) -> Result<Value, String> {
 }
 pub async fn refresh_due() -> Result<(), String> {
     connections_impl::refresh_all().await
+}
+/// A fresh Google Calendar token, refreshed when it is about to expire. Native-only; never crosses IPC.
+pub(crate) async fn calendar_access() -> Result<String, String> {
+    let access = connections_impl::unique_access(Provider::GoogleCalendar.id())
+        .await
+        .map_err(|_| {
+            "Google Calendar에 연결하세요. 일정·작업 화면에서 로그인할 수 있습니다.".to_string()
+        })?;
+    // Google may grant less than requested; the app-created-calendar scope is required.
+    if !access.scopes.is_empty() && !access.scopes.iter().any(|scope| scope == CALENDAR_SCOPE) {
+        return Err("Google Calendar 권한(앱이 만든 캘린더)을 승인하세요.".into());
+    }
+    Ok(access.token)
 }
 
 #[cfg(test)]
