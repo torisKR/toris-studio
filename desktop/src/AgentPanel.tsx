@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nativeInvoke } from "./ai-client";
 import { AgentRunView } from "./AgentRunView";
 import { AgentSettingsCard } from "./AgentSettingsCard";
-import { PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, getSettings, type IndexEvent, type IndexStatus, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
+import { PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, loadPanel, type IndexEvent, type IndexStatus, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
 import "./AgentPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -31,14 +31,11 @@ export function AgentPanel({ active }: { active: boolean }) {
 
   const refresh = useCallback(async () => {
     setError("");
-    try {
-      const [s, settings] = await Promise.all([agentCall<RuntimeStatus>("status"), getSettings(nativeInvoke)]);
-      setStatus(s); setView(settings);
-      const [list, history] = await Promise.all([agentCall<{ projects: ProjectInfo[] }>("projects.list"), agentCall<{ runs: RunSummary[] }>("run.list")]);
-      setProjects(list.projects);
-      for (const r of history.runs) known.current.add(r.runId);
-      setRuns(old => history.runs.map(r => old.find(o => o.runId === r.runId) ?? r));
-    } catch (e) { setError(message(e)); }
+    const data = await loadPanel(nativeInvoke);
+    setStatus(data.status); setView(data.settings); setProjects(data.projects);
+    for (const r of data.runs) known.current.add(r.runId);
+    setRuns(old => data.runs.map(r => old.find(o => o.runId === r.runId) ?? r));
+    setError(data.errors.join(" · "));
   }, []);
 
   useEffect(() => {

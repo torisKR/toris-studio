@@ -39,6 +39,19 @@ export function agentCall<T>(method: string, params: Record<string, unknown> = {
 export function getSettings(call: BridgeInvoke = nativeInvoke): Promise<SettingsView> {
   return call("agent_settings_get") as Promise<SettingsView>;
 }
+export type PanelData = { status: RuntimeStatus | null; settings: SettingsView | null; projects: ProjectInfo[]; runs: RunSummary[]; errors: string[] };
+/** Each source loads on its own, so one failure (e.g. a locked key store) never blanks the rest. */
+export async function loadPanel(call: BridgeInvoke = nativeInvoke): Promise<PanelData> {
+  const [status, settings, list, history] = await Promise.allSettled([
+    agentCall<RuntimeStatus>("status", {}, call),
+    getSettings(call),
+    agentCall<{ projects: ProjectInfo[] }>("projects.list", {}, call),
+    agentCall<{ runs: RunSummary[] }>("run.list", {}, call),
+  ]);
+  const errors = [...new Set([status, settings, list, history].flatMap(r => (r.status === "rejected" ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : [])))];
+  const value = <T,>(r: PromiseSettledResult<T>) => (r.status === "fulfilled" ? r.value : null);
+  return { status: value(status), settings: value(settings), projects: value(list)?.projects ?? [], runs: value(history)?.runs ?? [], errors };
+}
 /** keys: provider -> new key, "" removes it; providers left out keep their saved key. */
 export function saveSettings(settings: AgentSettings, keys: Record<string, string>, call: BridgeInvoke = nativeInvoke): Promise<SettingsView> {
   return call("agent_settings_save", { input: { settings, keys } }) as Promise<SettingsView>;

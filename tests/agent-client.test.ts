@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EARLY_EVENTS_PER_RUN, EARLY_RUNS, agentCall, applyEvent, bufferEarlyEvent, diffLines, saveSettings } from "../desktop/src/agent-client";
+import { EARLY_EVENTS_PER_RUN, EARLY_RUNS, agentCall, applyEvent, bufferEarlyEvent, diffLines, loadPanel, saveSettings } from "../desktop/src/agent-client";
 import type { RunEvent, RunSummary } from "../desktop/src/agent-client";
 
 const base: RunSummary = { runId: "r1", project: "demo", task: "t", phase: "queued", agent: "supervisor", createdAt: "2026-10-27T00:00:00Z", updatedAt: "2026-10-27T00:00:00Z", pending: null, changes: [], summary: "", events: [] };
@@ -43,4 +43,21 @@ test("events for runs the tab does not know yet are buffered within fixed limits
   for (let i = 0; i < 50; i++) bufferEarlyEvent(buffer, { ...event(1, {}), runId: `run-${i}` });
   assert.equal(buffer.size, EARLY_RUNS, "run cap");
   assert.ok(buffer.has("run-49") && !buffer.has("same"), "oldest run dropped first");
+});
+
+test("a locked key store does not hide the runtime status, projects or runs", async () => {
+  const vault = "OS 자격 증명 저장소 접근이 보류되었습니다.";
+  const call = (async (command: string, args?: { method?: string }) => {
+    if (command === "agent_settings_get") throw new Error(vault);
+    if (args?.method === "status") return { version: "1.0.0", providers: [], chroma: false, projectsRoot: "/p" };
+    if (args?.method === "projects.list") return { projects: [{ name: "demo", path: "/p/demo", stacks: [], scripts: {}, git: true }] };
+    if (args?.method === "run.list") return { runs: [base] };
+    throw new Error(`unexpected ${command} ${args?.method}`);
+  }) as Parameters<typeof loadPanel>[0];
+  const data = await loadPanel(call);
+  assert.equal(data.status?.version, "1.0.0");
+  assert.equal(data.settings, null);
+  assert.deepEqual(data.projects.map(p => p.name), ["demo"]);
+  assert.deepEqual(data.runs.map(r => r.runId), ["r1"]);
+  assert.deepEqual(data.errors, [vault]);
 });
