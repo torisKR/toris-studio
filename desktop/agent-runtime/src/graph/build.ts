@@ -136,7 +136,7 @@ export function buildGraph(ctx: RunContext, checkpointer: BaseCheckpointSaver) {
       ctx.emit(pending.agent, "thinking", "사용자가 거절했습니다. 다른 방법을 찾습니다.", { detail: feedback });
       const note = `사용자가 이 작업을 거절했습니다.${feedback ? ` 피드백: ${feedback}` : ""}`;
       return state.returnTo === "qa_review"
-        ? { pending: null, testLog: `검증 명령이 거절되었습니다.${feedback ? ` 피드백: ${feedback}` : ""}` }
+        ? { pending: null, testExit: null, testLog: `검증 명령이 거절되었습니다.${feedback ? ` 피드백: ${feedback}` : ""}` }
         : { pending: null, messages: observe(state.messages, note) };
     }
     if (pending.kind === "write_file") {
@@ -152,7 +152,7 @@ export function buildGraph(ctx: RunContext, checkpointer: BaseCheckpointSaver) {
     const result = await runCommand(pending.command, ctx.projectRoot, ctx.searchPath, ctx.secrets, ctx.signal);
     const log = `$ ${pending.command.join(" ")}\nexit=${result.exitCode}${result.timedOut ? " (시간 초과)" : ""} · ${Math.round(result.durationMs / 1000)}초\n${result.log}`;
     ctx.emit(pending.agent, "testing", `명령 종료 (exit ${result.exitCode})`, { detail: clip(result.log, 4000) });
-    return state.returnTo === "qa_review" ? { pending: null, testLog: log } : { pending: null, messages: observe(state.messages, log) };
+    return state.returnTo === "qa_review" ? { pending: null, testLog: log, testExit: result.exitCode } : { pending: null, messages: observe(state.messages, log) };
   };
 
   const qa = async (state: State): Promise<Update> => {
@@ -162,7 +162,7 @@ export function buildGraph(ctx: RunContext, checkpointer: BaseCheckpointSaver) {
       const plan = await ask(ctx, qaPlanPrompt(), [{ role: "user", content: `${projectBrief(ctx.info, listProjectDir(ctx.projectRoot, "."))}\n\n변경 파일: ${state.changes.join(", ") || "없음"}` }]);
       try { command = plan.command ? validateCommand(plan.command) : null; } catch { command = null; }
     }
-    if (!command || !state.changes.length) return { testLog: state.changes.length ? "검증 명령이 없습니다." : "변경된 파일이 없습니다." };
+    if (!command || !state.changes.length) return { testExit: null, testLog: state.changes.length ? "검증 명령이 없습니다." : "변경된 파일이 없습니다." };
     const pending: PendingAction = { kind: "run_command", id: randomUUID(), agent: "qa", command, cwd: ctx.info.name, reason: "변경 사항 검증" };
     ctx.emit("qa", "awaiting_approval", `검증 명령 승인을 기다립니다: ${command.join(" ")}`, { approval: pending });
     return { pending, returnTo: "qa_review" };
@@ -172,9 +172,12 @@ export function buildGraph(ctx: RunContext, checkpointer: BaseCheckpointSaver) {
     ctx.emit("qa", "reviewing", "결과를 검토하고 있습니다.");
     const diffs = Object.entries(state.diffs).map(([file, diff]) => `--- ${file}\n${clip(diff, 6000)}`).join("\n\n") || "(변경 없음)";
     const review = await ask(ctx, qaReviewPrompt(), [{ role: "user", content: `작업 지시:\n${state.task}\n\nExpert 요약:\n${state.workerSummary}\n\n변경 diff:\n${clip(diffs, 30_000)}\n\n검증 로그:\n${clip(state.testLog, 20_000)}` }]);
-    const verdict = review.verdict === "pass" ? "pass" : "fail";
-    const feedback = String(review.feedback ?? "").slice(0, 4000);
-    const summary = String(review.summary ?? "").slice(0, 4000);
+    // A failed verification command is a fact; the model may not overrule it.
+    const commandFailed = state.testExit !== null && state.testExit !== 0;
+    const failNote = commandFailed ? `검증 명령이 실패했습니다 (exit ${state.testExit}). ` : "";
+    const verdict = review.verdict === "pass" && !commandFailed ? "pass" : "fail";
+    const feedback = failNote + String(review.feedback ?? "").slice(0, 4000);
+    const summary = failNote + String(review.summary ?? "").slice(0, 4000);
     const iterations = state.iterations + 1;
     if (verdict === "fail" && iterations < MAX_QA_ROUNDS) {
       ctx.emit("qa", "reviewing", `문제를 찾아 ${state.route === "frontend" ? "Frontend" : "Backend"} Expert에게 돌려보냅니다 (${iterations}/${MAX_QA_ROUNDS - 1}).`, { detail: feedback });

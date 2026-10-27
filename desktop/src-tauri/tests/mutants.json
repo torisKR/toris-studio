@@ -87,8 +87,8 @@
  {
   "id": "rs.waiters-hang-on-exit",
   "file": "desktop/src-tauri/src/agent_runtime.rs",
-  "find": "                let _ = tx.send(Err(\n                    \"에이전트 런타임이 종료되었습니다. 다시 시도하세요.\".into()\n                ));",
-  "replace": "                std::mem::forget(tx);",
+  "find": "                    let _ = tx.send(Err(\n                        \"에이전트 런타임이 종료되었습니다. 다시 시도하세요.\".into()\n                    ));",
+  "replace": "                    std::mem::forget(tx);",
   "cmd": [
    "timeout",
    "300",
@@ -134,6 +134,40 @@
    "--lib",
    "--",
    "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.dead-process-fails-all-waiters",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": ".filter(|(_, (owner, _))| *owner == generation)",
+  "replace": ".filter(|(_, (_owner, _))| true)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.waiter-left-without-process",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        let (tx, rx) = oneshot::channel();\n        {",
+  "replace": "        let (tx, rx) = oneshot::channel();\n        self.pending.lock().await.insert(id.clone(), (0, oneshot::channel().0));\n        {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::tests"
   ],
   "timeoutMs": 900000
  }

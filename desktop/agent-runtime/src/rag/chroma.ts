@@ -1,5 +1,6 @@
-import { UserError } from "../util.js";
+import { UserError, withTimeout } from "../util.js";
 
+const REQUEST_TIMEOUT_MS = 120_000;
 const BASE_PATH = "/api/v2/tenants/default_tenant/databases/default_database";
 
 /** Minimal client for the Chroma v2 REST API; only a loopback server is accepted. */
@@ -15,20 +16,22 @@ export class ChromaClient {
   }
 
   private async call<T>(method: string, route: string, body?: unknown): Promise<T> {
-    let response: globalThis.Response;
-    try {
-      response = await fetch(`${this.origin}${route}`, {
-        method,
-        headers: body === undefined ? {} : { "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
-        redirect: "error",
-      });
-    } catch {
-      throw new UserError("ChromaDB에 연결하지 못했습니다. Agent 탭에서 벡터 DB 컨테이너를 실행하세요.");
-    }
-    const raw = await response.text();
-    if (!response.ok) throw new UserError(`ChromaDB 요청 실패 (${response.status}): ${raw.slice(0, 200)}`);
+    const { status, ok, raw } = await withTimeout(REQUEST_TIMEOUT_MS, undefined, async signal => {
+      let response: globalThis.Response;
+      try {
+        response = await fetch(`${this.origin}${route}`, {
+          method,
+          headers: body === undefined ? {} : { "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal,
+          redirect: "error",
+        });
+      } catch {
+        throw new UserError("ChromaDB에 연결하지 못했습니다. Agent 탭에서 벡터 DB 컨테이너를 실행하세요.");
+      }
+      return { status: response.status, ok: response.ok, raw: await response.text() };
+    });
+    if (!ok) throw new UserError(`ChromaDB 요청 실패 (${status}): ${raw.slice(0, 200)}`);
     return (raw ? JSON.parse(raw) : {}) as T;
   }
 

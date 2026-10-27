@@ -247,7 +247,9 @@ pub fn node_path() -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
+/// Waiters are tagged with the process generation they were sent to, so a
+/// process that dies only fails its own requests, never its successor's.
+type Pending = Arc<Mutex<HashMap<String, (u64, oneshot::Sender<Result<Value, String>>)>>>;
 pub type Emitter = Arc<dyn Fn(Value) + Send + Sync>;
 
 struct Process {
@@ -265,6 +267,7 @@ pub struct AgentRuntime {
     process: Mutex<Option<Process>>,
     pending: Pending,
     next_id: AtomicU64,
+    generation: AtomicU64,
     emitter: std::sync::RwLock<Option<Emitter>>,
 }
 impl Default for AgentRuntime {
@@ -276,6 +279,7 @@ impl Default for AgentRuntime {
             process: Mutex::new(None),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            generation: AtomicU64::new(0),
             emitter: std::sync::RwLock::new(None),
         }
     }
@@ -404,6 +408,7 @@ impl AgentRuntime {
         let stdin = child.stdin.take().ok_or("런타임 입력 연결 실패")?;
         let stdout = child.stdout.take().ok_or("런타임 출력 연결 실패")?;
         let (ready_tx, ready_rx) = oneshot::channel::<()>();
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         let this = Arc::clone(self);
         tokio::spawn(async move {
             let mut ready = Some(ready_tx);
@@ -416,7 +421,7 @@ impl AgentRuntime {
                     continue;
                 };
                 if let Some(id) = value["id"].as_str() {
-                    if let Some(tx) = this.pending.lock().await.remove(id) {
+                    if let Some((_, tx)) = this.pending.lock().await.remove(id) {
                         let result = if value["ok"] == true {
                             Ok(value["result"].clone())
                         } else {
@@ -435,12 +440,21 @@ impl AgentRuntime {
                     this.emit(value);
                 }
             }
-            // Process ended: fail every waiter instead of hanging the UI.
-            for (_, tx) in this.pending.lock().await.drain() {
-                let _ = tx.send(Err(
-                    "에이전트 런타임이 종료되었습니다. 다시 시도하세요.".into()
-                ));
+            // Process ended: fail its waiters instead of hanging the UI.
+            let mut pending = this.pending.lock().await;
+            let ours: Vec<String> = pending
+                .iter()
+                .filter(|(_, (owner, _))| *owner == generation)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ours {
+                if let Some((_, tx)) = pending.remove(&id) {
+                    let _ = tx.send(Err(
+                        "에이전트 런타임이 종료되었습니다. 다시 시도하세요.".into()
+                    ));
+                }
             }
+            drop(pending);
             this.emit(json!({"event":"runtime","state":"stopped"}));
         });
         tokio::time::timeout(READY_TIMEOUT, ready_rx)
@@ -466,16 +480,21 @@ impl AgentRuntime {
 
     async fn send(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id.clone(), tx);
         let mut line = serde_json::to_vec(&json!({"id":id,"method":method,"params":params}))
             .map_err(|e| e.to_string())?;
         line.push(b'\n');
+        let (tx, rx) = oneshot::channel();
         {
             let mut guard = self.process.lock().await;
             let process = guard
                 .as_mut()
                 .ok_or("에이전트 런타임이 실행 중이 아닙니다.")?;
+            // Registered under the process lock, so the generation is the one we write to.
+            let generation = self.generation.load(Ordering::Relaxed);
+            self.pending
+                .lock()
+                .await
+                .insert(id.clone(), (generation, tx));
             if process.stdin.write_all(&line).await.is_err() || process.stdin.flush().await.is_err()
             {
                 self.pending.lock().await.remove(&id);
@@ -631,6 +650,35 @@ rl.on('line',l=>{const m=JSON.parse(l);
         // A runtime that dies mid-request fails the waiter instead of hanging the UI.
         let error = runtime.call("run.list", json!({})).await.unwrap_err();
         assert!(error.contains("종료"), "{error}");
+        runtime.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_request_with_no_running_process_leaves_no_waiter_behind() {
+        let runtime = fake_runtime(ECHO);
+        assert!(runtime
+            .send("status", json!({}), Duration::from_secs(1))
+            .await
+            .is_err());
+        assert!(runtime.pending.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dead_process_only_fails_its_own_waiters() {
+        let runtime = fake_runtime(ECHO);
+        runtime.call("status", json!({})).await.unwrap();
+        let generation = runtime.generation.load(Ordering::Relaxed);
+        // A waiter that belongs to the next process (e.g. its `configure`).
+        let (tx, mut rx) = oneshot::channel();
+        runtime
+            .pending
+            .lock()
+            .await
+            .insert("next".into(), (generation + 1, tx));
+        assert!(runtime.call("run.list", json!({})).await.is_err());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(runtime.pending.lock().await.contains_key("next"));
+        assert!(rx.try_recv().is_err(), "the new waiter was not failed");
         runtime.stop().await;
     }
 }

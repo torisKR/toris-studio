@@ -1,9 +1,9 @@
-import { Command, MemorySaver } from "@langchain/langgraph";
+import { Command, MemorySaver, type BaseCheckpointSaver } from "@langchain/langgraph";
 import { randomUUID } from "node:crypto";
 import { createModel } from "../llm/index.js";
 import type { ChatModel } from "../llm/types.js";
 import { describeProject, projectDir } from "../projects.js";
-import type { AgentRole, ApprovalDecision, PendingAction, Phase, RunEvent, RuntimeSettings } from "../protocol.js";
+import { approvalView, type AgentRole, type ApprovalDecision, type ApprovalView, type PendingAction, type Phase, type RunEvent, type RuntimeSettings } from "../protocol.js";
 import { ProjectIndex } from "../rag/index.js";
 import { projectFiles } from "../tools/fs.js";
 import { UserError, clip, errorText, redact } from "../util.js";
@@ -20,18 +20,23 @@ export type RunSummary = {
   agent: AgentRole;
   createdAt: string;
   updatedAt: string;
-  pending: PendingAction | null;
+  pending: ApprovalView | null;
   changes: string[];
   summary: string;
   events: RunEvent[];
 };
 
-type Run = RunSummary & { controller: AbortController; graph: ReturnType<typeof buildGraph>; driving: Promise<void>; seq: number };
+/** `graph` is dropped once the run ends so its model, file list and closures can be collected. */
+type Run = RunSummary & { controller: AbortController; graph: ReturnType<typeof buildGraph> | null; driving: Promise<void>; seq: number };
 
 export class RunManager {
   private runs = new Map<string, Run>();
-  private checkpointer = new MemorySaver();
-  constructor(private settings: () => RuntimeSettings, private send: (event: RunEvent) => void, private modelFactory: (settings: RuntimeSettings) => ChatModel = s => createModel(s.agentModel, s)) {}
+  constructor(
+    private settings: () => RuntimeSettings,
+    private send: (event: RunEvent) => void,
+    private modelFactory: (settings: RuntimeSettings) => ChatModel = s => createModel(s.agentModel, s),
+    private checkpointer: BaseCheckpointSaver = new MemorySaver(),
+  ) {}
 
   list(): RunSummary[] {
     return [...this.runs.values()].map(run => this.view(run, false)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -89,6 +94,7 @@ export class RunManager {
       run.controller.abort();
       run.pending = null;
       this.emit(run, run.agent, "cancelled", "사용자가 작업을 취소했습니다.");
+      void run.driving.then(() => this.release(run));
     }
     return this.view(run, true);
   }
@@ -98,20 +104,30 @@ export class RunManager {
   }
 
   private async drive(run: Run, input: unknown): Promise<void> {
+    const graph = run.graph;
+    if (!graph) return;
     try {
-      const stream = await run.graph.stream(input as never, { configurable: { thread_id: run.runId }, streamMode: "updates", recursionLimit: 400, signal: run.controller.signal });
+      const stream = await graph.stream(input as never, { configurable: { thread_id: run.runId }, streamMode: "updates", recursionLimit: 400, signal: run.controller.signal });
       for await (const chunk of stream) {
         const interrupts = (chunk as Record<string, unknown>).__interrupt__ as Array<{ value: PendingAction }> | undefined;
-        if (interrupts?.length) run.pending = interrupts[0].value;
+        if (interrupts?.length) run.pending = approvalView(interrupts[0].value);
       }
-      const state = await run.graph.getState({ configurable: { thread_id: run.runId } });
+      const state = await graph.getState({ configurable: { thread_id: run.runId } });
       if (!state.next.length) {
         run.summary = String(state.values.summary ?? "");
         if (!isTerminal(run.phase)) this.emit(run, "supervisor", "done", "작업을 마쳤습니다.", { detail: run.summary });
       }
     } catch (error) {
       if (!run.controller.signal.aborted) this.emit(run, run.agent, "failed", "작업 중 오류가 발생했습니다.", { detail: redact(errorText(error)) });
+    } finally {
+      if (isTerminal(run.phase)) await this.release(run);
     }
+  }
+
+  /** A finished run never resumes, so its checkpoints and graph are dead weight. */
+  private async release(run: Run): Promise<void> {
+    run.graph = null;
+    await this.checkpointer.deleteThread(run.runId);
   }
 
   private emit(run: Run, agent: AgentRole, phase: Phase, message: string, extra: { detail?: string; approval?: PendingAction; changes?: string[] } = {}): void {
@@ -121,9 +137,10 @@ export class RunManager {
     run.phase = phase;
     run.updatedAt = new Date().toISOString();
     if (extra.changes) run.changes = [...new Set(extra.changes)];
-    if (extra.approval) run.pending = extra.approval;
+    const approval = extra.approval ? approvalView(extra.approval) : undefined;
+    if (approval) run.pending = approval;
     if (phase === "done" || phase === "failed") run.summary = extra.detail ?? run.summary;
-    const event: RunEvent = { event: "run", runId: run.runId, seq: run.seq, at: run.updatedAt, agent, phase, message, ...(extra.detail ? { detail: redact(clip(extra.detail, 8000)) } : {}), ...(extra.approval ? { approval: extra.approval } : {}), ...(extra.changes ? { changes: run.changes } : {}) };
+    const event: RunEvent = { event: "run", runId: run.runId, seq: run.seq, at: run.updatedAt, agent, phase, message, ...(extra.detail ? { detail: redact(clip(extra.detail, 8000)) } : {}), ...(approval ? { approval } : {}), ...(extra.changes ? { changes: run.changes } : {}) };
     run.events.push(event);
     if (run.events.length > MAX_EVENTS) run.events.splice(0, run.events.length - MAX_EVENTS);
     this.send(event);

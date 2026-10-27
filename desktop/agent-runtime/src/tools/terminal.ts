@@ -62,6 +62,7 @@ export function runCommand(argv: string[], cwd: string, searchPath: string[], se
     const timer = setTimeout(() => { timedOut = true; kill(); }, COMMAND_TIMEOUT_MS);
     const abort = () => kill();
     signal?.addEventListener("abort", abort, { once: true });
+    const settle = () => { settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); };
     const take = (chunk: Buffer) => {
       const textChunk = chunk.toString("utf8");
       log = (log + textChunk).slice(-MAX_LOG * 2);
@@ -69,10 +70,10 @@ export function runCommand(argv: string[], cwd: string, searchPath: string[], se
     };
     child.stdout.on("data", take);
     child.stderr.on("data", take);
-    child.on("error", error => { if (!settled) { settled = true; clearTimeout(timer); reject(new UserError(`명령을 실행하지 못했습니다: ${argv[0]} (${error.message})`)); } });
+    child.on("error", error => { if (!settled) { settle(); reject(new UserError(`명령을 실행하지 못했습니다: ${argv[0]} (${error.message})`)); } });
     child.on("close", code => {
       if (settled) return;
-      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      settle();
       resolve({ exitCode: code ?? 1, timedOut, durationMs: Date.now() - started, log: redact(clip(log, MAX_LOG), secrets) });
     });
   });

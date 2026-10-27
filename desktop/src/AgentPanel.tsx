@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nativeInvoke } from "./ai-client";
 import { AgentRunView } from "./AgentRunView";
 import { AgentSettingsCard } from "./AgentSettingsCard";
-import { PHASE_LABELS, agentCall, applyEvent, getSettings, type IndexEvent, type IndexStatus, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
+import { PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, getSettings, type IndexEvent, type IndexStatus, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
 import "./AgentPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -52,7 +52,7 @@ export function AgentPanel({ active }: { active: boolean }) {
     void listen<RunEvent | IndexEvent | { event: "runtime"; state: string }>("agent-event", ({ payload }) => {
       if (payload.event === "run") {
         if (!known.current.has(payload.runId)) {
-          early.current.set(payload.runId, [...(early.current.get(payload.runId) ?? []), payload].slice(-200));
+          bufferEarlyEvent(early.current, payload);
           return;
         }
         setRuns(list => list.map(r => applyEvent(r, payload) ?? r));

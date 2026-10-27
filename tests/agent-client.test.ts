@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentCall, applyEvent, diffLines, saveSettings, stageProgress } from "../desktop/src/agent-client";
+import { EARLY_EVENTS_PER_RUN, EARLY_RUNS, agentCall, applyEvent, bufferEarlyEvent, diffLines, saveSettings, stageProgress } from "../desktop/src/agent-client";
 import type { RunEvent, RunSummary } from "../desktop/src/agent-client";
 
 const base: RunSummary = { runId: "r1", project: "demo", task: "t", phase: "queued", agent: "supervisor", createdAt: "2026-10-27T00:00:00Z", updatedAt: "2026-10-27T00:00:00Z", pending: null, changes: [], summary: "", events: [] };
@@ -40,4 +40,14 @@ test("agent calls go through one allowlisted native command; keys are sent only 
   await saveSettings(settings, { openai: "sk-test" }, call);
   assert.deepEqual(calls[0], ["agent_call", { method: "run.start", params: { project: "demo", task: "t" } }]);
   assert.deepEqual(calls[1], ["agent_settings_save", { input: { settings, keys: { openai: "sk-test" } } }]);
+});
+
+test("events for runs the tab does not know yet are buffered within fixed limits", () => {
+  const buffer = new Map<string, RunEvent[]>();
+  for (let i = 0; i < 300; i++) bufferEarlyEvent(buffer, { ...event(1, {}), seq: i + 1, runId: "same" });
+  assert.equal(buffer.get("same")!.length, EARLY_EVENTS_PER_RUN, "per-run cap");
+  assert.equal(buffer.get("same")!.at(-1)!.seq, 300, "newest kept");
+  for (let i = 0; i < 50; i++) bufferEarlyEvent(buffer, { ...event(1, {}), runId: `run-${i}` });
+  assert.equal(buffer.size, EARLY_RUNS, "run cap");
+  assert.ok(buffer.has("run-49") && !buffer.has("same"), "oldest run dropped first");
 });

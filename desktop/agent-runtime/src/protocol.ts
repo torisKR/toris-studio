@@ -42,6 +42,17 @@ export type PendingAction =
   | { kind: "write_file"; id: string; agent: AgentRole; path: string; diff: string; content: string; baseHash: string | null; reason: string }
   | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string };
 
+/** What the UI sees of an approval: the diff, never the full file body. */
+export type ApprovalView =
+  | Omit<Extract<PendingAction, { kind: "write_file" }>, "content" | "baseHash">
+  | Extract<PendingAction, { kind: "run_command" }>;
+
+export function approvalView(action: PendingAction): ApprovalView {
+  if (action.kind !== "write_file") return action;
+  const { content: _content, baseHash: _baseHash, ...view } = action;
+  return view;
+}
+
 export type ApprovalDecision = { actionId: string; decision: "approve" | "reject"; feedback?: string };
 
 export type RunEvent = {
@@ -53,7 +64,7 @@ export type RunEvent = {
   phase: Phase;
   message: string;
   detail?: string;
-  approval?: PendingAction;
+  approval?: ApprovalView;
   changes?: string[];
 };
 

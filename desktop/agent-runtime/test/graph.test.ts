@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { MemorySaver } from "@langchain/langgraph";
 import { RunManager } from "../src/graph/runs.js";
 import { ScriptedModel } from "../src/llm/types.js";
 import type { RunEvent } from "../src/protocol.js";
@@ -23,13 +24,15 @@ function harness(outputs: ConstructorParameters<typeof ScriptedModel>[0]) {
   const events: RunEvent[] = [];
   const waiters: Array<() => void> = [];
   const model = new ScriptedModel(outputs);
-  const manager = new RunManager(() => settings, event => { events.push(event); waiters.splice(0).forEach(fn => fn()); }, () => model);
+  const checkpointer = new MemorySaver();
+  const manager = new RunManager(() => settings, event => { events.push(event); waiters.splice(0).forEach(fn => fn()); }, () => model, checkpointer);
   const until = (predicate: (e: RunEvent) => boolean) => new Promise<RunEvent>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`timeout; last=${JSON.stringify(events.at(-1))}`)), 15_000);
     const check = () => { const hit = events.find(predicate); if (hit) { clearTimeout(timer); resolve(hit); } else waiters.push(check); };
     check();
   });
-  return { dir, manager, events, until, model };
+  const threads = () => Object.keys(checkpointer.storage).length;
+  return { dir, manager, events, until, model, threads };
 }
 
 const j = (value: unknown) => JSON.stringify(value);
@@ -109,4 +112,57 @@ test("stale approval ids and concurrent runs on one project are refused", async 
   assert.throws(() => h.manager.start("demo", "다른 작업"), /진행 중/);
   h.manager.cancel(run.runId);
   assert.equal(h.manager.get(run.runId).phase, "cancelled");
+});
+
+test("finished and cancelled runs free their saved graph state; a paused run keeps it", async () => {
+  const done = harness([j({ route: "backend", plan: "p", testCommand: null }), j({ action: "finish", args: { summary: "s" } }), j({ verdict: "pass", summary: "ok" })]);
+  done.manager.start("demo", "끝까지");
+  await done.until(e => e.phase === "done" || e.phase === "failed");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(done.threads(), 0, "a finished run keeps no checkpoint");
+
+  const paused = harness([j({ route: "frontend", plan: "p" }), j({ action: "write_file", args: { path: "src/p.ts", content: "p\n" } })]);
+  const run = paused.manager.start("demo", "멈춤");
+  await paused.until(e => e.phase === "awaiting_approval");
+  // A stale id waits for the graph to finish pausing, then is refused.
+  await assert.rejects(paused.manager.resume(run.runId, { actionId: "stale", decision: "approve" }), /바뀌었습니다/);
+  assert.equal(paused.threads(), 1, "a run waiting for approval needs its checkpoint to resume");
+  paused.manager.cancel(run.runId);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(paused.threads(), 0, "a cancelled run keeps no checkpoint");
+});
+
+test("approval events and run views carry the diff but never the full file content", async () => {
+  const h = harness([j({ route: "frontend", plan: "p" }), j({ action: "write_file", args: { path: "src/big.ts", content: "BIG-CONTENT\n" } })]);
+  const run = h.manager.start("demo", "큰 파일");
+  const event = await h.until(e => e.phase === "awaiting_approval");
+  assert.match(event.approval!.kind === "write_file" ? event.approval!.diff : "", /BIG-CONTENT/);
+  assert.equal("content" in event.approval!, false, "event omits content");
+  assert.equal("content" in (h.manager.get(run.runId).pending ?? {}), false, "view omits content");
+  assert.equal(h.manager.get(run.runId).events.some(e => e.approval && "content" in e.approval), false, "stored history omits content");
+});
+
+test("a failing verification command overrides a QA model that says pass", async () => {
+  const h = harness([
+    j({ route: "backend", plan: "p", testCommand: ["npm", "test"] }),
+    j({ action: "write_file", args: { path: "src/f.ts", content: "f\n" } }),
+    j({ action: "finish", args: { summary: "끝" } }),
+    j({ verdict: "pass", summary: "통과라고 주장" }),
+    input => { assert.match(input.messages.at(-1)!.content, /검증 명령이 실패/); return j({ action: "finish", args: { summary: "다시" } }); },
+    j({ verdict: "pass", summary: "또 주장" }),
+    j({ action: "finish", args: { summary: "세 번째" } }),
+    j({ verdict: "pass", summary: "계속 주장" }),
+  ]);
+  writeFileSync(path.join(h.dir, "package.json"), JSON.stringify({ name: "demo", scripts: { test: "node -e \"process.exit(3)\"" } }));
+  const run = h.manager.start("demo", "f 추가");
+  const approve = async (count: number) => {
+    const pending = h.events.filter(e => e.phase === "awaiting_approval");
+    await h.until(() => h.events.filter(e => e.phase === "awaiting_approval").length >= count);
+    const next = h.events.filter(e => e.phase === "awaiting_approval")[count - 1] ?? pending.at(-1)!;
+    await h.manager.resume(run.runId, { actionId: next.approval!.id, decision: "approve" });
+  };
+  for (let i = 1; i <= 4; i++) await approve(i);
+  const end = await h.until(e => e.phase === "done" || e.phase === "failed");
+  assert.equal(end.phase, "failed", "exit 3 can never end as done");
+  assert.match(end.detail ?? "", /exit 3/);
 });

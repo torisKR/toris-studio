@@ -42,6 +42,25 @@ export function redact(value: string, secrets: string[] = []): string {
   return out;
 }
 
+/**
+ * Run `task` with a deadline and an optional parent signal, then clear both.
+ * Unlike AbortSignal.timeout, no timer outlives the task: a pending timer keeps
+ * its async context (and with it the whole agent run) alive until it fires.
+ */
+export async function withTimeout<T>(ms: number, parent: AbortSignal | undefined, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("요청 시간이 초과되었습니다.", "TimeoutError")), ms);
+  const onAbort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) controller.abort(parent.reason);
+  else parent?.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await task(controller.signal);
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onAbort);
+  }
+}
+
 export function errorText(error: unknown): string {
   if (error instanceof UserError) return error.message;
   if (error instanceof Error && error.name === "AbortError") return "작업이 취소되었습니다.";

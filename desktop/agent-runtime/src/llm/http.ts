@@ -1,5 +1,5 @@
 import type { ApiProviderId } from "../protocol.js";
-import { redact, UserError } from "../util.js";
+import { redact, UserError, withTimeout } from "../util.js";
 import type { ChatModel, CompleteInput } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 180_000;
@@ -13,21 +13,21 @@ export async function postJson(endpoint: Endpoint, body: unknown, secrets: strin
 }
 
 export async function requestJson(endpoint: Endpoint, init: { method: string; body?: string }, secrets: string[], signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  let response: globalThis.Response;
-  try {
-    response = await fetch(endpoint.url, {
-      ...init,
-      headers: { "content-type": "application/json", ...endpoint.headers },
-      redirect: "error",
-      signal: combined,
-    });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    throw new UserError(`모델 서버에 연결하지 못했습니다: ${new URL(endpoint.url).host}`);
-  }
-  const raw = await response.text();
+  const { response, raw } = await withTimeout(REQUEST_TIMEOUT_MS, signal, async combined => {
+    let response: globalThis.Response;
+    try {
+      response = await fetch(endpoint.url, {
+        ...init,
+        headers: { "content-type": "application/json", ...endpoint.headers },
+        redirect: "error",
+        signal: combined,
+      });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new UserError(`모델 서버에 연결하지 못했습니다: ${new URL(endpoint.url).host}`);
+    }
+    return { response, raw: await response.text() };
+  });
   if (raw.length > MAX_RESPONSE_BYTES) throw new UserError("모델 응답이 너무 큽니다.");
   let value: Record<string, unknown> = {};
   try { value = JSON.parse(raw); } catch { /* handled below */ }

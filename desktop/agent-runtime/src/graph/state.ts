@@ -22,6 +22,8 @@ export const AgentState = Annotation.Root({
   steps: replace(() => 0),
   iterations: replace(() => 0),
   testLog: replace(() => ""),
+  /** Exit code of the last QA verification command; null when none ran. */
+  testExit: replace<number | null>(() => null),
   verdict: replace<"pass" | "fail" | null>(() => null),
   feedback: replace(() => ""),
   summary: replace(() => ""),

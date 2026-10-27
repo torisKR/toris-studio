@@ -384,5 +384,61 @@
   "find": "return { jobId: job.id, prompt, size };",
   "replace": "return { jobId: \"\", prompt, size };",
   "test": "tests/asset-ui.test.ts"
+ },
+ {
+  "id": "runs.checkpoint-kept",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "await this.checkpointer.deleteThread(run.runId);",
+  "replace": "void 0;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "runs.cancel-keeps-checkpoint",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "void run.driving.then(() => this.release(run));",
+  "replace": "void 0;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "protocol.approval-content-leaks",
+  "file": "desktop/agent-runtime/src/protocol.ts",
+  "find": "if (action.kind !== \"write_file\") return action;",
+  "replace": "return action;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "qa.model-overrules-failed-command",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "review.verdict === \"pass\" && !commandFailed ? \"pass\"",
+  "replace": "review.verdict === \"pass\" ? \"pass\"",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "util.timeout-timer-kept",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "    clearTimeout(timer);\n    parent?.removeEventListener",
+  "replace": "    parent?.removeEventListener",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "util.parent-abort-ignored",
+  "file": "desktop/agent-runtime/src/util.ts",
+  "find": "else parent?.addEventListener(\"abort\", onAbort, { once: true });",
+  "replace": "else void onAbort;",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "terminal.listener-kept-on-error",
+  "file": "desktop/agent-runtime/src/tools/terminal.ts",
+  "find": "const settle = () => { settled = true; clearTimeout(timer); signal?.removeEventListener(\"abort\", abort); };",
+  "replace": "const settle = () => { settled = true; clearTimeout(timer); };",
+  "test": "desktop/agent-runtime/test/memory.test.ts"
+ },
+ {
+  "id": "client.early-runs-unbounded",
+  "file": "desktop/src/agent-client.ts",
+  "find": "while (buffer.size > EARLY_RUNS)",
+  "replace": "while (false)",
+  "test": "tests/agent-client.test.ts"
  }
 ]

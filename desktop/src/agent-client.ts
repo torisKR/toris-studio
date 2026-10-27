@@ -62,6 +62,20 @@ export function applyEvent(run: RunSummary | undefined, event: RunEvent): RunSum
   };
 }
 
+export const EARLY_EVENTS_PER_RUN = 200;
+export const EARLY_RUNS = 20;
+
+/**
+ * Hold events that arrive before `run.start` returns. Runs the tab never learns
+ * about (another window, a pruned run) must not grow the buffer forever.
+ */
+export function bufferEarlyEvent(buffer: Map<string, RunEvent[]>, event: RunEvent): void {
+  const events = [...(buffer.get(event.runId) ?? []), event].slice(-EARLY_EVENTS_PER_RUN);
+  buffer.delete(event.runId);
+  buffer.set(event.runId, events);
+  while (buffer.size > EARLY_RUNS) buffer.delete(buffer.keys().next().value!);
+}
+
 /** Coarse stage progress, not a time estimate: plan → code → verify → done. */
 export function stageProgress(run: Pick<RunSummary, "phase" | "agent" | "events">): { percent: number; label: string } {
   if (run.phase === "done") return { percent: 100, label: "완료" };
