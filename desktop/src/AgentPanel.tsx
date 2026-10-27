@@ -135,7 +135,7 @@ export function AgentPanel({ active }: { active: boolean }) {
 
         {runs.length > 0 && <section className="agent-card" aria-label="작업 기록"><h2>작업 기록</h2>
           <ul className="agent-history">{runs.map(r => <li key={r.runId}><button className={r.runId === current ? "active" : ""} onClick={() => void openRun(r.runId)}><strong>{r.project}</strong><span>{r.task.slice(0, 60)}</span><small data-phase={r.phase}>{PHASE_LABELS[r.phase]}</small></button></li>)}</ul>
-          <p className="agent-hint">기록은 런타임이 켜져 있는 동안만 보관합니다.</p>
+          <p className="agent-hint">기록은 앱을 꺼도 최근 30개까지 남습니다.</p>
         </section>}
       </div>
 
