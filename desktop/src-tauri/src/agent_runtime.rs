@@ -171,6 +171,15 @@ pub fn write_key(provider: &str, value: Option<&str>) -> Result<(), String> {
         }
     }
 }
+/// What the UI may see: which providers have a key (never the key itself), and the
+/// key-store error when it is locked, so the model settings still load without it.
+pub fn settings_view(settings: &AgentSettings, keys: Result<HashMap<&'static str, String>, String>) -> Value {
+    let (saved, key_store) = match keys {
+        Ok(keys) => (KEY_PROVIDERS.iter().map(|p| (*p, keys.contains_key(p))).collect::<HashMap<_, _>>(), None),
+        Err(error) => (KEY_PROVIDERS.iter().map(|p| (*p, false)).collect(), Some(error)),
+    };
+    json!({"settings": settings, "keys": saved, "chromaUrl": CHROMA_URL, "keyStore": key_store})
+}
 pub fn keys() -> Result<HashMap<&'static str, String>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -569,6 +578,21 @@ impl AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_view_survives_a_locked_key_store() {
+        let settings = AgentSettings::default();
+        let view = settings_view(&settings, Err("저장소 보류".into()));
+        assert_eq!(view["keyStore"], "저장소 보류");
+        assert_eq!(view["keys"]["anthropic"], false);
+        assert_eq!(view["settings"]["projectsRoot"], json!(settings.projects_root));
+        let mut saved = HashMap::new();
+        saved.insert("openai", "sk-secret".to_string());
+        let view = settings_view(&settings, Ok(saved));
+        assert!(view["keyStore"].is_null());
+        assert_eq!(view["keys"]["openai"], true);
+        assert_eq!(view["keys"]["anthropic"], false);
+        assert!(!view.to_string().contains("sk-secret"), "key values never reach the UI");
+    }
     #[test]
     fn settings_reject_relative_roots_and_remote_ollama() {
         let mut settings = AgentSettings::default();

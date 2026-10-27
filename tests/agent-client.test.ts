@@ -61,3 +61,17 @@ test("a locked key store does not hide the runtime status, projects or runs", as
   assert.deepEqual(data.runs.map(r => r.runId), ["r1"]);
   assert.deepEqual(data.errors, [vault]);
 });
+
+test("model settings load when only the key store is locked; its warning still shows", async () => {
+  const vault = "OS 자격 증명 저장소 접근이 보류되었습니다.";
+  const view = { settings: { projectsRoot: "/p" }, keys: { anthropic: false }, chromaUrl: "http://127.0.0.1:8000", keyStore: vault };
+  const call = (async (command: string, args?: { method?: string }) => {
+    if (command === "agent_settings_get") return view;
+    if (args?.method === "status") return { version: "1.0.0", providers: [], chroma: true, projectsRoot: "/p" };
+    if (args?.method === "projects.list") return { projects: [] };
+    return { runs: [] };
+  }) as Parameters<typeof loadPanel>[0];
+  const data = await loadPanel(call);
+  assert.equal(data.settings?.settings.projectsRoot, "/p");
+  assert.deepEqual(data.errors, [vault]);
+});

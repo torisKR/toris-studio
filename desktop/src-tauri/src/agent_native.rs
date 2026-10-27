@@ -1,5 +1,5 @@
 //! Tauri commands for the Agent tab and for app features that use the selected model.
-use crate::agent_runtime::{self, AgentRuntime, AgentSettings, KEY_PROVIDERS};
+use crate::agent_runtime::{self, AgentRuntime, AgentSettings};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -9,12 +9,7 @@ use tauri::State;
 type Runtime<'a> = State<'a, Arc<AgentRuntime>>;
 
 fn public_settings(settings: &AgentSettings) -> Result<Value, String> {
-    let keys = agent_runtime::keys()?;
-    let saved: HashMap<&str, bool> = KEY_PROVIDERS
-        .iter()
-        .map(|p| (*p, keys.contains_key(p)))
-        .collect();
-    Ok(json!({"settings": settings, "keys": saved, "chromaUrl": agent_runtime::CHROMA_URL}))
+    Ok(agent_runtime::settings_view(settings, agent_runtime::keys()))
 }
 
 #[tauri::command]

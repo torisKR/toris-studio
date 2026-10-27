@@ -11,7 +11,7 @@ export type RunSummary = { runId: string; project: string; task: string; phase: 
 export type ProjectInfo = { name: string; path: string; stacks: string[]; scripts: Record<string, string>; git: boolean };
 export type IndexStatus = { indexed: boolean; chunks: number; stale: boolean; embedder: string; chroma: boolean };
 export type AgentSettings = { projectsRoot: string; ollamaUrl: string; agentModel: ModelChoice | null; contentModel: ModelChoice | null; image: ModelChoice | null; embedding: ModelChoice };
-export type SettingsView = { settings: AgentSettings; keys: Record<string, boolean>; chromaUrl: string };
+export type SettingsView = { settings: AgentSettings; keys: Record<string, boolean>; chromaUrl: string; keyStore?: string | null };
 export type RuntimeStatus = { version: string; providers: ProviderInfo[]; chroma: boolean; projectsRoot: string };
 
 export const KEY_PROVIDERS = [
@@ -50,6 +50,8 @@ export async function loadPanel(call: BridgeInvoke = nativeInvoke): Promise<Pane
   ]);
   const errors = [...new Set([status, settings, list, history].flatMap(r => (r.status === "rejected" ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : [])))];
   const value = <T,>(r: PromiseSettledResult<T>) => (r.status === "fulfilled" ? r.value : null);
+  const keyStore = value(settings)?.keyStore;
+  if (keyStore && !errors.includes(keyStore)) errors.push(keyStore);
   return { status: value(status), settings: value(settings), projects: value(list)?.projects ?? [], runs: value(history)?.runs ?? [], errors };
 }
 /** keys: provider -> new key, "" removes it; providers left out keep their saved key. */
