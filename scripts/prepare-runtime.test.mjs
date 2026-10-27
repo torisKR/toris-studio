@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { crc32, gzipSync } from 'node:zlib';
-import { buildInvocation, cloudflaredBuild, cloudflaredMacOS, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, prepareTarget, targetSpec, validateArchivePath, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-runtime.mjs';
+import { buildInvocation, cloudflaredBuild, cloudflaredMacOS, CLOUDFLARED_MANIFEST, downloadArchive, extractArchive, extractTar, extractZip, licenseMatches, prepareTarget, targetSpec, validateArchivePath, verifyAgentRuntimeStaged, verifyBinary, verifyCloudflaredLicense, verifyStaged } from './prepare-runtime.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 function tar(entries) {
@@ -226,4 +226,22 @@ test('release validation fails if the bundled executable or license/manifest is 
   const pe = Buffer.alloc(128); pe.write('MZ'); pe.writeUInt32LE(64, 60); pe.writeUInt32LE(0x4550, 64); pe.writeUInt16LE(0x8664, 68);
   await writeFile(path.join(root, 'cloudflared.exe'), pe);
   await assert.rejects(verifyStaged('x86_64-pc-windows-msvc', root), /ENOENT/);
+}));
+
+test('staged agent runtime must match the verified build hash on both platforms', async () => temporary(async root => {
+  const bundle = Buffer.from('export const built = true;\n');
+  const digestText = `${digest(bundle)}\n`;
+  await mkdir(path.join(root, 'desktop/src-tauri/resources/agent-runtime'), { recursive: true });
+  await writeFile(path.join(root, 'desktop/src-tauri/resources/agent-runtime/agent.mjs.sha256'), digestText);
+  for (const [target, dir] of [['aarch64-apple-darwin', 'app/Contents/Resources/agent-runtime'], ['x86_64-pc-windows-msvc', 'win/agent-runtime']]) {
+    const staged = path.join(root, dir);
+    await mkdir(staged, { recursive: true });
+    await writeFile(path.join(staged, 'agent.mjs'), bundle);
+    await writeFile(path.join(staged, 'agent.mjs.sha256'), digestText);
+    const stage = path.join(root, dir.split('/')[0]);
+    await verifyAgentRuntimeStaged(target, stage, { root });
+    await writeFile(path.join(staged, 'agent.mjs'), Buffer.from('export const tampered = true;\n'));
+    await assert.rejects(verifyAgentRuntimeStaged(target, stage, { root }), /differs from the verified build/);
+  }
+  await assert.rejects(verifyAgentRuntimeStaged('aarch64-apple-darwin', path.join(root, 'missing'), { root }), /ENOENT/);
 }));

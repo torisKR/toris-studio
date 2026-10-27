@@ -5,7 +5,7 @@ import { aiStatus as readAiStatus, generateImage, modelLabel } from "../ai-clien
 import { AssetInspector, AssetThumbnail } from "./AssetInspector";
 import { ImageOutputControls } from "./ImageOutputControls";
 import { AssetResizePanel } from "./AssetResizePanel";
-import { applyAssetRefresh, defaultSpec, handoffText, JOB_LABELS, validationError } from "./contracts";
+import { applyAssetRefresh, defaultSpec, handoffText, imageGenerationRequest, JOB_LABELS, validationError } from "./contracts";
 import type { Asset, AssetJob, AssetSnapshot, AssetSpec } from "./contracts";
 import { assetApi, assetError } from "./transport";
 import "./AssetStudio.css";
@@ -103,10 +103,8 @@ export function AssetStudio({ active, refreshKey = 0 }: { active: boolean; refre
     for(const job of jobs.filter(j=>j.status==="queued"||j.status==="waiting")){
       if(!mounted.current)return;
       inform(`이미지 생성 중 ${done+1}/${jobs.length} · ${job.spec.title}`);
-      const {width,height}=job.spec;
-      const size=width>height*1.15?"1536x1024":height>width*1.15?"1024x1536":"1024x1024";
-      const prompt=[job.spec.prompt,`용도: ${job.spec.purpose}`,`최종 규격 ${width}x${height} ${job.spec.format}. 배경: ${job.spec.backgroundMode ?? "transparent"}`].join("\n");
-      await generateImage(job.id,prompt,size);
+      const request=imageGenerationRequest(job);
+      await generateImage(request.jobId,request.prompt,request.size);
       done++;
       await refresh();
     }

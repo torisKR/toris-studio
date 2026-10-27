@@ -37,7 +37,12 @@ try {
       if (method === 'run.list') return { runs: [] };
       if (method === 'index.status') return { indexed: true, chunks: 128, stale: false, embedder: 'local-hash-v1-768', chroma: true };
       if (method === 'models.list') return { models: [] };
-      if (method === 'run.start') { started.push(params); return { ...run, task: params.task, events: [ev(1, 'supervisor', 'queued', '작업을 시작합니다.')] }; }
+      if (method === 'run.start') {
+        started.push(params);
+        // The runtime streams events before run.start returns; the panel must not drop them.
+        await page.evaluate(p => window.__qaEmit('agent-event', p), ev(2, 'supervisor', 'thinking', 'Backend Expert에게 배정했습니다.'));
+        return { ...run, task: params.task, events: [ev(1, 'supervisor', 'queued', '작업을 시작합니다.')] };
+      }
       if (method === 'run.resume') { decisions.push(params); return { ...run, task: started[0].task, phase: 'coding', agent: 'backend', events: [] }; }
       if (method === 'run.get') return run;
     }
@@ -67,7 +72,8 @@ try {
   await page.getByRole('button', { name: '에이전트 시작' }).click();
   await page.getByText('장바구니 합계 계산을 고쳐줘', { exact: true }).first().waitFor();
   assert.deepEqual(started, [{ project: 'demo-shop', task: '장바구니 합계 계산을 고쳐줘' }]);
-  await emit(ev(2, 'supervisor', 'thinking', 'Backend Expert에게 배정했습니다.'));
+  await page.locator('.agent-timeline', { hasText: 'Backend Expert에게 배정했습니다.' }).waitFor({ timeout: 3000 });
+  report.checks.push('Events streamed before run.start returns are kept, not dropped');
   await emit(ev(3, 'backend', 'reading', '파일을 읽고 있습니다.', { detail: 'src/cart.ts' }));
   await emit(ev(4, 'backend', 'awaiting_approval', 'src/cart.ts 변경 승인을 기다립니다.', { approval }));
   const card = page.getByRole('region', { name: '승인 요청' });

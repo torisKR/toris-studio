@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -36,6 +36,11 @@ test("indexing is per project, incremental, and search never crosses projects", 
     const blogHits = await index.search("blog", "renderMarkdownPost", 5);
     assert.ok(blogHits.every(hit => !hit.text.includes("applyCoupon")));
     assert.equal((await index.status("shop")).indexed, true);
+    const before = (await index.status("shop")).chunks;
+    rmSync(path.join(root, "shop", "README.md"));
+    await index.build("shop", () => {});
+    assert.equal((await index.status("shop")).chunks, before - 1, "a deleted file's chunks are removed");
+    assert.ok((await index.search("shop", "shop", 5)).every(hit => hit.path !== "README.md"));
   } finally {
     for (const name of ["shop", "blog"]) await client.drop(collectionName(realpathSync(path.join(root, name)))).catch(() => {});
   }

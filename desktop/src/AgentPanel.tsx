@@ -25,7 +25,9 @@ export function AgentPanel({ active }: { active: boolean }) {
   const [notice, setNotice] = useState("");
   const loaded = useRef(false);
   // Events can arrive before run.start returns; keep them until the run is known.
+  // Both refs change synchronously in the listener, never inside a state updater.
   const early = useRef(new Map<string, RunEvent[]>());
+  const known = useRef(new Set<string>());
 
   const refresh = useCallback(async () => {
     setError("");
@@ -34,6 +36,7 @@ export function AgentPanel({ active }: { active: boolean }) {
       setStatus(s); setView(settings);
       const [list, history] = await Promise.all([agentCall<{ projects: ProjectInfo[] }>("projects.list"), agentCall<{ runs: RunSummary[] }>("run.list")]);
       setProjects(list.projects);
+      for (const r of history.runs) known.current.add(r.runId);
       setRuns(old => history.runs.map(r => old.find(o => o.runId === r.runId) ?? r));
     } catch (e) { setError(message(e)); }
   }, []);
@@ -47,12 +50,13 @@ export function AgentPanel({ active }: { active: boolean }) {
   useEffect(() => {
     let live = true, stop: (() => void) | undefined;
     void listen<RunEvent | IndexEvent | { event: "runtime"; state: string }>("agent-event", ({ payload }) => {
-      if (payload.event === "run") setRuns(list => {
-        if (list.some(r => r.runId === payload.runId)) return list.map(r => applyEvent(r, payload) ?? r);
-        const buffered = early.current.get(payload.runId) ?? [];
-        early.current.set(payload.runId, [...buffered, payload].slice(-200));
-        return list;
-      });
+      if (payload.event === "run") {
+        if (!known.current.has(payload.runId)) {
+          early.current.set(payload.runId, [...(early.current.get(payload.runId) ?? []), payload].slice(-200));
+          return;
+        }
+        setRuns(list => list.map(r => applyEvent(r, payload) ?? r));
+      }
       else if (payload.event === "index") {
         setIndexing(payload.phase === "done" || payload.phase === "failed" ? null : payload);
         if (payload.phase === "done") { setNotice(`색인 완료: ${payload.message}`); void agentCall<IndexStatus>("index.status", { project: payload.project }).then(setIndex).catch(() => {}); }
@@ -79,6 +83,7 @@ export function AgentPanel({ active }: { active: boolean }) {
     const started = await agentCall<RunSummary>("run.start", { project, task });
     const buffered = early.current.get(started.runId) ?? [];
     early.current.delete(started.runId);
+    known.current.add(started.runId);
     const run = buffered.reduce<RunSummary>((acc, event) => applyEvent(acc, event) ?? acc, started);
     setRuns(list => [run, ...list.filter(r => r.runId !== run.runId)]); setCurrent(run.runId); setTask("");
   });

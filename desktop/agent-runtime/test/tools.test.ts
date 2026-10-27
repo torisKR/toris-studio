@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { cliInvocation } from "../src/llm/cli.js";
-import { projectDir } from "../src/projects.js";
+import { describeProject, listProjects, projectDir } from "../src/projects.js";
 import { chunkFile, collectionName } from "../src/rag/index.js";
 import { LocalHashEmbedder } from "../src/rag/embed.js";
 import { applyWrite, proposeEdit, proposeWrite, readProjectFile, resolveInProject } from "../src/tools/fs.js";
@@ -25,7 +25,7 @@ function fixture() {
 
 test("paths stay inside the project and secrets are unreadable", () => {
   const { root, project } = fixture();
-  assert.throws(() => resolveInProject(project, "../other/secret.txt"), /프로젝트 밖/);
+  assert.throws(() => resolveInProject(project, "../other/secret.txt"), /프로젝트 밖의 경로는 사용할 수 없습니다/);
   assert.throws(() => resolveInProject(project, "/etc/passwd"), /상대 경로/);
   assert.throws(() => resolveInProject(project, ".env"), /보호된/);
   assert.throws(() => resolveInProject(project, "keys/server.pem"), /보호된/);
@@ -98,6 +98,23 @@ test("subscription CLIs run text-only with fixed arguments", () => {
   assert.ok(!codex.args.includes("-m"));
   const gemini = cliInvocation("gemini-cli", "gemini-2.5-pro", input, "/tmp/o");
   assert.equal(gemini.args[gemini.args.indexOf("--approval-mode") + 1], "plan");
+});
+
+test("project list shows real child folders with detected stacks and scripts, skipping hidden ones", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "agent-projects-"));
+  mkdirSync(path.join(root, "web/supabase"), { recursive: true });
+  writeFileSync(path.join(root, "web/package.json"), JSON.stringify({ scripts: { build: "next build", test: "vitest" } }));
+  writeFileSync(path.join(root, "web/next.config.ts"), "");
+  writeFileSync(path.join(root, "web/supabase/config.toml"), "");
+  mkdirSync(path.join(root, "cli"));
+  writeFileSync(path.join(root, "cli/Cargo.toml"), "");
+  mkdirSync(path.join(root, ".cache"));
+  writeFileSync(path.join(root, "notes.txt"), "not a project");
+  const projects = listProjects(root);
+  assert.deepEqual(projects.map(p => p.name), ["cli", "web"]);
+  assert.deepEqual(projects[1].stacks, ["node", "nextjs", "supabase"]);
+  assert.deepEqual(projects[1].scripts, { build: "next build", test: "vitest" });
+  assert.deepEqual(describeProject(root, "cli").stacks, ["rust"]);
 });
 
 test("settings reject remote endpoints and unknown providers", () => {

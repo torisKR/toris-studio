@@ -59,3 +59,10 @@ export function handoffText(jobs: AssetJob[]): string {
     JSON.stringify(active.map(j=>({jobId:j.id,title:j.spec.title,prompt:j.spec.prompt,purpose:j.spec.purpose,project:j.spec.project,width:j.spec.width,height:j.spec.height,format:j.spec.format,fit:j.spec.fit,presetId:j.spec.presetId ?? "custom",backgroundColor:j.spec.backgroundColor ?? "#ffffff",backgroundMode:j.spec.backgroundMode ?? "transparent"})),null,2)
   ].join("\n\n");
 }
+/** One API request per queued job; the app still converts the result to the job's exact output spec. */
+export function imageGenerationRequest(job: AssetJob): { jobId: string; prompt: string; size: "1536x1024" | "1024x1536" | "1024x1024" } {
+  const { width, height } = job.spec;
+  const size = width > height * 1.15 ? "1536x1024" : height > width * 1.15 ? "1024x1536" : "1024x1024";
+  const prompt = [job.spec.prompt, `용도: ${job.spec.purpose}`, `최종 규격 ${width}x${height} ${job.spec.format}. 배경: ${job.spec.backgroundMode ?? "transparent"}`].join("\n");
+  return { jobId: job.id, prompt, size };
+}

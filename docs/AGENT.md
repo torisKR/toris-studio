@@ -88,6 +88,11 @@ pnpm agent:test        # 그래프·도구·RAG 테스트 (Chroma가 없으면 R
 pnpm agent:build       # desktop/src-tauri/resources/agent-runtime/agent.mjs 생성
 pnpm desktop:dev       # 번들을 만든 뒤 Tauri 개발 실행
 node scripts/verify-agent-ui.mjs   # Agent 탭 UI 검증 (IPC 모의)
+pnpm agent:mutation       # 동작을 일부러 깨뜨려 테스트가 실패하는지 확인 (런타임·UI 클라이언트)
+pnpm agent:mutation:ui    # 같은 확인을 화면 검증 스크립트로 (느림)
+pnpm agent:mutation:rust  # Rust 호스트·벡터 DB 구성
 ```
+
+새 동작은 실패하는 테스트를 먼저 쓰고(`mutants.json`에 그 동작을 깨는 변형도 추가) 실패를 확인한 뒤 구현합니다. 변형이 살아남으면 그 테스트는 동작을 증명하지 못한 것입니다.
 
 설치 파일은 앱에 포함된 Node(Studio 브라우저용)로 런타임을 실행합니다. 없으면 사용자 PATH의 Node 22 이상을 찾습니다.

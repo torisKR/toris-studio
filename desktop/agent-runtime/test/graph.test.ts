@@ -76,6 +76,31 @@ test("a rejected write is reported back to the expert and QA can send work back"
   assert.equal(h.model.calls.length, 8);
 });
 
+test("a worker that never finishes stops at the step budget and the run is marked failed", async () => {
+  const h = harness([j({ route: "backend", plan: "p" }), ...Array.from({ length: 80 }, () => j({ action: "list_dir", args: { path: "." } }))]);
+  h.manager.start("demo", "끝나지 않는 작업");
+  const end = await h.until(e => e.phase === "done" || e.phase === "failed");
+  assert.equal(end.phase, "failed");
+  assert.match(end.detail ?? "", /단계 한도\(60\)/);
+  assert.equal(h.model.calls.length, 61);
+});
+
+test("QA failing every round ends as failed after two send-backs, never as done", async () => {
+  const round = [j({ action: "finish", args: { summary: "다시 확인" } }), j({ command: null }), j({ verdict: "fail", feedback: "아직 틀림", summary: "미해결" })];
+  const h = harness([
+    j({ route: "backend", plan: "p", testCommand: null }),
+    j({ action: "write_file", args: { path: "src/q.ts", content: "q\n" } }),
+    ...round, ...round, ...round,
+  ]);
+  const run = h.manager.start("demo", "q 추가");
+  const write = await h.until(e => e.phase === "awaiting_approval");
+  await h.manager.resume(run.runId, { actionId: write.approval!.id, decision: "approve" });
+  const end = await h.until(e => e.phase === "done" || e.phase === "failed");
+  assert.equal(end.phase, "failed");
+  assert.equal(end.detail, "미해결");
+  assert.equal(h.events.filter(e => /돌려보냅니다/.test(e.message)).length, 2);
+});
+
 test("stale approval ids and concurrent runs on one project are refused", async () => {
   const h = harness([j({ route: "frontend", plan: "p" }), j({ action: "write_file", args: { path: "src/z.ts", content: "z\n" } })]);
   const run = h.manager.start("demo", "z");

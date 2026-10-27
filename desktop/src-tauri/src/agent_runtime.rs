@@ -255,7 +255,12 @@ struct Process {
     stdin: ChildStdin,
 }
 
+type ConfigSource = Box<dyn Fn() -> Result<Value, String> + Send + Sync>;
+
 pub struct AgentRuntime {
+    /// Test hook: program and args to launch instead of the bundled Node runtime.
+    launcher: Option<(PathBuf, Vec<String>)>,
+    config: ConfigSource,
     starting: Mutex<()>,
     process: Mutex<Option<Process>>,
     pending: Pending,
@@ -265,6 +270,8 @@ pub struct AgentRuntime {
 impl Default for AgentRuntime {
     fn default() -> Self {
         Self {
+            launcher: None,
+            config: Box::new(|| runtime_config(&load_settings()?)),
             starting: Mutex::new(()),
             process: Mutex::new(None),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -277,11 +284,29 @@ pub fn shared() -> Arc<AgentRuntime> {
     Arc::new(AgentRuntime::default())
 }
 
+/// Generated image formats accepted into the asset library, by magic bytes.
+pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[255, 216, 255]) {
+        Some("jpeg")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 /// Full configuration including secrets; sent only over the child's stdin.
 pub fn runtime_config(settings: &AgentSettings) -> Result<Value, String> {
-    let keys = keys()?;
+    Ok(runtime_config_with(settings, &keys()?))
+}
+pub fn runtime_config_with(
+    settings: &AgentSettings,
+    keys: &HashMap<&'static str, String>,
+) -> Value {
     let image = settings.image.as_ref().filter(|c| !c.provider.is_empty());
-    Ok(json!({
+    json!({
         "projectsRoot": settings.projects_root,
         "chromaUrl": CHROMA_URL,
         "searchPath": search_path(),
@@ -291,10 +316,17 @@ pub fn runtime_config(settings: &AgentSettings) -> Result<Value, String> {
         "contentModel": settings.content_model.as_ref().filter(|c| !c.provider.is_empty()),
         "image": image,
         "embedding": settings.embedding,
-    }))
+    })
 }
 
 impl AgentRuntime {
+    pub fn with_launcher(program: PathBuf, args: Vec<String>, config: ConfigSource) -> Self {
+        Self {
+            launcher: Some((program, args)),
+            config,
+            ..Self::default()
+        }
+    }
     pub fn set_emitter(&self, emitter: Emitter) {
         if let Ok(mut slot) = self.emitter.write() {
             *slot = Some(emitter);
@@ -315,12 +347,24 @@ impl AgentRuntime {
     }
 
     async fn spawn(self: &Arc<Self>) -> Result<(), String> {
-        let node = node_path().ok_or("Node.js를 찾을 수 없습니다. Node 22 이상을 설치하세요.")?;
-        let bundle = bundle_path().ok_or("에이전트 런타임 파일이 없습니다. `pnpm agent:build`를 실행하거나 앱을 다시 설치하세요.")?;
-        let mut command = Command::new(&node);
+        let (program, args) = match &self.launcher {
+            Some((program, args)) => (program.clone(), args.clone()),
+            None => {
+                let node =
+                    node_path().ok_or("Node.js를 찾을 수 없습니다. Node 22 이상을 설치하세요.")?;
+                let bundle = bundle_path().ok_or("에이전트 런타임 파일이 없습니다. `pnpm agent:build`를 실행하거나 앱을 다시 설치하세요.")?;
+                (
+                    node,
+                    vec![
+                        "--disable-warning=ExperimentalWarning".into(),
+                        bundle.to_string_lossy().into_owned(),
+                    ],
+                )
+            }
+        };
+        let mut command = Command::new(&program);
         command
-            .arg("--disable-warning=ExperimentalWarning")
-            .arg(&bundle)
+            .args(&args)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -404,7 +448,7 @@ impl AgentRuntime {
             .map_err(|_| "에이전트 런타임 시작 시간이 초과되었습니다.")?
             .map_err(|_| "에이전트 런타임이 바로 종료되었습니다. Node 버전을 확인하세요.")?;
         *self.process.lock().await = Some(Process { child, stdin });
-        let config = runtime_config(&load_settings()?)?;
+        let config = (self.config)()?;
         self.send("configure", config, Duration::from_secs(10))
             .await?;
         self.emit(json!({"event":"runtime","state":"running"}));
@@ -464,7 +508,7 @@ impl AgentRuntime {
     /// Push new settings/keys to a running runtime; a stopped one reads them on start.
     pub async fn reconfigure(self: &Arc<Self>) -> Result<(), String> {
         if self.running().await {
-            let config = runtime_config(&load_settings()?)?;
+            let config = (self.config)()?;
             self.send("configure", config, Duration::from_secs(10))
                 .await?;
         }
@@ -521,5 +565,72 @@ mod tests {
         assert!(!UI_METHODS.contains(&"configure"));
         assert!(!UI_METHODS.contains(&"shutdown"));
         assert!(key_account("aws").is_err());
+    }
+
+    #[test]
+    fn generated_images_are_identified_by_magic_bytes_only() {
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(image_extension(&[255, 216, 255, 0]), Some("jpeg"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_extension(b"<svg onload=alert(1)>"), None);
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WAVE"), None);
+    }
+
+    #[test]
+    fn runtime_config_carries_keys_but_drops_unselected_models() {
+        let mut settings = AgentSettings::default();
+        settings.agent_model = Some(ModelChoice {
+            provider: "codex-cli".into(),
+            model: String::new(),
+        });
+        settings.content_model = Some(ModelChoice {
+            provider: String::new(),
+            model: "x".into(),
+        });
+        let keys = HashMap::from([("openai", "sk-test".to_string())]);
+        let config = runtime_config_with(&settings, &keys);
+        assert_eq!(config["agentModel"]["provider"], "codex-cli");
+        assert!(config["contentModel"].is_null());
+        assert!(config["image"].is_null());
+        assert_eq!(config["keys"]["openai"], "sk-test");
+        assert_eq!(config["chromaUrl"], CHROMA_URL);
+    }
+
+    fn fake_runtime(script: &str) -> Arc<AgentRuntime> {
+        Arc::new(AgentRuntime::with_launcher(
+            node_path().expect("node for host tests"),
+            vec!["-e".into(), script.into()],
+            Box::new(|| Ok(json!({"fake": true}))),
+        ))
+    }
+    const ECHO: &str = r#"const rl=require('node:readline').createInterface({input:process.stdin});
+console.log(JSON.stringify({event:'ready',version:'t'}));
+rl.on('line',l=>{const m=JSON.parse(l);
+ if(m.method==='configure'){console.log(JSON.stringify({id:m.id,ok:true,result:{configured:m.params.fake}}));return;}
+ if(m.method==='status'){console.log(JSON.stringify({event:'run',runId:'r',seq:1}));console.log(JSON.stringify({id:m.id,ok:true,result:{echo:m.params}}));return;}
+ if(m.method==='search'){console.log(JSON.stringify({id:m.id,ok:false,error:'검색 실패'}));return;}
+ if(m.method==='run.list'){process.exit(0);}
+});"#;
+
+    #[tokio::test]
+    async fn host_round_trips_requests_forwards_events_and_refuses_host_only_methods() {
+        let runtime = fake_runtime(ECHO);
+        let events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let sink = events.clone();
+        runtime.set_emitter(Arc::new(move |event| sink.lock().unwrap().push(event)));
+        assert_eq!(
+            runtime.call("status", json!({"a":1})).await.unwrap(),
+            json!({"echo":{"a":1}})
+        );
+        assert_eq!(
+            runtime.call("search", json!({})).await.unwrap_err(),
+            "검색 실패"
+        );
+        assert!(runtime.call("configure", json!({})).await.is_err());
+        assert!(events.lock().unwrap().iter().any(|e| e["event"] == "run"));
+        // A runtime that dies mid-request fails the waiter instead of hanging the UI.
+        let error = runtime.call("run.list", json!({})).await.unwrap_err();
+        assert!(error.contains("종료"), "{error}");
+        runtime.stop().await;
     }
 }

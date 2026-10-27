@@ -1,0 +1,140 @@
+[
+ {
+  "id": "rs.compose-all-interfaces",
+  "file": "infrastructure/agent-vector-db/compose.yaml",
+  "find": "\"127.0.0.1:18765:8000\"",
+  "replace": "\"18765:8000\"",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.compose-unpinned",
+  "file": "infrastructure/agent-vector-db/compose.yaml",
+  "find": "image: chromadb/chroma:1.5.9@sha256:",
+  "replace": "image: chromadb/chroma:latest #",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops::tests"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.ui-calls-configure",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        if !UI_METHODS.contains(&method) {",
+  "replace": "        if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.error-as-ok",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "let result = if value[\"ok\"] == true {",
+  "replace": "let result = if true {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.events-dropped",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "                    this.emit(value);",
+  "replace": "                    let _ = value;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.waiters-hang-on-exit",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "                let _ = tx.send(Err(\n                    \"에이전트 런타임이 종료되었습니다. 다시 시도하세요.\".into()\n                ));",
+  "replace": "                std::mem::forget(tx);",
+  "cmd": [
+   "timeout",
+   "300",
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.svg-accepted",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "    } else {\n        None\n    }\n}",
+  "replace": "    } else {\n        Some(\"png\")\n    }\n}",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.empty-model-sent",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "\"contentModel\": settings.content_model.as_ref().filter(|c| !c.provider.is_empty()),",
+  "replace": "\"contentModel\": settings.content_model,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ }
+]

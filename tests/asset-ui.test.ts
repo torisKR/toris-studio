@@ -38,3 +38,14 @@ test("invalid folder-like project names and empty prompts are rejected", () => {
   assert.match(validationError({...defaultSpec,quantity:101}), /수량/);
   assert.equal(formatBytes(1024), "1.0 KiB");
 });
+
+test("image generation request picks the closest API size and keeps the job's prompt, purpose and output spec", async () => {
+  const { imageGenerationRequest } = await import("../desktop/src/assets/contracts");
+  const job = (width: number, height: number) => ({ id: "job-1", status: "queued", spec: { ...defaultSpec, prompt: "푸른 로고", purpose: "video", width, height, format: "png", backgroundMode: "transparent" } }) as never;
+  assert.equal(imageGenerationRequest(job(1920, 1080)).size, "1536x1024");
+  assert.equal(imageGenerationRequest(job(1080, 1920)).size, "1024x1536");
+  assert.equal(imageGenerationRequest(job(1000, 1100)).size, "1024x1024", "within 15% is square");
+  const request = imageGenerationRequest(job(512, 512));
+  assert.equal(request.jobId, "job-1");
+  assert.match(request.prompt, /^푸른 로고\n용도: video\n최종 규격 512x512 png\. 배경: transparent$/);
+});

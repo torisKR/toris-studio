@@ -138,15 +138,7 @@ pub async fn ai_generate_image(
     if bytes.len() > crate::assets::MAX_BYTES {
         return Err("생성된 이미지가 32 MiB를 넘습니다.".into());
     }
-    let ext = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        "png"
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        "jpeg"
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        "webp"
-    } else {
-        return Err("지원하지 않는 이미지 형식입니다.".into());
-    };
+    let ext = agent_runtime::image_extension(&bytes).ok_or("지원하지 않는 이미지 형식입니다.")?;
     let job_id = input.job_id;
     let filename = format!("ai-{}.{ext}", &job_id[..8]);
     tokio::task::spawn_blocking(move || {

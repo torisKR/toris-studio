@@ -72,8 +72,3 @@ export function parseJsonObject(raw: string): Record<string, unknown> {
   }
   throw new UserError("모델 응답에서 JSON 객체를 찾지 못했습니다.");
 }
-
-export function stringArray(value: unknown, max = 50, itemMax = 200): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((v): v is string => typeof v === "string").slice(0, max).map(v => v.slice(0, itemMax));
-}

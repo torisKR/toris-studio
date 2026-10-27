@@ -43,16 +43,8 @@ export function listProjects(root: string): ProjectInfo[] {
   try { entries = readdirSync(realpathSync(root)); } catch { throw new UserError(`프로젝트 폴더를 읽을 수 없습니다: ${root}`); }
   const out: ProjectInfo[] = [];
   for (const name of entries.sort((a, b) => a.localeCompare(b))) {
-    if (name.startsWith(".")) continue;
     try { out.push(describeProject(root, name)); } catch { /* not a directory or escapes root */ }
     if (out.length >= 500) break;
   }
   return out;
-}
-
-export function packageManager(dir: string): "pnpm" | "yarn" | "bun" | "npm" {
-  if (existsSync(path.join(dir, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(path.join(dir, "yarn.lock"))) return "yarn";
-  if (existsSync(path.join(dir, "bun.lockb")) || existsSync(path.join(dir, "bun.lock"))) return "bun";
-  return "npm";
 }

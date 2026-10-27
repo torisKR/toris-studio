@@ -457,3 +457,26 @@ pub async fn backup_database() -> Result<Value, String> {
         json!({"ok":true,"path":path.to_string_lossy(),"bytes":fs::metadata(&path).map_err(|_| "백업 확인 실패")?.len()}),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn vector_db_listens_only_on_loopback_and_pins_the_image_digest() {
+        let compose = super::VECTOR_COMPOSE;
+        let ports: Vec<&str> = compose
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- \"") && l.contains(':'))
+            .collect();
+        assert_eq!(ports, vec!["      - \"127.0.0.1:18765:8000\""]);
+        assert!(compose.contains("image: chromadb/chroma:1.5.9@sha256:"));
+        assert!(
+            compose.contains("chroma-data:/data"),
+            "index survives container restarts"
+        );
+        assert!(super::VECTOR_COMPOSE.contains(
+            &crate::agent_runtime::CHROMA_URL
+                .replace("http://", "")
+                .replace(":18765", ":18765:8000")
+        ));
+    }
+}
