@@ -19,10 +19,19 @@ pub mod motion;
 #[cfg(any(feature = "desktop", test))]
 pub mod native_windows;
 pub mod oauth;
+pub mod planner;
+#[cfg(feature = "desktop")]
+mod planner_native;
 pub mod publications;
 #[cfg(feature = "desktop")]
 static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+pub mod hub;
+#[cfg(feature = "desktop")]
+mod hub_native;
 pub mod ops;
+#[cfg(feature = "desktop")]
+mod ops_native;
+pub mod ops_status;
 pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
@@ -423,30 +432,57 @@ mod desktop {
         window: tauri::WebviewWindow,
         state: State<'_, Arc<AppState>>,
         updates: State<'_, Arc<updater::UpdateController>>,
+        runtime: State<'_, Arc<agent_runtime::AgentRuntime>>,
         input: video_research::CreateInput,
     ) -> Result<video_research::ResearchResult, String> {
         updater::authorize(&window)?;
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 초안을 만드세요.".into());
         }
-        if input.provider.as_deref().unwrap_or("local") == "local" {
-            return video_research::create(&state.config_snapshot().await, input).await;
+        // Only the local draft and the Agent tab's content model are offered here.
+        let provider = input.provider.as_deref().unwrap_or("local");
+        if !matches!(provider, "local" | "agent-model") {
+            return Err("기본 초안 또는 Agent 탭의 콘텐츠 작성 모델을 선택하세요.".into());
         }
-        Err("ChatGPT 대화에서 영상 초안을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
+        let runtime = runtime.inner().clone();
+        let agent: video_research::AgentGenerate = Box::new(move |system, prompt| {
+            Box::pin(async move {
+                let result = runtime
+                    .call("complete", serde_json::json!({"system": system, "prompt": prompt, "purpose": "content"}))
+                    .await?;
+                result["text"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "AI 응답이 비어 있습니다.".to_string())
+            })
+        });
+        video_research::create(&state.config_snapshot().await, input, Some(agent)).await
     }
     #[tauri::command]
     pub async fn video_create_idea_project(
         window: tauri::WebviewWindow,
-        state: State<'_, Arc<AppState>>,
         updates: State<'_, Arc<updater::UpdateController>>,
+        runtime: State<'_, Arc<agent_runtime::AgentRuntime>>,
         input: video_idea::CreateInput,
     ) -> Result<Value, String> {
         updater::authorize(&window)?;
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 영상 기획을 생성하세요.".into());
         }
-        let _ = (state, input);
-        Err("ChatGPT 대화에서 영상 기획을 작성한 뒤 로컬 프로젝트로 저장하세요. 직접 모델 호출은 제공하지 않습니다.".into())
+        let runtime = runtime.inner().clone();
+        video_idea::create(input, |system, prompt| async move {
+            let result = runtime
+                .call(
+                    "complete",
+                    serde_json::json!({"system": system, "prompt": prompt, "purpose": "content"}),
+                )
+                .await?;
+            result["text"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "AI 응답이 비어 있습니다.".to_string())
+        })
+        .await
     }
     #[tauri::command]
     pub async fn video_render_project(
@@ -463,8 +499,8 @@ mod desktop {
     }
     #[tauri::command]
     pub async fn video_generate_voice(input: Value) -> Result<Value, String> {
-        let _ = input;
-        Err("데스크톱 AI 요청은 실제 ChatGPT 대화를 사용합니다. 기존에 저장한 음성 파일은 영상에 유지됩니다.".into())
+        // Local Qwen3 TTS on 127.0.0.1:50010; no account or remote model involved.
+        media::generate_voice(input).await
     }
     #[tauri::command]
     pub async fn media_status() -> Result<Value, String> {
@@ -716,6 +752,8 @@ mod desktop {
                         }
                     }
                 });
+                let calendar_state = state.clone();
+                let ops_state = state.clone();
                 let state = state.clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
@@ -727,6 +765,20 @@ mod desktop {
                     loop {
                         let _ = oauth::refresh_due().await;
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
+                });
+                tauri::async_runtime::spawn(async move {
+                    // Every 5 minutes; a missing DB or Google connection just records the reason.
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                        let _ = crate::planner_native::sync_once(&calendar_state).await;
+                    }
+                });
+                tauri::async_runtime::spawn(async move {
+                    // Read-only status every 15 minutes; failures are stored as error snapshots.
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+                        let _ = crate::ops_native::refresh_once(&ops_state).await;
                     }
                 });
                 Ok(())

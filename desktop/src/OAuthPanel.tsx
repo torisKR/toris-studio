@@ -4,14 +4,16 @@ import type { FormEvent } from "react";
 import {
   ArrowUpRight, AtSign, Check, ChevronDown, CircleAlert, Clock3, KeyRound,
   LoaderCircle, LogIn, Music2, NotebookPen, RefreshCw, ShieldCheck, Unplug,
-  Users, Camera as Instagram, Video as Youtube
+  Users, Camera as Instagram, Video as Youtube, CalendarDays
 } from "lucide-react";
 import type { SocialPlatform } from "./types";
+/** SNS accounts plus Google Calendar, which shares the same native OAuth service. */
+type OAuthPlatform = SocialPlatform | "google_calendar";
 import "./OAuthPanel.css";
 import { ActivityStatus } from "./ActivityStatus";
 
 type OAuthProviderStatus = {
-  platform: SocialPlatform;
+  platform: OAuthPlatform;
   label: string;
   clientConfigured: boolean;
   connected: boolean;
@@ -28,7 +30,7 @@ type OAuthProviderStatus = {
 type OAuthStatus = { providers: OAuthProviderStatus[] };
 type KeychainStatus = { blocked: boolean };
 type OAuthAction = "save" | "login" | "complete" | "refresh" | "disconnect";
-type OAuthNotice = { platform?: SocialPlatform; tone: "success" | "error" | "info"; text: string };
+type OAuthNotice = { platform?: OAuthPlatform; tone: "success" | "error" | "info"; text: string };
 type ClientForm = { clientId: string; clientSecret: string; redirectUri: string; tiktokAuditDeclared: boolean };
 
 const providerInfo = {
@@ -37,19 +39,21 @@ const providerInfo = {
   naver_blog: { label: "네이버 블로그", icon: NotebookPen, description: "네이버 계정 로그인 연결입니다. 블로그 자동 발행 권한은 포함되지 않습니다.", setup: "네이버 개발자센터에서 네이버 로그인 앱과 콜백 주소를 등록하세요. 검색 API 설정과 별개입니다.", https: false },
   tiktok: { label: "TikTok", icon: Music2, description: "기본 계정 연결입니다. Direct Post·초안 업로드 권한은 SNS 일괄 게시에서 연결하세요.", setup: "TikTok 개발자 앱에 데스크톱 Login Kit와 리디렉션 주소를 등록하세요.", https: false },
   facebook: { label: "Facebook Page", icon: Users, description: "관리할 Facebook 페이지를 연결합니다. 게시 계정 조회에서 Page와 실제 게시 권한을 확인하세요.", setup: "Meta 개발자 앱에서 Facebook Login과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true },
-  instagram: { label: "Instagram", icon: Instagram, description: "비즈니스·크리에이터 계정의 기본 권한을 연결합니다. 개인 계정은 지원되지 않습니다.", setup: "Meta 개발자 앱에서 Instagram 로그인과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true }
-} satisfies Record<SocialPlatform, { label: string; icon: typeof Youtube; description: string; setup: string; https: boolean }>;
-const providerOrder: SocialPlatform[] = ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook"];
-const setupGuides: Partial<Record<SocialPlatform, string>> = {
+  instagram: { label: "Instagram", icon: Instagram, description: "비즈니스·크리에이터 계정의 기본 권한을 연결합니다. 개인 계정은 지원되지 않습니다.", setup: "Meta 개발자 앱에서 Instagram 로그인과 승인된 HTTPS 리디렉션 주소를 등록하세요.", https: true },
+  google_calendar: { label: "Google Calendar", icon: CalendarDays, description: "일정 화면과 동기화할 'Toris Studio' 캘린더를 만들고 읽고 씁니다. 개인 캘린더에는 접근하지 않습니다.", setup: "Google Cloud에서 Calendar API를 사용 설정하고 데스크톱 앱용 OAuth 클라이언트를 등록하세요. YouTube와 같은 클라이언트를 써도 됩니다.", https: false }
+} satisfies Record<OAuthPlatform, { label: string; icon: typeof Youtube; description: string; setup: string; https: boolean }>;
+const providerOrder: OAuthPlatform[] = ["youtube", "threads", "naver_blog", "tiktok", "instagram", "facebook", "google_calendar"];
+const setupGuides: Partial<Record<OAuthPlatform, string>> = {
   youtube: "https://developers.google.com/identity/protocols/oauth2/native-app",
+  google_calendar: "https://developers.google.com/workspace/calendar/api/auth",
   naver_blog: "https://developers.naver.com/docs/login/devguide/devguide.md",
   tiktok: "https://developers.tiktok.com/docs/en/login-kit-desktop"
 };
 
-function redirectDefault(platform: SocialPlatform) {
+function redirectDefault(platform: OAuthPlatform) {
   return providerInfo[platform].https ? "" : `http://127.0.0.1:38471/oauth/${platform}/callback`;
 }
-function blankClient(platform: SocialPlatform, status: OAuthProviderStatus): ClientForm {
+function blankClient(platform: OAuthPlatform, status: OAuthProviderStatus): ClientForm {
   return { clientId: "", clientSecret: "", redirectUri: status.redirectUri ?? redirectDefault(platform), tiktokAuditDeclared: status.tiktokAuditDeclared === true };
 }
 function failure(error: unknown) {
@@ -71,10 +75,10 @@ function connectionLabel(status: OAuthProviderStatus) {
 function ProviderCard({ status, active, busy, storageLocked, notice, onAction }: {
   status: OAuthProviderStatus;
   active: boolean;
-  busy: { platform: SocialPlatform; action: OAuthAction } | null;
+  busy: { platform: OAuthPlatform; action: OAuthAction } | null;
   storageLocked: boolean;
   notice: OAuthNotice | null;
-  onAction: (platform: SocialPlatform, action: OAuthAction, input?: Record<string, unknown>) => Promise<boolean>;
+  onAction: (platform: OAuthPlatform, action: OAuthAction, input?: Record<string, unknown>) => Promise<boolean>;
 }) {
   const info = providerInfo[status.platform];
   const Icon = info.icon;
@@ -205,7 +209,7 @@ function ProviderCard({ status, active, busy, storageLocked, notice, onAction }:
 export function OAuthPanel({ active }: { active: boolean }) {
   const [status, setStatus] = useState<OAuthStatus | null>(null);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState<{ platform: SocialPlatform; action: OAuthAction } | null>(null);
+  const [busy, setBusy] = useState<{ platform: OAuthPlatform; action: OAuthAction } | null>(null);
   const [notice, setNotice] = useState<OAuthNotice | null>(null);
   const [error, setError] = useState("");
   const [keychainBlocked, setKeychainBlocked] = useState(false);
@@ -251,7 +255,7 @@ export function OAuthPanel({ active }: { active: boolean }) {
     return () => window.clearInterval(interval);
   }, [active, pending, keychainBlocked, keychainRetryBusy, reload]);
 
-  async function action(platform: SocialPlatform, kind: OAuthAction, input?: Record<string, unknown>): Promise<boolean> {
+  async function action(platform: OAuthPlatform, kind: OAuthAction, input?: Record<string, unknown>): Promise<boolean> {
     if (actionRequest.current || statusRequest.current || keychainRetryRequest.current || keychainBlocked) return false;
     actionRequest.current = true;
     generation.current += 1;

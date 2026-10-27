@@ -99,6 +99,21 @@ macro_rules! app_command_registry {
             [crate::desktop] oauth_complete_login,
             [crate::desktop] oauth_refresh_session,
             [crate::desktop] oauth_disconnect,
+            [crate::planner_native] planner_today,
+            [crate::planner_native] planner_save_event,
+            [crate::planner_native] planner_delete_event,
+            [crate::planner_native] planner_save_work_item,
+            [crate::planner_native] planner_conflicts,
+            [crate::planner_native] planner_resolve_conflict,
+            [crate::planner_native] planner_sync_calendar,
+            [crate::ops_native] ops_overview,
+            [crate::ops_native] ops_save_product,
+            [crate::ops_native] ops_delete_product,
+            [crate::ops_native] ops_refresh,
+            [crate::ops_native] ops_open_task,
+            [crate::ops_native] ops_save_secret,
+            [crate::hub_native] hub_start,
+            [crate::hub_native] hub_decide,
         }
     };
 }

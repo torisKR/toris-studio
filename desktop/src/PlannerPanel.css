@@ -1,0 +1,28 @@
+.planner { display: grid; gap: 16px; }
+.planner-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.planner-calendar { display: inline-flex; align-items: center; gap: 7px; color: #a0b1c1; font-size: 12px; }
+.planner-calendar.linked { color: #8ae3bb; }
+.planner-warn { padding: 3px 9px; border-radius: 999px; background: #3a2c16; color: #f2c46d; font-size: 11px; }
+.planner-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.planner-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; }
+.planner-card { min-width: 0; padding: 18px; border: 1px solid #2c3a4b; border-radius: 10px; background: #121c27; }
+.planner-card h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font-size: 14px; }
+.planner-day h3 { margin: 14px 0 6px; color: #9fb4ca; font-size: 11px; font-weight: 600; }
+.planner-day ul, .planner-work { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.planner-day li, .planner-work li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px; border-radius: 8px; background: #172433; transition: background-color .15s ease; }
+.planner-day li:hover, .planner-work li:hover { background: #1c2c3f; }
+.planner-day li[data-owned] { border-left: 3px solid #92b8ff; }
+.planner-day time, .planner-work time { flex-shrink: 0; color: #9fb4ca; font-size: 11px; font-variant-numeric: tabular-nums; }
+.planner-title { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.planner-pending, .planner-work small { color: #8ea1b3; font-size: 10px; }
+.planner-work li[data-late] { border-left: 3px solid #f2c46d; }
+.planner-late { padding: 2px 8px; border-radius: 999px; background: #3a2c16; color: #f2c46d; font-size: 10px; }
+.planner-work select { width: auto; min-height: 30px; font-size: 11px; }
+.planner-work-form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; margin-bottom: 12px; }
+.planner-empty { display: flex; align-items: center; gap: 8px; color: #8ea1b3; font-size: 12px; }
+.planner-times { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.planner-check { display: flex; align-items: center; gap: 8px; }
+.planner form { display: grid; gap: 12px; }
+@media (max-width: 950px) { .planner-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 620px) { .planner-work-form, .planner-times { grid-template-columns: minmax(0, 1fr); } .planner-actions { margin-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .planner-day li, .planner-work li { transition: none; } }

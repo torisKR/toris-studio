@@ -9,7 +9,10 @@ use tauri::State;
 type Runtime<'a> = State<'a, Arc<AgentRuntime>>;
 
 fn public_settings(settings: &AgentSettings) -> Result<Value, String> {
-    Ok(agent_runtime::settings_view(settings, agent_runtime::keys()))
+    Ok(agent_runtime::settings_view(
+        settings,
+        agent_runtime::keys(),
+    ))
 }
 
 #[tauri::command]
@@ -51,9 +54,9 @@ pub async fn agent_call(
     params: Option<Value>,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    runtime
-        .call(&method, params.unwrap_or_else(|| json!({})))
-        .await
+    let params = params.unwrap_or_else(|| json!({}));
+    crate::hub::ui_params_allowed(&method, &params)?;
+    runtime.call(&method, params).await
 }
 
 #[tauri::command]

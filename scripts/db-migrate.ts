@@ -14,8 +14,10 @@ try {
   await db.query(await readFile("db/migrations/001_social.sql", "utf8"));
   await db.query(await readFile("db/migrations/007_publications.sql", "utf8"));
   await db.query(await readFile("db/migrations/008_publication_handoffs.sql", "utf8"));
+  await db.query(await readFile("db/migrations/009_planner.sql", "utf8"));
+  await db.query(await readFile("db/migrations/010_ops_status.sql", "utf8"));
   await db.query("COMMIT");
-  console.log("Social schemas 001, 007 and 008 are ready; existing records preserved and manual handoffs remain non-executable.");
+  console.log("Schemas 001, 007-010 are ready; existing records preserved, manual handoffs remain non-executable, planner and ops tables added.");
 } catch {
   await db.query("ROLLBACK").catch(() => undefined);
   console.error("DB migration failed. Check local PostgreSQL and ignored .env.db.local credentials.");

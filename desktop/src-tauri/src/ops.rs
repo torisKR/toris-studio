@@ -10,6 +10,8 @@ const OPAL_RESULT_SHAPE: &str = include_str!("../../../db/migrations/005_opal_re
 const KEYWORD_SCHEMA: &str = include_str!("../../../db/migrations/006_keyword_explorer.sql");
 const PUBLICATION_SCHEMA: &str = include_str!("../../../db/migrations/007_publications.sql");
 const HANDOFF_SCHEMA: &str = include_str!("../../../db/migrations/008_publication_handoffs.sql");
+const PLANNER_SCHEMA: &str = include_str!("../../../db/migrations/009_planner.sql");
+const OPS_STATUS_SCHEMA: &str = include_str!("../../../db/migrations/010_ops_status.sql");
 const COMPOSE: &str = include_str!("../../../compose.yaml");
 const INIT: &str = include_str!("../../../db/init/00-app-role.sh");
 const CRAWLER_COMPOSE: &str = include_str!("../../../infrastructure/keyword-crawler/compose.yaml");
@@ -105,6 +107,13 @@ fn stack_root() -> Result<PathBuf, String> {
     fs::write(
         root.join("db/migrations/008_publication_handoffs.sql"),
         HANDOFF_SCHEMA,
+    )
+    .map_err(|_| "DB 설정 저장 실패")?;
+    fs::write(root.join("db/migrations/009_planner.sql"), PLANNER_SCHEMA)
+        .map_err(|_| "DB 설정 저장 실패")?;
+    fs::write(
+        root.join("db/migrations/010_ops_status.sql"),
+        OPS_STATUS_SCHEMA,
     )
     .map_err(|_| "DB 설정 저장 실패")?;
     #[cfg(unix)]
@@ -356,6 +365,14 @@ pub async fn migrate_database() -> Result<(), String> {
         .await
         .map_err(|_| "수동 게시 인계 스키마 갱신 실패")?;
     transaction
+        .batch_execute(PLANNER_SCHEMA)
+        .await
+        .map_err(|_| "일정·작업 스키마 갱신 실패")?;
+    transaction
+        .batch_execute(OPS_STATUS_SCHEMA)
+        .await
+        .map_err(|_| "운영 상태 스키마 갱신 실패")?;
+    transaction
         .commit()
         .await
         .map_err(|_| "DB 스키마 갱신 실패")?;
@@ -375,7 +392,7 @@ pub async fn migrate_configured_publications(config: &AppConfig) -> Result<(), S
         .map_err(|_| "DB 스키마 상태를 확인하지 못했습니다.")?
         .get::<_, Option<String>>(0)
         .is_some();
-    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='008_publication_handoffs')",&[]).await
+    if exists && session.client.query_one("SELECT EXISTS(SELECT 1 FROM social_schema_migrations WHERE version='010_ops_status')",&[]).await
         .map_err(|_|"DB 마이그레이션 상태를 확인하지 못했습니다.")?.get::<_,bool>(0) {return Ok(());}
     drop(session);
     let raw = config

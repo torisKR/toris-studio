@@ -18,12 +18,14 @@ import { applyMaterial, materialFromTrend, composeContext, chatBrief } from "./a
 import type { AiMaterial, AiSelectionMode } from "./ai-discovery";
 import { YouTubePanel } from "./YouTubePanel";
 import { OAuthPanel } from "./OAuthPanel";
+import { PlannerPanel } from "./PlannerPanel";
+import { OpsPanel } from "./OpsPanel";
 import { KeywordPanel } from "./KeywordPanel";
 import { External } from "./External";
 import { OverviewPanel } from "./OverviewPanel";
 import { ContentBoard } from "./ContentBoard";
 import {
-  ArrowRight, ArrowUpRight, AtSign, CalendarClock, Check, ChevronRight,
+  Activity as OpsIcon, ArrowRight, ArrowUpRight, AtSign, CalendarClock, CalendarDays, Check, ChevronRight,
   CircleAlert, Clapperboard, Code2, Copy, Database, ExternalLink, Eye, EyeOff, FileText, Camera as Instagram,
   LayoutDashboard, LoaderCircle, Music2, NotebookPen, Play, Plus, RefreshCw,
   Search, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
@@ -36,7 +38,7 @@ import type {
   SocialPlatform, SocialTrend, TrendRefreshResult, TrendSource
 } from "./types";
 
-type Tab = "publications" | "overview" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "video" | "integrations" | "settings" | "agent";
+type Tab = "publications" | "overview" | "planner" | "ops" | "content" | "trends" | "keywords" | "channels" | "youtube" | "oauth" | "ai" | "assets" | "video" | "integrations" | "settings" | "agent";
 type AiProvider = {
   id: string; label: string; configured: boolean; available: boolean;
   detail: string; models?: string[]; authenticated?: boolean; generationVerified?: boolean;
@@ -65,6 +67,8 @@ const sourceLabels: Record<TrendSource, string> = {
 const tabs = [
   { id: "overview", label: "오버뷰", icon: LayoutDashboard, group: "워크스페이스" },
   { id: "publications", label: "SNS 일괄 게시", icon: Send, group: "워크스페이스" },
+  { id: "planner", label: "일정·작업", icon: CalendarDays, group: "워크스페이스" },
+  { id: "ops", label: "운영 상태", icon: OpsIcon, group: "워크스페이스" },
   { id: "content", label: "콘텐츠 플래너", icon: FileText, group: "워크스페이스" },
   { id: "trends", label: "트렌드 탐색", icon: TrendingUp, group: "워크스페이스" },
   { id: "keywords", label: "키워드 탐색", icon: Search, group: "워크스페이스" },
@@ -469,10 +473,12 @@ export function App() {
     openContent(undefined, { ...(platform ? { platform } : {}), title: trend.keyword || trend.title, body: `참고 콘텐츠: ${trend.title}\n출처: ${trend.url}` });
   }
 
-  const viewTitle = { publications: "SNS 일괄 게시", overview: "오버뷰", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", video: "영상 제작", agent: "Agent", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
+  const viewTitle = { publications: "SNS 일괄 게시", overview: "오버뷰", planner: "일정·작업", ops: "운영 상태", content: "콘텐츠 플래너", trends: "트렌드 탐색", keywords: "키워드 탐색", channels: "내 채널", youtube: "YouTube 관리", oauth: "SNS 로그인", ai: "AI 작업실", assets: "이미지 생성기", video: "영상 제작", agent: "Agent", integrations: "연결·게시 QA", settings: "연결 설정" }[tab];
   const viewDescription = {
     publications: "영상·텍스트·블로그 원고를 준비하고 자동 게시 예약과 네이버 수동 인계를 구분해 관리하세요.",
     overview: "내 채널의 작업과 발견한 콘텐츠를 한눈에 확인하세요.",
+    planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 한곳에서 보고 Studio 전용 Google 캘린더와 동기화하세요.",
+    ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 모아 보고, 문제는 작업으로 넘기세요.",
     content: "아이디어를 모으고, 초안을 다듬고, 다음 발행을 계획하세요.",
     trends: "실제 출처가 있는 콘텐츠와 키워드에서 다음 아이디어를 찾으세요.",
     keywords: "키워드로 콘텐츠를 찾고, 콘텐츠에 연결된 실제 검색어와 원문 근거를 확인하세요.",
@@ -517,6 +523,8 @@ export function App() {
           <div hidden={tab !== "integrations"}><IntegrationPanel active={tab === "integrations"} refreshKey={assetRefreshKey} onOAuth={() => setTab("oauth")} onAgent={() => setTab("agent")} /></div>
           <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
           <div hidden={tab !== "oauth"}><OAuthPanel active={tab === "oauth"} /></div>
+          <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenOAuth={() => setTab("oauth")} onOpenPublications={() => setTab("publications")} /></div>
+          <div hidden={tab !== "ops"}><OpsPanel active={tab === "ops"} databaseConnected={dashboard.database.connected} onOpenPlanner={() => setTab("planner")} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>
 
           {tab === "content" && <>

@@ -25,7 +25,7 @@ pub const CHROMA_URL: &str = "http://127.0.0.1:18765";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Methods the UI may call. Anything else (e.g. `configure`) is host-only.
-pub const UI_METHODS: [&str; 14] = [
+pub const UI_METHODS: [&str; 16] = [
     "status",
     "models.list",
     "projects.list",
@@ -38,6 +38,8 @@ pub const UI_METHODS: [&str; 14] = [
     "run.cancel",
     "run.list",
     "run.get",
+    "run.trace",
+    "workflow.list",
     "complete",
     "image",
 ];
@@ -172,10 +174,22 @@ pub fn write_key(provider: &str, value: Option<&str>) -> Result<(), String> {
 }
 /// What the UI may see: which providers have a key (never the key itself), and the
 /// key-store error when it is locked, so the model settings still load without it.
-pub fn settings_view(settings: &AgentSettings, keys: Result<HashMap<&'static str, String>, String>) -> Value {
+pub fn settings_view(
+    settings: &AgentSettings,
+    keys: Result<HashMap<&'static str, String>, String>,
+) -> Value {
     let (saved, key_store) = match keys {
-        Ok(keys) => (KEY_PROVIDERS.iter().map(|p| (*p, keys.contains_key(p))).collect::<HashMap<_, _>>(), None),
-        Err(error) => (KEY_PROVIDERS.iter().map(|p| (*p, false)).collect(), Some(error)),
+        Ok(keys) => (
+            KEY_PROVIDERS
+                .iter()
+                .map(|p| (*p, keys.contains_key(p)))
+                .collect::<HashMap<_, _>>(),
+            None,
+        ),
+        Err(error) => (
+            KEY_PROVIDERS.iter().map(|p| (*p, false)).collect(),
+            Some(error),
+        ),
     };
     json!({"settings": settings, "keys": saved, "chromaUrl": CHROMA_URL, "keyStore": key_store})
 }
@@ -302,7 +316,10 @@ pub fn runtime_config(settings: &AgentSettings) -> Result<Value, String> {
     Ok(runtime_config_from(settings, keys()))
 }
 /// A locked key store must not block CLI models: API models then report a missing key.
-pub fn runtime_config_from(settings: &AgentSettings, keys: Result<HashMap<&'static str, String>, String>) -> Value {
+pub fn runtime_config_from(
+    settings: &AgentSettings,
+    keys: Result<HashMap<&'static str, String>, String>,
+) -> Value {
     runtime_config_with(settings, &keys.unwrap_or_default())
 }
 pub fn runtime_config_with(
@@ -576,14 +593,20 @@ mod tests {
         let view = settings_view(&settings, Err("저장소 보류".into()));
         assert_eq!(view["keyStore"], "저장소 보류");
         assert_eq!(view["keys"]["anthropic"], false);
-        assert_eq!(view["settings"]["projectsRoot"], json!(settings.projects_root));
+        assert_eq!(
+            view["settings"]["projectsRoot"],
+            json!(settings.projects_root)
+        );
         let mut saved = HashMap::new();
         saved.insert("openai", "sk-secret".to_string());
         let view = settings_view(&settings, Ok(saved));
         assert!(view["keyStore"].is_null());
         assert_eq!(view["keys"]["openai"], true);
         assert_eq!(view["keys"]["anthropic"], false);
-        assert!(!view.to_string().contains("sk-secret"), "key values never reach the UI");
+        assert!(
+            !view.to_string().contains("sk-secret"),
+            "key values never reach the UI"
+        );
     }
     #[test]
     fn settings_reject_relative_roots_and_remote_ollama() {
@@ -636,7 +659,10 @@ mod tests {
     #[test]
     fn a_locked_key_store_still_configures_cli_models() {
         let mut settings = AgentSettings::default();
-        settings.agent_model = Some(ModelChoice { provider: "codex-cli".into(), model: String::new() });
+        settings.agent_model = Some(ModelChoice {
+            provider: "codex-cli".into(),
+            model: String::new(),
+        });
         let config = runtime_config_from(&settings, Err("저장소 보류".into()));
         assert_eq!(config["agentModel"]["provider"], "codex-cli");
         assert_eq!(config["keys"], json!({}));
