@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import path from "node:path";
+import { RunHistory } from "./graph/history.js";
 import { RunManager } from "./graph/runs.js";
 import { createModel, isProvider, listModels, providerStatus } from "./llm/index.js";
 import { defaultSearchPath } from "./llm/cli.js";
@@ -17,6 +18,7 @@ const MAX_LINE = 2 * 1024 * 1024;
 export function defaultSettings(): RuntimeSettings {
   return {
     projectsRoot: path.join(homedir(), "projects"),
+    historyDir: "",
     chromaUrl: "http://127.0.0.1:18765",
     searchPath: defaultSearchPath(),
     keys: {},
@@ -46,8 +48,11 @@ export function parseSettings(raw: unknown): RuntimeSettings {
   if (image && !["openai", "google"].includes(String(image.provider))) throw new UserError("이미지 공급자를 확인하세요.");
   const projectsRoot = text(v.projectsRoot ?? base.projectsRoot, "프로젝트 폴더", 1000);
   if (!path.isAbsolute(projectsRoot)) throw new UserError("프로젝트 폴더는 절대 경로여야 합니다.");
+  const historyDir = text(v.historyDir ?? "", "작업 기록 폴더", 1000, { optional: true });
+  if (historyDir && !path.isAbsolute(historyDir)) throw new UserError("작업 기록 폴더는 절대 경로여야 합니다.");
   return {
     projectsRoot,
+    historyDir,
     chromaUrl: text(v.chromaUrl ?? base.chromaUrl, "ChromaDB 주소", 200),
     searchPath: Array.isArray(v.searchPath) ? [...v.searchPath.filter((p): p is string => typeof p === "string" && path.isAbsolute(p)).slice(0, 40), ...base.searchPath] : base.searchPath,
     keys: Object.fromEntries(["anthropic", "openai", "google", "openrouter"].flatMap(k => (typeof keys[k] === "string" && keys[k] ? [[k, (keys[k] as string).trim()]] : []))),
@@ -62,6 +67,7 @@ export function parseSettings(raw: unknown): RuntimeSettings {
 export class Runtime {
   settings = defaultSettings();
   private indexing = new Map<string, AbortController>();
+  private historyDir = "";
   readonly runs: RunManager;
   constructor(private out: (event: OutboundEvent) => void) {
     this.runs = new RunManager(() => this.settings, event => this.out(event));
@@ -71,7 +77,14 @@ export class Runtime {
   async handle(method: string, params: unknown): Promise<unknown> {
     const p = (params && typeof params === "object" ? params : {}) as Record<string, unknown>;
     switch (method) {
-      case "configure": this.settings = parseSettings(params); return { ok: true };
+      case "configure": {
+        this.settings = parseSettings(params);
+        if (this.settings.historyDir && this.settings.historyDir !== this.historyDir) {
+          this.historyDir = this.settings.historyDir;
+          this.runs.attachHistory(new RunHistory(this.historyDir));
+        }
+        return { ok: true };
+      }
       case "status": return { version: VERSION, providers: await providerStatus(this.settings), chroma: await new ChromaClient(this.settings.chromaUrl).heartbeat(), projectsRoot: this.settings.projectsRoot };
       case "models.list": if (!isProvider(p.provider)) throw new UserError("공급자를 확인하세요."); return { models: await listModels(p.provider, this.settings) };
       case "projects.list": return { projects: listProjects(this.settings.projectsRoot) };

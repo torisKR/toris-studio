@@ -79,12 +79,18 @@ impl Default for AgentSettings {
     }
 }
 
-fn settings_path() -> PathBuf {
+fn config_dir() -> PathBuf {
     crate::config::config_path()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default()
-        .join("agent-settings.json")
+}
+fn settings_path() -> PathBuf {
+    config_dir().join("agent-settings.json")
+}
+/// Run logs, so a run's history survives the app closing.
+fn history_dir() -> PathBuf {
+    config_dir().join("agent-runs")
 }
 pub fn load_settings() -> Result<AgentSettings, String> {
     match std::fs::read(settings_path()) {
@@ -306,6 +312,7 @@ pub fn runtime_config_with(
     let image = settings.image.as_ref().filter(|c| !c.provider.is_empty());
     json!({
         "projectsRoot": settings.projects_root,
+        "historyDir": history_dir(),
         "chromaUrl": CHROMA_URL,
         "searchPath": search_path(),
         "keys": keys,
@@ -622,6 +629,8 @@ mod tests {
         assert!(config["image"].is_null());
         assert_eq!(config["keys"]["openai"], "sk-test");
         assert_eq!(config["chromaUrl"], CHROMA_URL);
+        let history = config["historyDir"].as_str().unwrap();
+        assert!(Path::new(history).is_absolute() && history.ends_with("agent-runs"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ import { ProjectIndex } from "../rag/index.js";
 import { projectFiles } from "../tools/fs.js";
 import { UserError, clip, errorText, redact } from "../util.js";
 import { buildGraph, type RunContext } from "./build.js";
+import type { RunHistory } from "./history.js";
 
 const MAX_EVENTS = 400;
 const MAX_RUNS = 30;
@@ -31,12 +32,24 @@ type Run = RunSummary & { controller: AbortController; graph: ReturnType<typeof 
 
 export class RunManager {
   private runs = new Map<string, Run>();
+  private history: RunHistory | null = null;
   constructor(
     private settings: () => RuntimeSettings,
     private send: (event: RunEvent) => void,
     private modelFactory: (settings: RuntimeSettings) => ChatModel = s => createModel(s.agentModel, s),
     private checkpointer: BaseCheckpointSaver = new MemorySaver(),
   ) {}
+
+  /** Loads saved runs and saves every later change. A run the app closed on cannot resume: its graph state was in memory. */
+  attachHistory(history: RunHistory): void {
+    this.history = history;
+    for (const saved of history.load()) {
+      if (this.runs.has(saved.runId)) continue;
+      const run = { ...saved, pending: null, controller: new AbortController(), graph: null, driving: Promise.resolve(), seq: saved.events.at(-1)?.seq ?? 0 } as Run;
+      this.runs.set(run.runId, run);
+      if (!isTerminal(run.phase)) this.emit(run, run.agent, "failed", "앱이 꺼져 작업이 멈췄습니다. 같은 작업을 다시 시작하세요.");
+    }
+  }
 
   list(): RunSummary[] {
     return [...this.runs.values()].map(run => this.view(run, false)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -143,7 +156,12 @@ export class RunManager {
     const event: RunEvent = { event: "run", runId: run.runId, seq: run.seq, at: run.updatedAt, agent, phase, message, ...(extra.detail ? { detail: redact(clip(extra.detail, 8000)) } : {}), ...(approval ? { approval } : {}), ...(extra.changes ? { changes: run.changes } : {}) };
     run.events.push(event);
     if (run.events.length > MAX_EVENTS) run.events.splice(0, run.events.length - MAX_EVENTS);
+    this.persist(run);
     this.send(event);
+  }
+
+  private persist(run: Run): void {
+    try { this.history?.save(this.view(run, true)); } catch { /* the run goes on; only its saved copy is stale */ }
   }
 
   private view(run: Run, events: boolean): RunSummary {
@@ -152,7 +170,7 @@ export class RunManager {
   }
   private require(runId: string): Run {
     const run = this.runs.get(runId);
-    if (!run) throw new UserError("작업을 찾을 수 없습니다. 런타임이 다시 시작되면 진행 중이던 작업은 사라집니다.");
+    if (!run) throw new UserError("작업을 찾을 수 없습니다.");
     return run;
   }
   private prune(): void {

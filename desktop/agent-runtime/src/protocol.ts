@@ -11,6 +11,8 @@ export type ModelChoice = { provider: ProviderId; model: string };
 
 export type RuntimeSettings = {
   projectsRoot: string;
+  /** Where run logs are saved; "" keeps them in memory only. */
+  historyDir: string;
   chromaUrl: string;
   /** Extra directories searched for subscription CLIs (GUI apps do not inherit shell PATH). */
   searchPath: string[];
