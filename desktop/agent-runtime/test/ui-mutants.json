@@ -1,7 +1,79 @@
 [
- {"id":"ui.pub-draft-unbound","file":"desktop/src/PublicationPanel.tsx","find":"{ input: { requestId: request.id, title:","replace":"{ input: { requestId: crypto.randomUUID(), title:","cmd":["node","scripts/verify-publication-ui.mjs"],"timeoutMs":400000},
- {"id":"ui.agent-approve-wrong-id","file":"desktop/src/AgentPanel.tsx","find":"actionId: run.pending.id, decision,","replace":"actionId: \"x\", decision,","cmd":["node","scripts/verify-agent-ui.mjs"],"timeoutMs":400000},
- {"id":"ui.agent-early-events-lost","file":"desktop/src/AgentPanel.tsx","find":"const run = buffered.reduce<RunSummary>((acc, event) => applyEvent(acc, event) ?? acc, started);","replace":"const run = started;","cmd":["node","scripts/verify-agent-ui.mjs"],"timeoutMs":400000},
- {"id":"ui.agent-key-not-cleared","file":"desktop/src/AgentSettingsCard.tsx","find":"useEffect(() => { setDraft(view.settings); setKeys({}); }, [view]);","replace":"useEffect(() => { setDraft(view.settings); }, [view]);","cmd":["node","scripts/verify-agent-ui.mjs"],"timeoutMs":400000},
- {"id":"ui.ai-write-not-sent","file":"desktop/src/App.tsx","find":"      const result = await generateText(chatBrief(aiPlatform, aiTopic, aiContext, aiReferences));","replace":"      const result = { text: \"\", provider: \"\", model: \"\" };","cmd":["node","scripts/verify-ai-workspace.mjs"],"timeoutMs":400000}
+ {
+  "id": "ui.pub-draft-unbound",
+  "file": "desktop/src/PublicationPanel.tsx",
+  "find": "{ input: { requestId: request.id, title:",
+  "replace": "{ input: { requestId: crypto.randomUUID(), title:",
+  "cmd": [
+   "node",
+   "scripts/verify-publication-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-approve-wrong-id",
+  "file": "desktop/src/AgentPanel.tsx",
+  "find": "actionId: run.pending.id, decision,",
+  "replace": "actionId: \"x\", decision,",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-early-events-lost",
+  "file": "desktop/src/AgentPanel.tsx",
+  "find": "const run = buffered.reduce<RunSummary>((acc, event) => applyEvent(acc, event) ?? acc, started);",
+  "replace": "const run = started;",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.agent-key-not-cleared",
+  "file": "desktop/src/AgentSettingsCard.tsx",
+  "find": "useEffect(() => { setDraft(view.settings); setKeys({}); }, [view]);",
+  "replace": "useEffect(() => { setDraft(view.settings); }, [view]);",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.ai-write-not-sent",
+  "file": "desktop/src/App.tsx",
+  "find": "      const result = await generateText(chatBrief(aiPlatform, aiTopic, aiContext, aiReferences));",
+  "replace": "      const result = { text: \"\", provider: \"\", model: \"\" };",
+  "cmd": [
+   "node",
+   "scripts/verify-ai-workspace.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.office-paper-never-flies",
+  "file": "desktop/src/AgentOffice.tsx",
+  "find": "if (first || prefersReducedMotion() || !floor.current) return;",
+  "replace": "return;",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.office-desk-filter-ignored",
+  "file": "desktop/src/AgentRunView.tsx",
+  "find": ".filter(e => !focus || e.agent === focus)",
+  "replace": "",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ }
 ]

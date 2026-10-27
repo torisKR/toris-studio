@@ -76,17 +76,6 @@ export function bufferEarlyEvent(buffer: Map<string, RunEvent[]>, event: RunEven
   while (buffer.size > EARLY_RUNS) buffer.delete(buffer.keys().next().value!);
 }
 
-/** Coarse stage progress, not a time estimate: plan → code → verify → done. */
-export function stageProgress(run: Pick<RunSummary, "phase" | "agent" | "events">): { percent: number; label: string } {
-  if (run.phase === "done") return { percent: 100, label: "완료" };
-  if (run.phase === "failed" || run.phase === "cancelled") return { percent: 100, label: PHASE_LABELS[run.phase] };
-  const reachedQa = run.events.some(e => e.agent === "qa");
-  const reachedWorker = run.events.some(e => e.agent === "frontend" || e.agent === "backend");
-  const stage = run.agent === "qa" || (reachedQa && run.agent === "supervisor") ? 2 : run.agent === "supervisor" && !reachedWorker ? 0 : 1;
-  const percent = [12, 50, 82][stage];
-  return { percent, label: ["계획", "구현", "검증"][stage] + ` · ${PHASE_LABELS[run.phase]}` };
-}
-
 /** Split a unified diff into typed lines for display. */
 export function diffLines(diff: string): Array<{ kind: "add" | "del" | "hunk" | "meta" | "ctx"; text: string }> {
   return diff.split("\n").filter(line => !line.startsWith("====")).map(text => ({

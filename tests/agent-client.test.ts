@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EARLY_EVENTS_PER_RUN, EARLY_RUNS, agentCall, applyEvent, bufferEarlyEvent, diffLines, saveSettings, stageProgress } from "../desktop/src/agent-client";
+import { EARLY_EVENTS_PER_RUN, EARLY_RUNS, agentCall, applyEvent, bufferEarlyEvent, diffLines, saveSettings } from "../desktop/src/agent-client";
 import type { RunEvent, RunSummary } from "../desktop/src/agent-client";
 
 const base: RunSummary = { runId: "r1", project: "demo", task: "t", phase: "queued", agent: "supervisor", createdAt: "2026-10-27T00:00:00Z", updatedAt: "2026-10-27T00:00:00Z", pending: null, changes: [], summary: "", events: [] };
@@ -18,13 +18,6 @@ test("events apply in order; duplicates, stale and foreign events never rewind t
   assert.equal(run.summary, "완료 요약");
   assert.deepEqual(run.changes, ["src/a.ts"]);
   assert.equal(run.events.length, 4);
-});
-
-test("stage progress reflects plan, implement, verify without inventing time", () => {
-  assert.equal(stageProgress({ ...base, phase: "thinking" }).percent, 12);
-  assert.equal(stageProgress({ ...base, agent: "backend", phase: "coding", events: [event(1, { agent: "backend" })] }).percent, 50);
-  assert.equal(stageProgress({ ...base, agent: "qa", phase: "testing", events: [event(1, { agent: "qa" })] }).percent, 82);
-  assert.equal(stageProgress({ ...base, phase: "done" }).percent, 100);
 });
 
 test("diff lines are typed for display", () => {

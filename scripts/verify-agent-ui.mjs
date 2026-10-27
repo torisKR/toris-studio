@@ -80,22 +80,47 @@ try {
   await card.waitFor();
   assert.equal(await card.locator('.diff-add').count(), 1);
   assert.equal(await card.locator('.diff-del').count(), 1);
-  assert.match(await page.locator('.agent-lane.active').innerText(), /Backend Expert[\s\S]*승인 대기/);
-  assert.equal(await page.getByRole('progressbar').first().getAttribute('aria-valuenow'), '50');
+  const office = page.getByRole('region', { name: '에이전트 사무실' });
+  assert.equal(await office.getByRole('button', { name: /책상/ }).count(), 4, 'one desk per agent role');
+  assert.match(await office.getByRole('button', { name: /Backend Expert 책상/ }).getAttribute('aria-label'), /결재 대기/);
+  assert.match(await office.getByRole('button', { name: /Supervisor 책상/ }).getAttribute('aria-label'), /PM/);
+  assert.equal(await office.locator('[aria-current="step"]').innerText(), '결재 대기');
+  await office.getByRole('list', { name: '서류 이동 기록' }).getByText('Backend Expert → 나 · 결재 요청 · src/cart.ts').waitFor();
+  assert.equal(await page.evaluate(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length), 0, 'reduced motion: nothing moves');
   await page.screenshot({ path: resolve(out, 'agent-approval.png'), fullPage: true });
-  report.checks.push('Events drive lanes, stage progress and a diff approval card before any write');
+  report.checks.push('Office view: a desk per role, PM desk, procedure step, paper hand-off log, no motion under reduced motion');
+
+  // Clicking a desk shows only that agent's log; clicking again shows everything.
+  const timeline = page.getByRole('list', { name: '진행 기록' });
+  await office.getByRole('button', { name: /Backend Expert 책상/ }).click();
+  assert.equal(await office.getByRole('button', { name: /Backend Expert 책상/ }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await timeline.locator('li').count(), 2, 'only backend events');
+  await office.getByRole('button', { name: /Backend Expert 책상/ }).click();
+  assert.equal(await timeline.locator('li').count(), 4, 'all events again');
+  report.checks.push('Desk selection filters the log to that agent and toggles back');
+
+  // With motion allowed, a new hand-off flies a paper from one desk to the next.
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await emit(ev(5, 'qa', 'reviewing', '결과를 검토하고 있습니다.'));
+  await office.locator('.office-paper[data-kind="report"]').waitFor();
+  assert.ok(await page.evaluate(() => document.querySelector('.office-paper').getAnimations().length > 0), 'paper animates');
+  await page.waitForFunction(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length === 0, null, { timeout: 5000 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  report.checks.push('A hand-off animates once and then stops (no endless motion)');
+  await emit(ev(6, 'backend', 'awaiting_approval', 'src/cart.ts 변경 승인을 기다립니다.', { approval }));
+  await card.waitFor();
 
   await card.getByLabel('승인 의견').fill('좋아요');
   await card.getByRole('button', { name: '승인하고 실행' }).click();
   await page.waitForFunction(() => !document.querySelector('[aria-label="승인 요청"]'));
   assert.deepEqual(decisions, [{ runId: 'run-qa', actionId: 'act-1', decision: 'approve', feedback: '좋아요' }]);
-  await emit(ev(5, 'backend', 'coding', 'src/cart.ts에 변경을 적용했습니다.', { changes: ['src/cart.ts'] }));
-  await emit(ev(6, 'qa', 'awaiting_approval', '검증 명령 승인을 기다립니다: pnpm test', { approval: { kind: 'run_command', id: 'act-2', agent: 'qa', command: ['pnpm', 'test'], cwd: 'demo-shop', reason: '변경 사항 검증' } }));
+  await emit(ev(7, 'backend', 'coding', 'src/cart.ts에 변경을 적용했습니다.', { changes: ['src/cart.ts'] }));
+  await emit(ev(8, 'qa', 'awaiting_approval', '검증 명령 승인을 기다립니다: pnpm test', { approval: { kind: 'run_command', id: 'act-2', agent: 'qa', command: ['pnpm', 'test'], cwd: 'demo-shop', reason: '변경 사항 검증' } }));
   await page.getByLabel('실행할 명령').getByText('demo-shop$ pnpm test').waitFor();
   await page.getByRole('region', { name: '승인 요청' }).getByRole('button', { name: '거절' }).click();
   await page.waitForFunction(() => !document.querySelector('[aria-label="승인 요청"]'));
   assert.equal(decisions[1].decision, 'reject');
-  await emit(ev(7, 'supervisor', 'done', '작업을 완료했습니다.', { detail: '합계를 가격 합으로 고쳤습니다.', changes: ['src/cart.ts'] }));
+  await emit(ev(9, 'supervisor', 'done', '작업을 완료했습니다.', { detail: '합계를 가격 합으로 고쳤습니다.', changes: ['src/cart.ts'] }));
   await page.locator('.agent-run .social-notice', { hasText: '합계를 가격 합으로 고쳤습니다.' }).waitFor();
   await page.locator('.agent-changes code', { hasText: 'src/cart.ts' }).waitFor();
   report.checks.push('Approve and reject send the exact action id; done shows summary and changed files');

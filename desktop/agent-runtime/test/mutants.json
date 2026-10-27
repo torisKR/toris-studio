@@ -440,5 +440,40 @@
   "find": "while (buffer.size > EARLY_RUNS)",
   "replace": "while (false)",
   "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "office.sendback-as-report",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (from === \"qa\" && WORKERS.includes(to)) return \"sendBack\";",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.no-final-report",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (TERMINAL.includes(event.phase)) add(event.agent, \"user\", \"final\", event.seq);",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.no-approval-paper",
+  "file": "desktop/src/agent-office.ts",
+  "find": "if (event.phase === \"awaiting_approval\" && event.approval) add(",
+  "replace": "if (false) add(",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.everyone-busy",
+  "file": "desktop/src/agent-office.ts",
+  "find": "last?.agent === agent.id ? ACTIVITY[run.phase] ?? \"thinking\" : \"waiting\"",
+  "replace": "ACTIVITY[run.phase] ?? \"thinking\"",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "office.written-double-counted",
+  "file": "desktop/src/agent-office.ts",
+  "find": "      if (seen.has(file)) continue;\n",
+  "replace": "",
+  "test": "tests/agent-office.test.ts"
  }
 ]

@@ -1,27 +1,10 @@
-import { Bot, Check, CircleAlert, Code2, FileCode2, LayoutTemplate, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { Check, CircleAlert, FileCode2, Square, Terminal, X } from "lucide-react";
 import { useState } from "react";
-import { AGENTS, PHASE_LABELS, diffLines, stageProgress, type AgentRole, type PendingAction, type RunSummary } from "./agent-client";
+import { AGENTS, PHASE_LABELS, diffLines, type AgentRole, type PendingAction, type RunSummary } from "./agent-client";
+import { AgentOffice } from "./AgentOffice";
+import "./AgentOffice.css";
 
-const ICONS: Record<AgentRole, typeof Bot> = { supervisor: Bot, frontend: LayoutTemplate, backend: Code2, qa: ShieldCheck };
 const time = (iso: string) => new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-function Lanes({ run }: { run: RunSummary }) {
-  const terminal = run.phase === "done" || run.phase === "failed" || run.phase === "cancelled";
-  return <div className="agent-lanes" role="list" aria-label="에이전트 상태">
-    {AGENTS.map(agent => {
-      const Icon = ICONS[agent.id];
-      const active = !terminal && run.agent === agent.id;
-      const last = [...run.events].reverse().find(e => e.agent === agent.id);
-      const touched = Boolean(last);
-      return <div key={agent.id} role="listitem" className={`agent-lane${active ? " active" : ""}${touched ? " touched" : ""}`} data-phase={active ? run.phase : undefined} aria-current={active ? "step" : undefined}>
-        <span className="agent-avatar" aria-hidden="true"><Icon size={20} /></span>
-        <div><strong>{agent.name}</strong><small>{agent.role}</small>
-          <span className="agent-lane-state">{active ? PHASE_LABELS[run.phase] : touched ? (terminal ? "종료" : "대기") : "-"}</span>
-        </div>
-      </div>;
-    })}
-  </div>;
-}
 
 function Approval({ action, busy, onDecide }: { action: PendingAction; busy: boolean; onDecide: (decision: "approve" | "reject", feedback: string) => void }) {
   const [feedback, setFeedback] = useState("");
@@ -42,22 +25,21 @@ function Approval({ action, busy, onDecide }: { action: PendingAction; busy: boo
 }
 
 export function AgentRunView({ run, busy, onDecide, onCancel }: { run: RunSummary; busy: boolean; onDecide: (decision: "approve" | "reject", feedback: string) => void; onCancel: () => void }) {
-  const progress = stageProgress(run);
   const terminal = run.phase === "done" || run.phase === "failed" || run.phase === "cancelled";
+  const [focus, setFocus] = useState<AgentRole | null>(null);
+  const events = [...run.events].reverse().filter(e => !focus || e.agent === focus).slice(0, 120);
   return <section className="agent-card agent-run" aria-label="작업 진행">
     <div className="agent-card-head">
       <div><h2>{run.project}</h2><p className="agent-task">{run.task}</p></div>
       {!terminal && <button className="social-button" onClick={onCancel}><Square size={14} />작업 취소</button>}
     </div>
-    <div className="agent-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.percent} aria-valuetext={progress.label}>
-      <span style={{ width: `${progress.percent}%` }} data-state={run.phase} /><b>{progress.label}</b>
-    </div>
-    <Lanes run={run} />
+    <AgentOffice run={run} focus={focus} onFocus={setFocus} />
     {run.pending && run.phase === "awaiting_approval" && <Approval key={run.pending.id} action={run.pending} busy={busy} onDecide={onDecide} />}
     {terminal && <div className={`social-notice ${run.phase === "done" ? "success" : "info"}`}><span><strong>{PHASE_LABELS[run.phase]}</strong> {run.summary}</span></div>}
     {run.changes.length > 0 && <div className="agent-changes"><strong>변경한 파일</strong>{run.changes.map(file => <code key={file}>{file}</code>)}</div>}
+    {focus && <div className="agent-filter"><span>{AGENTS.find(a => a.id === focus)?.name} 기록만 보는 중</span><button type="button" className="social-button compact" onClick={() => setFocus(null)}>전체 보기</button></div>}
     <ol className="agent-timeline" aria-label="진행 기록">
-      {[...run.events].reverse().slice(0, 120).map(event => <li key={event.seq} data-agent={event.agent} data-phase={event.phase}>
+      {events.map(event => <li key={event.seq} data-agent={event.agent} data-phase={event.phase}>
         <time>{time(event.at)}</time><span className="agent-chip">{AGENTS.find(a => a.id === event.agent)?.name}</span><span>{event.message}</span>
         {event.detail && <details><summary>자세히</summary><pre>{event.detail}</pre></details>}
       </li>)}
