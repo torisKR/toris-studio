@@ -125,6 +125,11 @@ try {
     }
   };
   await assertAligned(1380);
+  const [selectHeight, inputHeight] = await page.evaluate(() => {
+    const box = document.querySelector('.agent-grid > .agent-picker');
+    return [box.querySelector('select'), box.querySelector('input')].map(el => Math.round(el.getBoundingClientRect().height));
+  });
+  assert.ok(Math.abs(selectHeight - inputHeight) <= 1, `select ${selectHeight}px vs input ${inputHeight}px`);
 
   await page.setViewportSize({ width: 820, height: 900 });
   await assertAligned(820);
