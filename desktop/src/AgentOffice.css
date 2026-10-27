@@ -18,18 +18,19 @@
 .pixel-plate { font: 700 4px var(--o-mono); fill: #e8eef5; letter-spacing: .4px; }
 .pixel-person.is-away, .pixel-person.is-walking { opacity: 0; }
 
-/* A walk: out to the other desk, a short stop, back. Whole-pixel steps keep the pixel look. */
-.pixel-walker { animation: pixel-walk 3s steps(10, jump-none) 1 both; }
+/* A walk: out to the other desk, a short stop, back. Whole-pixel steps keep the pixel look.
+   --walk sets the whole trip; one leg swap takes 0.5s, so 10 swaps fill it. */
+.pixel-walker { --walk: 5s; animation: pixel-walk var(--walk) steps(16, jump-none) 1 both; }
 @keyframes pixel-walk {
   0% { transform: translate(var(--fx), var(--fy)); }
   40%, 60% { transform: translate(var(--tx), var(--ty)); }
   100% { transform: translate(var(--fx), var(--fy)); }
 }
-.pixel-walker .f-stride { opacity: 0; animation: pixel-step .3s steps(1) 10; }
-.pixel-walker .f-stand { animation: pixel-step-back .3s steps(1) 10; }
+.pixel-walker .f-stride { opacity: 0; animation: pixel-step .5s steps(1) 10; }
+.pixel-walker .f-stand { animation: pixel-step-back .5s steps(1) 10; }
 @keyframes pixel-step { 0% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pixel-step-back { 0% { opacity: 0; } 50% { opacity: 1; } }
-.pixel-carried { animation: pixel-drop 3s steps(1) 1 both; }
+.pixel-carried { animation: pixel-drop var(--walk) steps(1) 1 both; }
 .pixel-walker[data-kind="order"] .pixel-carried { animation-name: pixel-pick; }
 @keyframes pixel-drop { 0% { opacity: 1; } 50%, 100% { opacity: 0; } }
 @keyframes pixel-pick { 0% { opacity: 0; } 50%, 100% { opacity: 1; } }

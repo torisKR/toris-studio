@@ -112,8 +112,10 @@ try {
   await emit(ev(5, 'qa', 'reviewing', '결과를 검토하고 있습니다.'));
   await office.locator('.pixel-walker[data-kind="report"][data-walker="backend"]').waitFor({ state: 'attached' });
   assert.ok(await page.evaluate(() => document.querySelector('.pixel-walker').getAnimations({ subtree: true }).length > 0), 'walker animates');
+  const walkMs = await page.evaluate(() => document.querySelector('.pixel-walker').getAnimations().find(a => a.animationName === 'pixel-walk').effect.getTiming().duration);
+  assert.ok(walkMs >= 5000, `a walk takes at least 5s (got ${walkMs}ms)`);
   assert.equal(await office.locator('[data-character="backend"].is-walking').count(), 1, 'the seat is empty while walking');
-  await page.waitForFunction(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length === 0, null, { timeout: 8000 });
+  await page.waitForFunction(() => document.querySelector('[aria-label="에이전트 사무실"]').getAnimations({ subtree: true }).length === 0, null, { timeout: 10000 });
   assert.equal(await office.locator('.pixel-walker').count(), 0, 'walker is gone after returning');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   report.checks.push('A hand-off walks the sender to the other desk and back once, then everything stops');
