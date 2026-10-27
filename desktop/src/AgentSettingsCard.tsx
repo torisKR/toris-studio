@@ -1,5 +1,5 @@
 import { Eye, EyeOff, KeyRound, Save, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { ModelChoice, ProviderInfo } from "./ai-client";
 import { KEY_PROVIDERS, agentCall, saveSettings, type AgentSettings, type SettingsView } from "./agent-client";
 
@@ -14,6 +14,15 @@ const EMBEDDINGS = [
   { id: "ollama", label: "Ollama 임베딩", model: "nomic-embed-text" },
 ];
 
+/** One settings card. A plain grid box (not <fieldset>) so its rows can join the parent grid. */
+function PickerBox({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+  const id = useId();
+  return <div className="agent-picker" role="group" aria-labelledby={id}>
+    <strong className="agent-picker-title" id={id}>{title}</strong><p className="agent-hint">{hint}</p>
+    {children}
+  </div>;
+}
+
 function ModelPicker({ label, hint, value, providers, onChange }: { label: string; hint: string; value: ModelChoice | null; providers: ProviderInfo[]; onChange: (v: ModelChoice | null) => void }) {
   const [models, setModels] = useState<string[]>([]);
   const provider = providers.find(p => p.id === value?.provider);
@@ -26,8 +35,7 @@ function ModelPicker({ label, hint, value, providers, onChange }: { label: strin
     return () => { live = false; };
   }, [value?.provider, provider?.available, provider?.kind, provider?.suggestedModels]);
   const listId = `agent-models-${label}`;
-  return <fieldset className="agent-picker">
-    <legend>{label}</legend><p className="agent-hint">{hint}</p>
+  return <PickerBox title={label} hint={hint}>
     <select aria-label={`${label} 공급자`} value={value?.provider ?? ""} onChange={e => onChange(e.target.value ? { provider: e.target.value, model: "" } : null)}>
       <option value="">선택 안 함</option>
       <optgroup label="구독 (CLI 로그인)">{providers.filter(p => p.kind === "subscription").map(p => <option key={p.id} value={p.id}>{p.label}{p.plan ? ` · ${p.plan}` : ""}{p.available ? "" : " (미설치)"}</option>)}</optgroup>
@@ -39,7 +47,7 @@ function ModelPicker({ label, hint, value, providers, onChange }: { label: strin
       <datalist id={listId}>{models.slice(0, 300).map(m => <option key={m} value={m} />)}</datalist>
       {provider && <small className={provider.available ? "agent-ok" : "agent-warn"}>{provider.detail}</small>}
     </>}
-  </fieldset>;
+  </PickerBox>;
 }
 
 export function AgentSettingsCard({ view, providers, busy, onSaved, onError }: Props) {
@@ -63,18 +71,18 @@ export function AgentSettingsCard({ view, providers, busy, onSaved, onError }: P
     <div className="agent-grid">
       <ModelPicker label="에이전트" hint="Supervisor·Expert·QA가 코드 작업에 사용합니다." value={draft.agentModel} providers={providers} onChange={set("agentModel")} />
       <ModelPicker label="콘텐츠 작성" hint="AI 작업실·영상 초안·SNS 문구에 사용합니다. 비우면 에이전트 모델을 씁니다." value={draft.contentModel} providers={providers} onChange={set("contentModel")} />
-      <fieldset className="agent-picker"><legend>이미지 생성</legend><p className="agent-hint">이미지 생성기에서 사용합니다. API 키가 필요합니다.</p>
+      <PickerBox title="이미지 생성" hint="이미지 생성기에서 사용합니다. API 키가 필요합니다.">
         <select aria-label="이미지 공급자" value={draft.image?.provider ?? ""} onChange={e => { const p = IMAGE_PROVIDERS.find(x => x.id === e.target.value); setDraft(d => ({ ...d, image: p ? { provider: p.id, model: p.model } : null })); }}>
           <option value="">선택 안 함</option>{IMAGE_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
         {draft.image && <input aria-label="이미지 모델" value={draft.image.model} onChange={e => setDraft(d => ({ ...d, image: d.image ? { ...d.image, model: e.target.value } : null }))} />}
-      </fieldset>
-      <fieldset className="agent-picker"><legend>코드 검색 임베딩</legend><p className="agent-hint">바꾸면 프로젝트를 다시 색인해야 합니다.</p>
+      </PickerBox>
+      <PickerBox title="코드 검색 임베딩" hint="바꾸면 프로젝트를 다시 색인해야 합니다.">
         <select aria-label="임베딩 공급자" value={draft.embedding.provider} onChange={e => { const p = EMBEDDINGS.find(x => x.id === e.target.value)!; setDraft(d => ({ ...d, embedding: { provider: p.id, model: p.model } })); }}>
           {EMBEDDINGS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
         {draft.embedding.provider !== "local" && <input aria-label="임베딩 모델" value={draft.embedding.model} onChange={e => setDraft(d => ({ ...d, embedding: { ...d.embedding, model: e.target.value } }))} />}
-      </fieldset>
+      </PickerBox>
     </div>
     <div className="agent-keys" aria-label="API 키">
       <h3><KeyRound size={15} />API 키 <small>OS 키체인에 저장 · 화면에 다시 표시하지 않음</small></h3>

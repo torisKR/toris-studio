@@ -74,8 +74,11 @@
 .agent-timeline li[data-phase="awaiting_approval"] > span:last-of-type { color: #f2c46d; }
 .agent-timeline li[data-phase="done"] > span:last-of-type { color: #86d4a4; }
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-.agent-picker { display: grid; gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--social-line); border-radius: 9px; min-width: 0; }
-.agent-picker legend { padding: 0 4px; font-size: 13px; font-weight: 600; }
+/* Pickers share the grid's rows (title, hint, select, model, status) so a row of cards lines up. */
+.agent-picker { display: grid; grid-row: span 5; grid-template-rows: subgrid; row-gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--social-line); border-radius: 9px; min-width: 0; }
+.agent-picker > * { align-self: start; }
+.agent-picker .agent-hint { margin: 0; }
+.agent-picker-title { font-size: 13px; font-weight: 600; }
 .agent-picker small { font-size: 12px; }
 .agent-keys { display: grid; gap: 6px; }
 .agent-key-row { display: grid; grid-template-columns: 110px 70px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; font-size: 13px; }

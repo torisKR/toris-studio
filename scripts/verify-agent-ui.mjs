@@ -108,7 +108,27 @@ try {
   assert.equal((await page.content()).includes('sk-qa-secret-value'), false, 'saved key is never rendered');
   report.checks.push('API key goes only to agent_settings_save and is not shown again');
 
+  // Model pickers on one row line up: their first select starts at the same height and has the same size.
+  const pickerRows = () => page.evaluate(() => {
+    const rows = new Map();
+    for (const box of document.querySelectorAll('.agent-grid > .agent-picker')) {
+      const top = Math.round(box.getBoundingClientRect().top);
+      const select = box.querySelector('select').getBoundingClientRect();
+      rows.set(top, [...(rows.get(top) ?? []), { top: Math.round(select.top), height: Math.round(select.height) }]);
+    }
+    return [...rows.values()].filter(row => row.length > 1);
+  });
+  const assertAligned = async width => {
+    for (const row of await pickerRows()) {
+      assert.ok(row.every(s => Math.abs(s.top - row[0].top) <= 1), `select tops differ at ${width}px: ${JSON.stringify(row)}`);
+      assert.ok(row.every(s => Math.abs(s.height - row[0].height) <= 1), `select heights differ at ${width}px: ${JSON.stringify(row)}`);
+    }
+  };
+  await assertAligned(1380);
+
   await page.setViewportSize({ width: 820, height: 900 });
+  await assertAligned(820);
+  report.checks.push('Model picker selects on one row share top and height (1380px, 820px)');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'no horizontal overflow at 820px');
   await page.screenshot({ path: resolve(out, 'agent-narrow.png'), fullPage: true });
   assert.deepEqual(report.errors, []);
