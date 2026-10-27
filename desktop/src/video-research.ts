@@ -16,7 +16,7 @@ export type VideoResearchSource = {
   fetchedAt: string;
 };
 
-export type VideoResearchProvider = "local" | "chatgpt";
+export type VideoResearchProvider = "local" | "agent-model";
 
 export type VideoResearchPreview = {
   sources: VideoResearchSource[];

@@ -3,13 +3,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PRESET_IDS: [&str; 6] = [
+pub const PRESET_IDS: [&str; 12] = [
     "kinetic-title",
     "stagger-rise",
     "slide-reveal",
     "focus-pulse",
     "parallax-pan",
     "orbit-cards",
+    "lower-third",
+    "count-up",
+    "bar-chart",
+    "progress-steps",
+    "quote-card",
+    "logo-reveal",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -21,6 +27,18 @@ pub enum MotionPreset {
     FocusPulse,
     ParallaxPan,
     OrbitCards,
+    /// Headline settles low as a name strap; body slides in beside it.
+    LowerThird,
+    /// A number counts up from `countUp.from` to `countUp.to` (Rust draws each step).
+    CountUp,
+    /// Bars grow to the values in `chart` (Rust draws them; the model never sees pixels).
+    BarChart,
+    /// Body cards light up one after another as numbered steps.
+    ProgressSteps,
+    /// The body is set as a large quote card that eases in and holds.
+    QuoteCard,
+    /// The scene's logo asset scales in at the centre, then the headline follows.
+    LogoReveal,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -50,6 +68,120 @@ impl MotionSpec {
     }
 }
 
+/// How a scene enters and leaves. Applied per segment as fades, so concat stays a plain copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Transition {
+    #[default]
+    Cut,
+    Fade,
+    /// Fade through the scene's dark background colour.
+    Dip,
+}
+
+impl Transition {
+    pub fn from_scene(scene: &Value) -> Result<Self, String> {
+        match scene.get("transition") {
+            None => Ok(Self::Cut),
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|_| "장면 전환은 cut, fade, dip 중 하나여야 합니다.".to_string()),
+        }
+    }
+    /// Segment-level FFmpeg filter (fade in at start, out at end). Fixed text; no user value enters it.
+    pub fn filter(self, duration: f64) -> Option<String> {
+        let length = match self {
+            Self::Cut => return None,
+            Self::Fade => 0.35,
+            Self::Dip => 0.5,
+        };
+        let length = f64::min(length, duration / 3.0);
+        let out = (duration - length).max(0.0);
+        let color = if self == Self::Dip {
+            ":color=0x09101b"
+        } else {
+            ""
+        };
+        Some(format!(
+            "fade=t=in:st=0:d={length:.3}{color},fade=t=out:st={out:.3}:d={length:.3}{color}"
+        ))
+    }
+}
+
+/// Bounded data for the count-up preset. Values are finite; text is a short unit label.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CountUp {
+    pub from: f64,
+    pub to: f64,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub decimals: u8,
+}
+
+/// Bounded data for the bar-chart preset: 2 to 8 bars with finite, non-negative values.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChartBar {
+    pub label: String,
+    pub value: f64,
+}
+
+pub const COUNT_STEPS: usize = 12;
+const MAX_ABS: f64 = 1e12;
+
+fn label_ok(text: &str, max: usize) -> bool {
+    text.chars().count() <= max && !text.chars().any(char::is_control)
+}
+
+pub fn count_up(scene: &Value) -> Result<Option<CountUp>, String> {
+    let Some(value) = scene.get("countUp") else {
+        return Ok(None);
+    };
+    let data: CountUp = serde_json::from_value(value.clone())
+        .map_err(|_| "숫자 카운터는 from, to, unit, decimals만 사용할 수 있습니다.")?;
+    if !data.from.is_finite()
+        || !data.to.is_finite()
+        || data.from.abs() > MAX_ABS
+        || data.to.abs() > MAX_ABS
+        || data.decimals > 2
+        || !label_ok(&data.unit, 8)
+    {
+        return Err("숫자 카운터 값(유한한 수, 소수 0~2자리, 단위 8자 이하)을 확인하세요.".into());
+    }
+    Ok(Some(data))
+}
+
+pub fn chart(scene: &Value) -> Result<Option<Vec<ChartBar>>, String> {
+    let Some(value) = scene.get("chart") else {
+        return Ok(None);
+    };
+    let bars: Vec<ChartBar> = serde_json::from_value(value.clone())
+        .map_err(|_| "차트는 label과 value 목록이어야 합니다.")?;
+    if !(2..=8).contains(&bars.len())
+        || bars.iter().any(|bar| {
+            !bar.value.is_finite()
+                || bar.value < 0.0
+                || bar.value > MAX_ABS
+                || bar.label.trim().is_empty()
+                || !label_ok(&bar.label, 16)
+        })
+    {
+        return Err(
+            "차트는 2~8개 막대, 0 이상 유한한 값, 16자 이하 라벨만 사용할 수 있습니다.".into(),
+        );
+    }
+    Ok(Some(bars))
+}
+
+/// The value shown at count step `step` of `COUNT_STEPS`, eased so it slows near the target.
+pub fn count_label(data: &CountUp, step: usize) -> String {
+    let t = ease_out_cubic(step as f64 / (COUNT_STEPS - 1) as f64);
+    let value = data.from + (data.to - data.from) * t;
+    let precision = data.decimals as usize;
+    format!("{value:.precision$}{}", data.unit)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum LayerRole {
     Eyebrow,
@@ -57,6 +189,17 @@ pub(crate) enum LayerRole {
     Body(u8),
     Accent(u8),
     Footer,
+    /// A count-up step frame; only step `n` is visible during its time slice.
+    Count(u8),
+    /// One chart bar, drawn at full height; the filter reveals it bottom-up.
+    Bar(u8),
+    /// A logo image supplied as a project-local asset.
+    Logo,
+    /// A burned-in caption cue, visible only between its start and end.
+    Caption {
+        start_ms: u32,
+        end_ms: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -106,6 +249,9 @@ pub(crate) fn filter_graph(
             LayerRole::Body(row) => 3.0 + row as f64,
             LayerRole::Accent(row) => row as f64,
             LayerRole::Footer => 0.0,
+            LayerRole::Count(_) | LayerRole::Logo => 0.5,
+            LayerRole::Bar(row) => 3.0 + row as f64 * 0.6,
+            LayerRole::Caption { .. } => 0.0,
         };
         let delay = if amount == 0.0 { 0.0 } else { order * stagger };
         let ease = eased(delay, entrance);
@@ -115,79 +261,176 @@ pub(crate) fn filter_graph(
         let mut y_expression = y.to_string();
         let mut scale = None;
         let mut fade = amount > 0.0 && !matches!(layer.role, LayerRole::Footer);
+        // Some layers are shown only for part of the scene (count-up steps).
+        let mut enable: Option<String> = None;
+        // Bars grow bottom-up: their height is scaled per frame (crop sizes are fixed at setup).
+        let mut grow_height: Option<String> = None;
+        // A preset may delay this layer's fade beyond its stagger slot.
+        let mut fade_delay = delay;
         let displacement = 52.0 * amount;
-        match spec.preset {
-            MotionPreset::KineticTitle => match layer.role {
-                LayerRole::Headline(_) => {
-                    y_expression = format!("{y}+{:.6}*(1-{ease})", displacement * 1.45);
-                    x_expression = format!("{x}-{:.6}*(1-{ease})", displacement * 0.35);
+        if let LayerRole::Caption { start_ms, end_ms } = layer.role {
+            // Captions never move; they appear for exactly their cue window.
+            enable = Some(format!(
+                "between(t,{:.3},{:.3})",
+                start_ms as f64 / 1000.0,
+                end_ms as f64 / 1000.0 - 0.001
+            ));
+            fade = false;
+        }
+        let moves = !matches!(layer.role, LayerRole::Caption { .. });
+        if moves {
+            match spec.preset {
+                MotionPreset::KineticTitle => match layer.role {
+                    LayerRole::Headline(_) => {
+                        y_expression = format!("{y}+{:.6}*(1-{ease})", displacement * 1.45);
+                        x_expression = format!("{x}-{:.6}*(1-{ease})", displacement * 0.35);
+                    }
+                    LayerRole::Body(_) => {
+                        y_expression = format!("{y}+{displacement:.6}*(1-{ease})")
+                    }
+                    _ => {}
+                },
+                MotionPreset::StaggerRise => {
+                    if !matches!(layer.role, LayerRole::Footer) {
+                        y_expression = format!("{y}+{displacement:.6}*(1-{ease})");
+                    }
                 }
-                LayerRole::Body(_) => y_expression = format!("{y}+{displacement:.6}*(1-{ease})"),
-                _ => {}
-            },
-            MotionPreset::StaggerRise => {
-                if !matches!(layer.role, LayerRole::Footer) {
-                    y_expression = format!("{y}+{displacement:.6}*(1-{ease})");
+                MotionPreset::SlideReveal => {
+                    if !matches!(layer.role, LayerRole::Footer) {
+                        let direction = if matches!(layer.role, LayerRole::Body(_)) {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                        x_expression =
+                            format!("{x}+{:.6}*(1-{ease})", displacement * 1.8 * direction);
+                    }
                 }
+                MotionPreset::FocusPulse => {
+                    if matches!(layer.role, LayerRole::Headline(_) | LayerRole::Body(_)) {
+                        // A gentle scale-in followed by a 1.5% breathing hold.
+                        let scale_expression = format!(
+                            "1-{:.6}*(1-{ease})+{:.6}*sin(2*PI*t/4)*{ease}",
+                            0.085 * amount,
+                            0.015 * amount
+                        );
+                        x_expression = format!("{x}+({}-overlay_w)/2", layer.width);
+                        y_expression = format!("{y}+({}-overlay_h)/2", layer.height);
+                        scale = Some(scale_expression);
+                    }
+                }
+                MotionPreset::ParallaxPan => {
+                    if !matches!(layer.role, LayerRole::Footer) {
+                        let depth = if matches!(layer.role, LayerRole::Accent(_)) {
+                            1.0
+                        } else {
+                            0.32
+                        };
+                        x_expression = format!("{x}+{:.6}*sin(2*PI*t/7)", amount * 15.0 * depth);
+                        y_expression = format!("{y}+{:.6}*(1-{ease})", displacement * depth);
+                    }
+                }
+                MotionPreset::OrbitCards => match layer.role {
+                    LayerRole::Accent(row) => {
+                        let phase = row as f64 * 2.094395102;
+                        x_expression = format!("{x}+{:.6}*sin(2*PI*t/6+{phase:.6})", amount * 18.0);
+                        y_expression = format!("{y}+{:.6}*cos(2*PI*t/6+{phase:.6})", amount * 15.0);
+                        fade = false;
+                    }
+                    LayerRole::Headline(_) | LayerRole::Body(_) => {
+                        y_expression = format!("{y}+{displacement:.6}*(1-{ease})");
+                    }
+                    _ => {}
+                },
+                MotionPreset::LowerThird => match layer.role {
+                    LayerRole::Headline(_) | LayerRole::Eyebrow => {
+                        x_expression = format!("{x}-{:.6}*(1-{ease})", displacement * 2.4)
+                    }
+                    LayerRole::Body(_) => {
+                        x_expression = format!("{x}+{:.6}*(1-{ease})", displacement * 1.2)
+                    }
+                    _ => {}
+                },
+                MotionPreset::CountUp
+                | MotionPreset::BarChart
+                | MotionPreset::ProgressSteps
+                | MotionPreset::QuoteCard
+                | MotionPreset::LogoReveal => match layer.role {
+                    LayerRole::Count(step) => {
+                        // Steps share the entrance window; the last one holds to the end.
+                        let window = (scene_duration * 0.6).clamp(0.4, 2.4);
+                        let slice = window / COUNT_STEPS as f64;
+                        let start = step as f64 * slice;
+                        enable = Some(if step as usize + 1 >= COUNT_STEPS {
+                            format!("gte(t,{start:.6})")
+                        } else {
+                            format!("between(t,{start:.6},{:.6})", start + slice - 0.0001)
+                        });
+                        fade = false;
+                    }
+                    LayerRole::Bar(_) => {
+                        let grow = eased(delay, entrance * 1.4);
+                        grow_height = Some(format!("max(2,trunc(ih*{grow}/2)*2)"));
+                        // Keep the bar's base fixed while it grows.
+                        y_expression = format!("{y}+{}-overlay_h", layer.height);
+                        fade = false;
+                    }
+                    LayerRole::Logo => {
+                        let scale_expression = format!("0.7+0.3*{ease}");
+                        x_expression = format!("{x}+({}-overlay_w)/2", layer.width);
+                        y_expression = format!("{y}+({}-overlay_h)/2", layer.height);
+                        scale = Some(scale_expression);
+                    }
+                    LayerRole::Body(row) if spec.preset == MotionPreset::ProgressSteps => {
+                        // Each step waits for the previous one: a clear 1-2-3 sequence.
+                        let step_delay =
+                            delay + row as f64 * (scene_duration * 0.18).clamp(0.2, 1.2);
+                        let step_ease = eased(step_delay, entrance);
+                        x_expression = format!("{x}+{:.6}*(1-{step_ease})", displacement * 1.4);
+                        fade_delay = step_delay;
+                    }
+                    LayerRole::Body(_) if spec.preset == MotionPreset::QuoteCard => {
+                        let scale_expression = format!("1-{:.6}*(1-{ease})", 0.06 * amount);
+                        x_expression = format!("{x}+({}-overlay_w)/2", layer.width);
+                        y_expression = format!("{y}+({}-overlay_h)/2", layer.height);
+                        scale = Some(scale_expression);
+                    }
+                    // Each data preset gives its text a distinct, quiet entrance so the data stays the focus.
+                    LayerRole::Headline(_) | LayerRole::Body(_) => match spec.preset {
+                        MotionPreset::CountUp => {
+                            y_expression = format!("{y}-{:.6}*(1-{ease})", displacement * 0.6)
+                        }
+                        MotionPreset::BarChart => {
+                            x_expression = format!("{x}-{:.6}*(1-{ease})", displacement * 0.8)
+                        }
+                        MotionPreset::LogoReveal => {
+                            y_expression = format!("{y}+{:.6}*(1-{ease})", displacement * 1.6)
+                        }
+                        _ => y_expression = format!("{y}+{displacement:.6}*(1-{ease})"),
+                    },
+                    _ => {}
+                },
             }
-            MotionPreset::SlideReveal => {
-                if !matches!(layer.role, LayerRole::Footer) {
-                    let direction = if matches!(layer.role, LayerRole::Body(_)) {
-                        1.0
-                    } else {
-                        -1.0
-                    };
-                    x_expression = format!("{x}+{:.6}*(1-{ease})", displacement * 1.8 * direction);
-                }
-            }
-            MotionPreset::FocusPulse => {
-                if matches!(layer.role, LayerRole::Headline(_) | LayerRole::Body(_)) {
-                    // A gentle scale-in followed by a 1.5% breathing hold.
-                    let scale_expression = format!(
-                        "1-{:.6}*(1-{ease})+{:.6}*sin(2*PI*t/4)*{ease}",
-                        0.085 * amount,
-                        0.015 * amount
-                    );
-                    x_expression = format!("{x}+({}-overlay_w)/2", layer.width);
-                    y_expression = format!("{y}+({}-overlay_h)/2", layer.height);
-                    scale = Some(scale_expression);
-                }
-            }
-            MotionPreset::ParallaxPan => {
-                if !matches!(layer.role, LayerRole::Footer) {
-                    let depth = if matches!(layer.role, LayerRole::Accent(_)) {
-                        1.0
-                    } else {
-                        0.32
-                    };
-                    x_expression = format!("{x}+{:.6}*sin(2*PI*t/7)", amount * 15.0 * depth);
-                    y_expression = format!("{y}+{:.6}*(1-{ease})", displacement * depth);
-                }
-            }
-            MotionPreset::OrbitCards => match layer.role {
-                LayerRole::Accent(row) => {
-                    let phase = row as f64 * 2.094395102;
-                    x_expression = format!("{x}+{:.6}*sin(2*PI*t/6+{phase:.6})", amount * 18.0);
-                    y_expression = format!("{y}+{:.6}*cos(2*PI*t/6+{phase:.6})", amount * 15.0);
-                    fade = false;
-                }
-                LayerRole::Headline(_) | LayerRole::Body(_) => {
-                    y_expression = format!("{y}+{displacement:.6}*(1-{ease})");
-                }
-                _ => {}
-            },
         }
         let current = format!("motionlayer{position}");
         graph.push_str(&format!("[{}:v]format=rgba", layer.input));
+        if let Some(height) = &grow_height {
+            graph.push_str(&format!(",scale=w=iw:h='{height}':eval=frame"));
+        }
         if let Some(scale) = scale {
             graph.push_str(&format!(",scale=w='max(2,trunc(iw*({scale})/2)*2)':h='max(2,trunc(ih*({scale})/2)*2)':eval=frame"));
         }
         if fade {
-            graph.push_str(&format!(",fade=t=in:st={delay:.6}:d={entrance:.6}:alpha=1"));
+            graph.push_str(&format!(
+                ",fade=t=in:st={fade_delay:.6}:d={entrance:.6}:alpha=1"
+            ));
         }
         graph.push_str(&format!("[{current}];"));
         let next = format!("motionmix{position}");
-        graph.push_str(&format!("[{previous}][{current}]overlay=x='{x_expression}':y='{y_expression}':eval=frame:shortest=1[{next}];"));
+        let enable = enable
+            .map(|expression| format!(":enable='{expression}'"))
+            .unwrap_or_default();
+        graph.push_str(&format!("[{previous}][{current}]overlay=x='{x_expression}':y='{y_expression}':eval=frame:shortest=1{enable}[{next}];"));
         previous = next;
     }
     graph.push_str(&format!("[{previous}]format=yuv420p[motionvideo]"));
@@ -293,6 +536,125 @@ mod tests {
                 graph
             })
             .collect();
-        assert_eq!(graphs.len(), 6);
+        assert_eq!(graphs.len(), PRESET_IDS.len());
+    }
+
+    #[test]
+    fn data_presets_accept_only_bounded_numbers_and_short_labels() {
+        assert!(count_up(&json!({})).unwrap().is_none());
+        let data = count_up(&json!({"countUp":{"from":0,"to":1250,"unit":"명"}}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(count_label(&data, 0), "0명");
+        assert_eq!(count_label(&data, COUNT_STEPS - 1), "1250명");
+        let steps: Vec<f64> = (0..COUNT_STEPS)
+            .map(|s| {
+                count_label(&data, s)
+                    .trim_end_matches('명')
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            steps.windows(2).all(|pair| pair[0] <= pair[1]),
+            "counting never goes backwards"
+        );
+        for bad in [
+            json!({"from":0,"to":f64::MAX}),
+            json!({"from":0,"to":1,"decimals":5}),
+            json!({"from":0,"to":1,"unit":"아주아주긴단위이름입니다"}),
+            json!({"from":0,"to":1,"unit":"%;movie=x","filter":"x"}),
+            json!({"from":"0","to":1}),
+        ] {
+            assert!(count_up(&json!({"countUp":bad})).is_err(), "{bad}");
+        }
+        let bars = chart(&json!({"chart":[{"label":"1월","value":3},{"label":"2월","value":7.5}]}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(bars.len(), 2);
+        for bad in [
+            json!([{"label":"하나","value":1}]),
+            json!((0..9)
+                .map(|i| json!({"label":format!("{i}"),"value":i}))
+                .collect::<Vec<_>>()),
+            json!([{"label":"a","value":-1},{"label":"b","value":1}]),
+            json!([{"label":"","value":1},{"label":"b","value":1}]),
+            json!([{"label":"a","value":1,"color":"red"},{"label":"b","value":1}]),
+        ] {
+            assert!(chart(&json!({"chart":bad})).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn transitions_are_a_closed_set_of_fixed_fades() {
+        assert_eq!(Transition::from_scene(&json!({})).unwrap(), Transition::Cut);
+        assert!(Transition::Cut.filter(4.0).is_none());
+        let fade = Transition::from_scene(&json!({"transition":"fade"}))
+            .unwrap()
+            .filter(4.0)
+            .unwrap();
+        assert_eq!(fade, "fade=t=in:st=0:d=0.350,fade=t=out:st=3.650:d=0.350");
+        let short = Transition::Dip.filter(0.6).unwrap();
+        assert!(
+            short.contains("d=0.200"),
+            "a fade never takes more than a third of a short scene: {short}"
+        );
+        for bad in [json!("wipe;movie=x"), json!(1), json!({"kind":"fade"})] {
+            assert!(Transition::from_scene(&json!({"transition":bad})).is_err());
+        }
+    }
+
+    #[test]
+    fn count_steps_and_captions_are_shown_only_in_their_time_window() {
+        let geometry = |input, role| LayerGeometry {
+            input,
+            x: 40,
+            y: 400,
+            width: 600,
+            height: 120,
+            role,
+        };
+        let spec = MotionSpec {
+            preset: MotionPreset::CountUp,
+            intensity: 0.6,
+        };
+        let mut layers: Vec<_> = (0..COUNT_STEPS as u8)
+            .map(|s| geometry(s as usize + 1, LayerRole::Count(s)))
+            .collect();
+        layers.push(geometry(
+            COUNT_STEPS + 1,
+            LayerRole::Caption {
+                start_ms: 500,
+                end_ms: 1800,
+            },
+        ));
+        let graph = filter_graph(spec, &layers, 4.0);
+        assert_eq!(
+            graph.matches("enable='between(t,").count(),
+            COUNT_STEPS,
+            "every step but the last has a window, plus the caption"
+        );
+        assert!(
+            graph.contains("enable='gte(t,"),
+            "the final count holds to the end"
+        );
+        assert!(graph.contains("enable='between(t,0.500,1.799)'"));
+        let bars = [
+            geometry(1, LayerRole::Bar(0)),
+            geometry(2, LayerRole::Bar(1)),
+        ];
+        let graph = filter_graph(
+            MotionSpec {
+                preset: MotionPreset::BarChart,
+                intensity: 0.6,
+            },
+            &bars,
+            4.0,
+        );
+        assert_eq!(
+            graph.matches(",scale=w=iw:h='max(2,trunc(ih*").count(),
+            2,
+            "bars grow by per-frame height"
+        );
     }
 }

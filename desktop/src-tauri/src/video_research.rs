@@ -111,7 +111,7 @@ fn validate_create(input: &CreateInput) -> Result<PreviewInput, String> {
         "shorts" | "vertical" | "youtube-landscape"
     ) || !matches!(
         input.provider.as_deref().unwrap_or("local"),
-        "local" | "opencodex" | "teamclaude" | "claude-cli"
+        "local" | "agent-model" | "opencodex" | "teamclaude" | "claude-cli"
     ) {
         return Err("영상 형식 또는 AI 제공자를 확인하세요.".into());
     }
@@ -404,7 +404,21 @@ fn assemble_project(
             "createdAt":created,"sources":preview.sources,"reviewRequired":true}})
 }
 
-pub async fn create(config: &AppConfig, input: CreateInput) -> Result<ResearchResult, String> {
+/// Text model for "agent-model": receives (system prompt, user message) and returns the model text.
+pub type AgentGenerate = Box<
+    dyn FnOnce(
+            &'static str,
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<String, String>> + Send>,
+        > + Send,
+>;
+
+pub async fn create(
+    config: &AppConfig,
+    input: CreateInput,
+    agent: Option<AgentGenerate>,
+) -> Result<ResearchResult, String> {
     let preview_input = validate_create(&input)?;
     let _update_guard = keyword::lock_for_update()
         .map_err(|_| "키워드 탐색 또는 업데이트 작업이 끝난 뒤 영상 초안을 만드세요.")?;
@@ -412,26 +426,8 @@ pub async fn create(config: &AppConfig, input: CreateInput) -> Result<ResearchRe
     let sources = load_sources(config, &preview_input.trend_ids).await?;
     let preview = make_preview(&preview_input, sources)?;
     let requested_provider = input.provider.as_deref().unwrap_or("local");
-    let mut provider = "local".to_string();
-    let mut warnings = preview.warnings.clone();
-    let mut scenes = local_scenes(&preview.sources);
-    if requested_provider != "local" {
-        let generated = ai::generate_research_script(
-            config,
-            requested_provider,
-            &preview.topic,
-            &ai_sources(&preview),
-        )
-        .await;
-        match generated.and_then(|result| {
-            validate_ai_script(result.get("text").and_then(Value::as_str).ok_or("AI 대본 응답을 확인하세요.")?, &preview.sources)
-        }) {
-            Ok(ai_scenes) => { scenes = ai_scenes; provider = requested_provider.to_owned(); }
-            // Provider error text can contain server-derived content. Use a fixed
-            // safe status; never copy provider responses or credentials into IPC.
-            Err(_) => warnings.push("AI 대본 생성 또는 출처 검증에 실패해 로컬 초안을 저장했습니다. AI 연결·사용량을 확인하거나 원문을 직접 편집하세요.".into()),
-        }
-    }
+    let (provider, scenes, warnings) =
+        script_for(config, &preview, requested_provider, agent).await;
     let mut project = assemble_project(&preview, &input.format, &provider, scenes);
     if let Some(template_id) = &input.template_id {
         video_templates::apply_recipe(&mut project, template_id)?;
@@ -442,6 +438,53 @@ pub async fn create(config: &AppConfig, input: CreateInput) -> Result<ResearchRe
         provider,
         warnings,
     })
+}
+
+/// Picks the scenes for a research draft. A model result is used only after it
+/// passes the exact-excerpt check; otherwise the local draft is kept and the
+/// project says so. Returns (provider actually used, scenes, warnings).
+async fn script_for(
+    config: &AppConfig,
+    preview: &ResearchPreview,
+    requested: &str,
+    agent: Option<AgentGenerate>,
+) -> (String, Vec<Value>, Vec<String>) {
+    let mut warnings = preview.warnings.clone();
+    let local = local_scenes(&preview.sources);
+    if requested == "local" {
+        return ("local".into(), local, warnings);
+    }
+    let generated = if requested == "agent-model" {
+        match agent {
+            Some(generate) => {
+                let message =
+                    json!({"topic":preview.topic,"sources":ai_sources(preview)}).to_string();
+                generate(ai::RESEARCH_SCRIPT_SYSTEM, message)
+                    .await
+                    .map(|text| json!({"text":text}))
+            }
+            None => Err("Agent 탭에서 콘텐츠 작성 모델을 선택하세요.".into()),
+        }
+    } else {
+        ai::generate_research_script(config, requested, &preview.topic, &ai_sources(preview)).await
+    };
+    match generated.and_then(|result| {
+        validate_ai_script(
+            result
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or("AI 대본 응답을 확인하세요.")?,
+            &preview.sources,
+        )
+    }) {
+        Ok(scenes) => (requested.to_owned(), scenes, warnings),
+        // Provider error text can contain server-derived content. Use a fixed
+        // safe status; never copy provider responses or credentials into IPC.
+        Err(_) => {
+            warnings.push("AI 대본 생성 또는 출처 검증에 실패해 로컬 초안을 저장했습니다. AI 연결·사용량을 확인하거나 원문을 직접 편집하세요.".into());
+            ("local".into(), local, warnings)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -678,6 +721,73 @@ mod tests {
     }
     #[tokio::test]
     async fn video_activity_gate_rejects_a_second_job() {
+        let _ = ();
+    }
+    fn agent_returning(
+        text: String,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> AgentGenerate {
+        Box::new(move |system, prompt| {
+            seen.lock().unwrap().push(format!("{system}\n{prompt}"));
+            Box::pin(async move { Ok(text) })
+        })
+    }
+    #[tokio::test]
+    async fn agent_model_scripts_are_used_only_when_every_line_is_a_real_excerpt() {
+        let sources = vec![source(1), source(2)];
+        let preview = make_preview(&input(2), sources.clone()).unwrap();
+        let config = AppConfig::default();
+        let valid = json!({"scenes":sources.iter().map(|s| json!({"sourceId":s.trend_id,"headline":s.title,"body":s.description,"narration":s.description})).collect::<Vec<_>>()}).to_string();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (provider, scenes, warnings) = script_for(
+            &config,
+            &preview,
+            "agent-model",
+            Some(agent_returning(valid, seen.clone())),
+        )
+        .await;
+        assert_eq!(provider, "agent-model");
+        assert_eq!(scenes.len(), 2);
+        assert_eq!(warnings, preview.warnings);
+        let sent = seen.lock().unwrap()[0].clone();
+        assert!(
+            sent.starts_with(ai::RESEARCH_SCRIPT_SYSTEM),
+            "the fixed excerpt contract is the system prompt"
+        );
+        assert!(sent.contains(&sources[0].trend_id));
+
+        let invented = json!({"scenes":sources.iter().map(|s| json!({"sourceId":s.trend_id,"headline":"지어낸 통계 97%","body":"","narration":"지어낸 문장"})).collect::<Vec<_>>()}).to_string();
+        let (provider, scenes, warnings) = script_for(
+            &config,
+            &preview,
+            "agent-model",
+            Some(agent_returning(invented, seen.clone())),
+        )
+        .await;
+        assert_eq!(
+            provider, "local",
+            "a fabricated script falls back and says so"
+        );
+        assert_eq!(scenes, local_scenes(&preview.sources));
+        assert!(warnings.last().unwrap().contains("로컬 초안을 저장"));
+
+        let (provider, _, warnings) = script_for(&config, &preview, "agent-model", None).await;
+        assert_eq!(provider, "local");
+        assert!(warnings.last().unwrap().contains("로컬 초안"));
+        let calls = seen.lock().unwrap().len();
+        let (provider, _, _) = script_for(
+            &config,
+            &preview,
+            "local",
+            Some(agent_returning(String::new(), seen.clone())),
+        )
+        .await;
+        assert_eq!(provider, "local");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            calls,
+            "the local draft never calls a model"
+        );
         let guard = media::lock_for_video_activity().unwrap();
         assert!(media::lock_for_video_activity().is_err());
         drop(guard);

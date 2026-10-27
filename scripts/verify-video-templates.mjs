@@ -49,7 +49,17 @@ try {
     calls.push({ command, args: clone(args) });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: '격리된 템플릿 UI 검증' } };
     if (command === 'ai_status') return { providers: [{ id: 'codex-cli', label: 'Codex CLI', kind: 'subscription', available: true, detail: 'QA', suggestedModels: [] }], contentModel: { provider: 'codex-cli', model: '' }, agentModel: null, image: null };
-    if (command === 'ai_generate') return { text: '```json\n{"title":"AI 초안 QA","scenes":[]}\n```', provider: 'codex-cli', model: '' };
+    if (command === 'ai_generate') throw new Error('video drafts go through video_create_idea_project, not raw text generation');
+    if (command === 'video_create_idea_project') {
+      const input = args.input; const now = new Date().toISOString();
+      const project = { id: crypto.randomUUID(), title: input.topic, format: input.format, template: 'adaptive-promo', language: input.language, createdAt: now, updatedAt: now,
+        scenes: Array.from({ length: input.sceneCount }, (_, i) => ({ id: `idea-${i + 1}`, headline: `QA 장면 ${i + 1}`, body: '본문', narration: '내레이션', durationSec: input.durationSec / input.sceneCount, mediaType: 'none', motion: { preset: 'stagger-rise', intensity: 0.6 } })),
+        idea: { version: 1, topic: input.topic, category: input.category, provider: input.provider, createdAt: now, reviewRequired: true, motionSkill: 'toris-video-motion' },
+        // The native planner applies the chosen recipe (video_templates::apply_recipe).
+        ...(input.templateId ? { templateRecipe: { version: 1, id: input.templateId, name: knownRecipe(input.templateId)?.name ?? input.templateId } } : {}) };
+      savedProjects.set(project.id, project);
+      return { project: clone(project), provider: input.provider, warnings: ['QA 경고'] };
+    }
     if (command === 'video_list_projects') return clone([...savedProjects.values()]);
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false, ttsConfigured: false, dataPath: '격리된 메모리 프로젝트 저장소', renderer: 'fixture only' };
     if (command === 'set_main_activity') return null;
@@ -304,16 +314,17 @@ try {
   await selectCard(2).click(); await ready(); await topic.fill(newTopic); await ready();
   const saveCount = calls.filter(call => call.command === 'video_save_project').length;
   await page.getByRole('button', { name: 'AI로 영상 초안 만들기', exact: true }).click();
-  await page.getByText('AI가 영상 초안 JSON을 만들었습니다. 내용을 검토한 뒤 가져오기로 저장하세요.', { exact: true }).waitFor();
-  const send = calls.findLast(call => call.command === 'ai_generate');
-  assert.ok(send?.args.input.prompt.includes(fixtures.catalog[2].id), 'AI request carries the selected recipe id');
-  assert.ok(send.args.input.prompt.includes(newTopic));
   const keepEditing = page.getByRole('button', { name: '계속 편집', exact: true });
-  if (await keepEditing.isVisible()) await keepEditing.click();
-  else { assert.match(await page.locator('dialog[open] textarea').inputValue(), /"title": "AI 초안 QA"/); await page.getByRole('button', { name: 'JSON 가져오기 닫기', exact: true }).click(); }
-  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'AI output is reviewed in the import dialog, never saved automatically');
-  assert.equal(savedProjects.size, 1);
-  assert.equal(await editorTitle.inputValue(), newTopic);
+  if (await keepEditing.isVisible()) await page.getByRole('button', { name: '저장 후 이동', exact: true }).click().catch(() => keepEditing.click());
+  const send = await (async () => { for (let i = 0; i < 100; i++) { const hit = calls.findLast(call => call.command === 'video_create_idea_project'); if (hit) return hit; await page.waitForTimeout(50); } return null; })();
+  assert.ok(send, 'the idea request reaches the native planner');
+  assert.equal(send.args.input.templateId, fixtures.catalog[2].id, 'the request carries the selected recipe id');
+  assert.equal(send.args.input.topic, newTopic);
+  assert.equal(send.args.input.provider, 'agent-model', 'the Agent tab model writes the draft');
+  assert.equal(calls.filter(call => call.command === 'ai_generate').length, 0, 'no raw text generation for video drafts');
+  await page.getByText('AI가 만든 영상 초안을 검증하고 저장했습니다.', { exact: false }).waitFor();
+  assert.equal(await editorTitle.inputValue(), newTopic, 'the validated draft opens in the editor');
+  assert.equal(calls.filter(call => call.command === 'video_save_project').length, saveCount, 'the native planner saves the draft itself');
   await editorTitle.fill('현재 편집을 내보내는 영상 QA');
   await page.getByRole('button', { name: 'Markdown 내보내기', exact: true }).click();
   await page.getByText('내보내기를 취소했습니다.', { exact: true }).waitFor();

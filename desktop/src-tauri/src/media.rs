@@ -1,7 +1,7 @@
 //! Native project persistence, trusted motion/slide rendering and local speech generation.
 //! Existing editor fields are retained even when the native slide renderer does
 //! not interpret their animation/layout metadata.
-use crate::motion::{LayerGeometry, LayerRole, MotionSpec};
+use crate::motion::{LayerGeometry, LayerRole, MotionPreset, MotionSpec, Transition};
 use fontdue::{Font, FontSettings};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -224,6 +224,13 @@ pub(crate) fn validate_project(project: &Value) -> Result<(), String> {
             text_field(scene, field, 10000)?;
         }
         MotionSpec::from_scene(scene)?;
+        Transition::from_scene(scene)?;
+        crate::motion::count_up(scene)?;
+        crate::motion::chart(scene)?;
+        caption_cues(scene)?;
+        if let Some(reference) = scene.get("logoPath") {
+            relative_asset(reference.as_str().ok_or("로고 파일 경로를 확인하세요.")?)?;
+        }
         let duration = scene
             .get("durationSec")
             .and_then(Value::as_f64)
@@ -690,6 +697,89 @@ struct MotionAssets {
     layers: Vec<LayerGeometry>,
 }
 
+/// A project-local logo (PNG/JPEG/WebP) fitted into a transparent square. Decoded by the image crate,
+/// never by FFmpeg, so the file never becomes an FFmpeg input.
+fn logo_canvas(path: &Path, side: u32) -> Result<Canvas, String> {
+    if fs::metadata(path)
+        .map_err(|_| "로고 파일을 읽을 수 없습니다.")?
+        .len()
+        > 8 * 1024 * 1024
+    {
+        return Err("로고 파일은 8MB 이하여야 합니다.".into());
+    }
+    let image = image::ImageReader::open(path)
+        .and_then(|reader| reader.with_guessed_format())
+        .map_err(|_| "로고 파일을 읽을 수 없습니다.")?;
+    if !matches!(
+        image.format(),
+        Some(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP)
+    ) {
+        return Err("로고는 PNG, JPEG, WebP 파일이어야 합니다.".into());
+    }
+    let decoded = image
+        .decode()
+        .map_err(|_| "로고 이미지를 해석할 수 없습니다.")?;
+    if decoded.width() > 8192 || decoded.height() > 8192 {
+        return Err("로고 이미지는 8192px 이하여야 합니다.".into());
+    }
+    let fitted = decoded
+        .resize(side, side, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+    let mut canvas = Canvas::transparent(side, side);
+    let (offset_x, offset_y) = ((side - fitted.width()) / 2, (side - fitted.height()) / 2);
+    for (x, y, pixel) in fitted.enumerate_pixels() {
+        let [r, g, b, a] = pixel.0;
+        canvas.blend(x + offset_x, y + offset_y, [r, g, b], a as u32);
+    }
+    Ok(canvas)
+}
+
+/// Caption cues as (start ms, end ms, text). At most 40, ordered, inside the scene, 120 chars each.
+fn caption_cues(scene: &Value) -> Result<Vec<(u32, u32, String)>, String> {
+    let Some(list) = scene.get("captionCues") else {
+        return Ok(Vec::new());
+    };
+    let list = list.as_array().ok_or("자막 cue 목록을 확인하세요.")?;
+    if list.len() > 40 {
+        return Err("자막 cue는 장면당 40개 이하여야 합니다.".into());
+    }
+    let duration = scene
+        .get("durationSec")
+        .and_then(Value::as_f64)
+        .unwrap_or(600.0);
+    let mut cues = Vec::new();
+    for cue in list {
+        let start = cue
+            .get("startSec")
+            .and_then(Value::as_f64)
+            .ok_or("자막 시작 시각을 확인하세요.")?;
+        let end = cue
+            .get("endSec")
+            .and_then(Value::as_f64)
+            .ok_or("자막 끝 시각을 확인하세요.")?;
+        let text = cue
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or("자막 문장을 확인하세요.")?;
+        if !start.is_finite()
+            || !end.is_finite()
+            || start < 0.0
+            || end <= start
+            || start > duration + 0.05
+            || text.chars().count() > 120
+            || text.chars().any(char::is_control)
+        {
+            return Err("자막 cue는 장면 안의 시작<끝 시각과 120자 이하 문장이어야 합니다.".into());
+        }
+        cues.push((
+            (start * 1000.0).round() as u32,
+            (end.min(duration) * 1000.0).round() as u32,
+            text.trim().to_owned(),
+        ));
+    }
+    Ok(cues)
+}
+
 fn motion_body_sections(text: &str, single_card: bool) -> Vec<String> {
     let text = text.trim();
     if text.is_empty() {
@@ -751,6 +841,7 @@ fn motion_assets(
     dimensions: (u32, u32),
     has_media: bool,
     directory: &Path,
+    logo: Option<&Path>,
 ) -> Result<MotionAssets, String> {
     let (width, height) = dimensions;
     let vertical = height > width;
@@ -863,6 +954,91 @@ fn motion_assets(
         y += card_height as i32 + 2;
     }
     let count = project["scenes"].as_array().map(Vec::len).unwrap_or(1);
+    let preset = MotionSpec::from_scene(scene)?.map(|spec| spec.preset);
+    let data_y = y + 8;
+    let data_height = (height as i32 - 96 - data_y).max(120) as u32;
+    if preset == Some(MotionPreset::CountUp) {
+        if let Some(data) = crate::motion::count_up(scene)? {
+            // One frame per step; the filter shows each for its slice. Rust formats every number.
+            let size = if vertical { 96.0 } else { 84.0 };
+            let frame_height = (size * 1.5) as u32;
+            for step in 0..crate::motion::COUNT_STEPS {
+                let mut canvas = Canvas::transparent(available, frame_height);
+                canvas.text(
+                    font,
+                    &[crate::motion::count_label(&data, step)],
+                    size,
+                    0.0,
+                    0.0,
+                    [105, 239, 214],
+                );
+                add(canvas, margin as i32, data_y, LayerRole::Count(step as u8))?;
+            }
+        }
+    }
+    if preset == Some(MotionPreset::BarChart) {
+        if let Some(bars) = crate::motion::chart(scene)? {
+            let max = bars
+                .iter()
+                .map(|bar| bar.value)
+                .fold(0.0_f64, f64::max)
+                .max(f64::MIN_POSITIVE);
+            let slot = available / bars.len() as u32;
+            let bar_width = (slot * 7 / 10).max(8);
+            let plot = data_height.saturating_sub(40).max(40);
+            for (index, bar) in bars.iter().enumerate() {
+                let bar_height = ((bar.value / max) * plot as f64).round().max(4.0) as u32;
+                let mut canvas = Canvas::transparent(bar_width, bar_height);
+                canvas.rounded_card(6, [91, 222, 202], 235);
+                let x = margin as i32 + (index as u32 * slot + (slot - bar_width) / 2) as i32;
+                add(
+                    canvas,
+                    x,
+                    data_y + (plot - bar_height) as i32,
+                    LayerRole::Bar(index as u8),
+                )?;
+                let (label, label_size) =
+                    fitting_text(font, &bar.label, slot as f32, 30.0, 18, 11)?;
+                let mut label_canvas = Canvas::transparent(slot, 30);
+                label_canvas.text(font, &label, label_size, 0.0, 4.0, [197, 214, 231]);
+                add(
+                    label_canvas,
+                    margin as i32 + (index as u32 * slot) as i32,
+                    data_y + plot as i32 + 6,
+                    LayerRole::Body(9),
+                )?;
+            }
+        }
+    }
+    if preset == Some(MotionPreset::LogoReveal) {
+        if let Some(logo) = logo {
+            let side = (available / 3).min(data_height).max(48);
+            let canvas = logo_canvas(logo, side)?;
+            add(canvas, (width - side) as i32 / 2, data_y, LayerRole::Logo)?;
+        }
+    }
+    if scene.get("burnCaptions").and_then(Value::as_bool) == Some(true) {
+        let caption_y = height as i32 - if vertical { 260 } else { 130 };
+        for (start_ms, end_ms, text) in caption_cues(scene)? {
+            let (lines, size) = fitting_text(
+                font,
+                &text,
+                (available - 32) as f32,
+                84.0,
+                if vertical { 34 } else { 30 },
+                18,
+            )?;
+            let mut canvas = Canvas::transparent(available, 92);
+            canvas.rounded_card(14, [6, 10, 18], 200);
+            canvas.text(font, &lines, size, 16.0, 8.0, [255, 255, 255]);
+            add(
+                canvas,
+                margin as i32,
+                caption_y,
+                LayerRole::Caption { start_ms, end_ms },
+            )?;
+        }
+    }
     let mut footer = Canvas::transparent(available, 30);
     footer.text(
         font,
@@ -930,12 +1106,18 @@ async fn run_command(
         .await
         .map_err(|_| "프로세스 출력 오류")?
         .map_err(|_| "프로세스 출력 오류")?;
-    let _errors = error_task
+    let errors = error_task
         .await
         .map_err(|_| "프로세스 출력 오류")?
         .map_err(|_| "프로세스 출력 오류")?;
     // Tool stderr may contain local names or untrusted metadata. Keep it private.
     if !status.success() {
+        // Developer aid for test builds only; release builds never print tool output.
+        #[cfg(test)]
+        if std::env::var_os("TORIS_MEDIA_DEBUG").is_some() {
+            eprintln!("{program} stderr: {}", String::from_utf8_lossy(&errors));
+        }
+        let _ = &errors;
         return Err(format!(
             "{program} 처리에 실패했습니다. 파일 형식과 설치된 코덱을 확인하세요."
         ));
@@ -1151,6 +1333,11 @@ async fn render_project_at_with_progress(
             }
         }
         let motion = MotionSpec::from_scene(scene)?;
+        let logo = scene
+            .get("logoPath")
+            .and_then(Value::as_str)
+            .map(|reference| resolve_asset_at(assets, reference))
+            .transpose()?;
         let motion_assets = motion
             .map(|_| {
                 motion_assets(
@@ -1161,6 +1348,7 @@ async fn render_project_at_with_progress(
                     (width, height),
                     media.is_some(),
                     working,
+                    logo.as_deref(),
                 )
             })
             .transpose()?;
@@ -1271,6 +1459,14 @@ async fn render_project_at_with_progress(
             format!("{base_filter}[{media_index}:v]{scaling},setsar=1,fps=24[media];{base_video}[media]overlay={x}:{y}:shortest=1,format=yuv420p[v]")
         } else {
             format!("{base_filter}{base_video}format=yuv420p[v]")
+        };
+        // Scene transitions fade the finished segment in and out, so the final concat stays a stream copy.
+        let video_filter = match Transition::from_scene(scene)?.filter(duration) {
+            Some(fades) => format!(
+                "{}[vt];[vt]{fades}[v]",
+                video_filter.strip_suffix("[v]").unwrap_or(&video_filter)
+            ),
+            None => video_filter,
         };
         let segment_name = format!("segment-{index:03}.mp4");
         arguments.extend(args(&["-filter_complex_threads", "1", "-filter_complex"]));
@@ -2048,7 +2244,11 @@ mod tests {
                 .unwrap()
                 .parse::<f64>()
                 .unwrap();
-            assert!((duration - 12.0).abs() < 0.1);
+            let expected = crate::motion::PRESET_IDS.len() as f64 * 2.0;
+            assert!(
+                (duration - expected).abs() < 0.1,
+                "{duration} vs {expected}"
+            );
             for (index, preset) in crate::motion::PRESET_IDS.iter().enumerate() {
                 let mut hashes = Vec::new();
                 let mut frames = Vec::new();
@@ -2083,5 +2283,113 @@ mod tests {
         }
         fs::write(destination.join("motion-evidence.json"), serde_json::to_vec_pretty(&json!({"synthetic":true,"userProjectWrites":false,"fps":24,"observations":observations})).unwrap()).unwrap();
         println!("motion_probe_directory={}", destination.display());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FFmpeg and OS font; renders data presets, transitions, captions and a logo"]
+    async fn native_data_preset_probe() {
+        use sha2::{Digest, Sha256};
+        let temporary = tempfile::tempdir().unwrap();
+        let assets = temporary.path().join("public");
+        fs::create_dir_all(assets.join("brand")).unwrap();
+        let mut logo = image::RgbaImage::new(64, 64);
+        for (x, y, pixel) in logo.enumerate_pixels_mut() {
+            *pixel = image::Rgba([(x * 4) as u8, 120, (y * 4) as u8, 255]);
+        }
+        logo.save(assets.join("brand/logo.png")).unwrap();
+        let base = |id: &str, preset: &str| json!({"id":id,"eyebrow":"DATA","headline":"이번 달 성과","body":"숫자는 Rust가 그립니다.","narration":"","durationSec":2.0,"mediaType":"none","motion":{"preset":preset,"intensity":0.8}});
+        let mut scenes = vec![
+            base("lower", "lower-third"),
+            base("count", "count-up"),
+            base("bars", "bar-chart"),
+            base("steps", "progress-steps"),
+            base("quote", "quote-card"),
+            base("logo", "logo-reveal"),
+        ];
+        scenes[1]["countUp"] = json!({"from":0,"to":1250,"unit":"명"});
+        scenes[2]["chart"] =
+            json!([{"label":"1월","value":3},{"label":"2월","value":7},{"label":"3월","value":5}]);
+        scenes[3]["body"] = json!("준비합니다. 실행합니다. 확인합니다.");
+        scenes[3]["transition"] = json!("fade");
+        scenes[4]["transition"] = json!("dip");
+        scenes[5]["logoPath"] = json!("/brand/logo.png");
+        scenes[0]["burnCaptions"] = json!(true);
+        scenes[0]["captionCues"] =
+            json!([{"startSec":0.6,"endSec":1.6,"text":"자막이 화면에 새겨집니다"}]);
+        let mut sample = project();
+        sample["format"] = json!("shorts");
+        sample["scenes"] = json!(scenes);
+        let render = render_project_at(sample, temporary.path(), &assets)
+            .await
+            .unwrap();
+        let path = Path::new(render["path"].as_str().unwrap());
+        let inspected = probe(path).await.unwrap();
+        let duration: f64 = inspected["format"]["duration"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((duration - 12.0).abs() < 0.1, "duration {duration}");
+        let frame = |at: f64, name: &str| {
+            let out = temporary.path().join(format!("{name}.png"));
+            let mut arguments = args(&[
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-ss",
+            ]);
+            arguments.push(format!("{at:.3}"));
+            arguments.extend(args(&["-i"]));
+            arguments.push(path.to_string_lossy().into_owned());
+            arguments.extend(args(&["-frames:v", "1", "-update", "1"]));
+            arguments.push(out.to_string_lossy().into_owned());
+            (arguments, out)
+        };
+        let mut hashes = std::collections::HashMap::new();
+        for (name, at) in [
+            ("caption-before", 0.3),
+            ("caption-during", 1.1),
+            ("count-early", 2.15),
+            ("count-late", 3.8),
+            ("bars-early", 4.2),
+            ("bars-late", 5.8),
+            ("fade-start", 6.02),
+            ("fade-mid", 7.0),
+            ("logo-early", 10.1),
+            ("logo-late", 11.6),
+        ] {
+            let (arguments, out) = frame(at, name);
+            run_command("ffmpeg", &arguments, None, 30).await.unwrap();
+            let bytes = fs::read(&out).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap().to_luma8();
+            let mean = image.pixels().map(|p| p.0[0] as u64).sum::<u64>() / image.len() as u64;
+            hashes.insert(name, (format!("{:x}", Sha256::digest(&bytes)), mean));
+        }
+        for (a, b) in [
+            ("caption-before", "caption-during"),
+            ("count-early", "count-late"),
+            ("bars-early", "bars-late"),
+            ("logo-early", "logo-late"),
+        ] {
+            assert_ne!(hashes[a].0, hashes[b].0, "{a} vs {b} must differ");
+        }
+        assert!(
+            hashes["fade-start"].1 < hashes["fade-mid"].1,
+            "a fade-in starts darker: {} vs {}",
+            hashes["fade-start"].1,
+            hashes["fade-mid"].1
+        );
+        println!(
+            "data_probe={}",
+            serde_json::to_string(
+                &hashes
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.1))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            )
+            .unwrap()
+        );
     }
 }
