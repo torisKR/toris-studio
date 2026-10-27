@@ -40,7 +40,6 @@ test("a finished run is still listed, with its log, after the app restarts", asy
   const h = setup([
     j({ route: "backend", plan: "p", testCommand: null }),
     j({ action: "finish", args: { summary: "변경 없음" } }),
-    j({ command: null }),
     j({ verdict: "pass", summary: "확인 완료" }),
   ]);
   const run = h.manager.start("demo", "확인만 해줘");
@@ -64,7 +63,7 @@ test("a run cut off by the app closing comes back marked as stopped, with its lo
   const again = h.reopen();
   const back = again.get(run.runId);
   assert.equal(back.phase, "failed");
-  assert.equal(back.pending, null);
+  assert.deepEqual(back.approvals, []);
   assert.ok(back.events.some(e => e.phase === "awaiting_approval"), "earlier log kept");
   assert.match(back.events.at(-1)!.message, /앱이 꺼져/);
   await assert.rejects(again.resume(run.runId, { actionId: "x", decision: "approve" }), /끝난 작업/);
@@ -76,7 +75,7 @@ test("a run cut off by the app closing comes back marked as stopped, with its lo
 test("history files are private, bad files are skipped, and old runs are pruned", () => {
   const dir = path.join(mkdtempSync(path.join(tmpdir(), "agent-history-")), "h");
   const history = new RunHistory(dir);
-  const base = { project: "demo", task: "t", phase: "done" as const, agent: "supervisor" as const, pending: null, changes: [], summary: "", events: [] };
+  const base = { workflow: "coding", project: "demo", task: "t", phase: "done" as const, agent: "supervisor" as const, approvals: [], changes: [], summary: "", events: [] };
   for (let i = 0; i < 35; i++) {
     const at = new Date(Date.UTC(2026, 9, 27, 0, 0, i)).toISOString();
     history.save({ ...base, runId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`, createdAt: at, updatedAt: at });

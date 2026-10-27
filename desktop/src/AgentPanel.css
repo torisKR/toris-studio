@@ -50,6 +50,12 @@
 .agent-approval header small { color: var(--social-muted); }
 .agent-reason { margin: 0; font-size: 13px; }
 .agent-path { display: flex; align-items: center; gap: 6px; margin: 0; font-family: ui-monospace, monospace; font-size: 12px; }
+.agent-draft { margin: 0; max-height: 320px; overflow: auto; padding: 10px; border-radius: 7px; background: var(--social-bg); color: var(--social-text); font: 12px/1.6 inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-template { margin-left: auto; padding: 2px 8px; border-radius: 999px; background: #3a2c16; color: #f2c46d; font-size: 11px; }
+.agent-hub { display: grid; gap: 10px; }
+.agent-hub-item { display: grid; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--social-bg); }
+.agent-hub-item p { margin: 0; color: var(--social-muted, #9fb4ca); font-size: 12px; }
+.agent-hub-item button { justify-self: start; }
 .agent-diff, .agent-command, .agent-timeline pre { margin: 0; max-height: 420px; overflow: auto; padding: 10px; border-radius: 7px; background: var(--social-bg); color: var(--social-text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
 .agent-diff .diff-line { display: block; min-width: max-content; }
 .agent-diff .diff-add { color: #86d4a4; background: color-mix(in srgb, #86d4a4 10%, transparent); }

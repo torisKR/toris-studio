@@ -42,6 +42,10 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Check dependency advisories
         run: pnpm audit --audit-level=low
+      - name: Check repository harness (feature map, mutant targets)
+        run: |
+          node scripts/harness-check.mjs --all
+          node --test scripts/harness-check.test.mjs
       - name: Check local API, AI handoff and OAuth callback contracts
         run: |
           pnpm test

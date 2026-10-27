@@ -1,13 +1,34 @@
 import { nativeInvoke, type BridgeInvoke, type ModelChoice, type ProviderInfo } from "./ai-client";
 
 export type AgentRole = "supervisor" | "frontend" | "backend" | "qa";
-export type Phase = "queued" | "thinking" | "reading" | "coding" | "testing" | "reviewing" | "awaiting_approval" | "done" | "failed" | "cancelled";
+export type Phase = "queued" | "thinking" | "reading" | "coding" | "testing" | "reviewing" | "awaiting_approval" | "waiting" | "done" | "failed" | "cancelled";
 export type PendingAction =
   | { kind: "write_file"; id: string; agent: AgentRole; path: string; diff: string; reason: string }
-  | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string };
-export type RunEvent = { event: "run"; runId: string; seq: number; at: string; agent: AgentRole; phase: Phase; message: string; detail?: string; approval?: PendingAction; changes?: string[] };
+  | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string }
+  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; template: boolean; reason: string };
+export type RunEvent = { event: "run"; runId: string; seq: number; at: string; agent: AgentRole; phase: Phase; message: string; detail?: string; approval?: PendingAction; resolved?: string; changes?: string[] };
 export type IndexEvent = { event: "index"; project: string; phase: "scanning" | "embedding" | "done" | "failed"; done: number; total: number; message: string };
-export type RunSummary = { runId: string; project: string; task: string; phase: Phase; agent: AgentRole; createdAt: string; updatedAt: string; pending: PendingAction | null; changes: string[]; summary: string; events: RunEvent[] };
+/** approvals: every request waiting now. Frontend and Backend work at once, so there can be more than one. */
+export type RunSummary = { runId: string; workflow?: string; project: string; task: string; phase: Phase; agent: AgentRole; createdAt: string; updatedAt: string; approvals: PendingAction[]; changes: string[]; summary: string; events: RunEvent[] };
+
+/** Workflows that run on Studio data instead of a project folder. Their saves go through the host. */
+export const HUB_WORKFLOWS = [
+  { id: "weekly-content", label: "주간 콘텐츠 초안", text: "채널·트렌드·이번 주 일정으로 SNS 초안을 만들고, 승인한 초안만 콘텐츠 플래너에 저장합니다. 모델이 없으면 [템플릿] 초안을 만듭니다." },
+  { id: "ops-triage", label: "운영 점검", text: "운영 상태의 실패·이상 항목을 우선순위대로 정리하고, 승인한 항목만 일정·작업에 엽니다." },
+] as const;
+export type HubWorkflow = (typeof HUB_WORKFLOWS)[number]["id"];
+export const isHubRun = (run: Pick<RunSummary, "workflow">) => HUB_WORKFLOWS.some(w => w.id === run.workflow);
+export const runTitle = (run: Pick<RunSummary, "workflow" | "project">) => HUB_WORKFLOWS.find(w => w.id === run.workflow)?.label ?? run.project;
+
+export function startHub(workflow: HubWorkflow, task: string, call: BridgeInvoke = nativeInvoke): Promise<RunSummary> {
+  return call("hub_start", { workflow, task }) as Promise<RunSummary>;
+}
+/** Hub approvals go to the host, which saves the approved draft before the run continues. */
+export function decide(run: Pick<RunSummary, "runId" | "workflow">, actionId: string, decision: "approve" | "reject", feedback: string, call: BridgeInvoke = nativeInvoke): Promise<RunSummary> {
+  return isHubRun(run)
+    ? call("hub_decide", { runId: run.runId, actionId, decision, feedback }) as Promise<RunSummary>
+    : agentCall<RunSummary>("run.resume", { runId: run.runId, actionId, decision, feedback }, call);
+}
 export type ProjectInfo = { name: string; path: string; stacks: string[]; scripts: Record<string, string>; git: boolean };
 export type IndexStatus = { indexed: boolean; chunks: number; stale: boolean; embedder: string; chroma: boolean };
 export type AgentSettings = { projectsRoot: string; ollamaUrl: string; agentModel: ModelChoice | null; contentModel: ModelChoice | null; image: ModelChoice | null; embedding: ModelChoice };
@@ -31,6 +52,7 @@ export const AGENTS: Array<{ id: AgentRole; name: string; role: string }> = [
 export const PHASE_LABELS: Record<Phase, string> = {
   queued: "대기", thinking: "생각 중", reading: "파일 읽는 중", coding: "코드 작성", testing: "테스트 실행",
   reviewing: "검토 중", awaiting_approval: "승인 대기", done: "완료", failed: "확인 필요", cancelled: "취소됨",
+  waiting: "대기",
 };
 
 export function agentCall<T>(method: string, params: Record<string, unknown> = {}, call: BridgeInvoke = nativeInvoke): Promise<T> {
@@ -65,12 +87,16 @@ export function applyEvent(run: RunSummary | undefined, event: RunEvent): RunSum
   const last = run.events.at(-1)?.seq ?? 0;
   if (event.seq <= last) return run;
   const terminal = event.phase === "done" || event.phase === "failed" || event.phase === "cancelled";
+  let approvals = event.approval ? [...run.approvals.filter(a => a.id !== event.approval!.id), event.approval] : run.approvals;
+  if (event.resolved) approvals = approvals.filter(a => a.id !== event.resolved);
+  if (terminal) approvals = [];
   return {
     ...run,
-    phase: event.phase,
+    // While any approval waits, the run waits for the user, whatever the other lane is doing.
+    phase: approvals.length ? "awaiting_approval" : event.phase,
     agent: event.agent,
     updatedAt: event.at,
-    pending: event.approval ?? (event.phase === "awaiting_approval" ? run.pending : null),
+    approvals,
     changes: event.changes ?? run.changes,
     summary: terminal ? event.detail ?? run.summary : run.summary,
     events: [...run.events, event].slice(-400),

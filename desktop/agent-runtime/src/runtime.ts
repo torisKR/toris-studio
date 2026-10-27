@@ -92,11 +92,21 @@ export class Runtime {
       case "index.build": return this.buildIndex(text(p.project, "프로젝트", 200));
       case "index.cancel": this.indexing.get(text(p.project, "프로젝트", 200))?.abort(); return { ok: true };
       case "search": return { hits: await new ProjectIndex(this.settings).search(text(p.project, "프로젝트", 200), text(p.query, "검색어", 2000), Number(p.k) || 8) };
-      case "run.start": return this.runs.start(text(p.project, "프로젝트", 200), text(p.task, "작업", 20_000));
-      case "run.resume": return this.runs.resume(text(p.runId, "작업 ID", 100), { actionId: text(p.actionId, "승인 ID", 100), decision: p.decision === "approve" ? "approve" : "reject", feedback: text(p.feedback, "피드백", 2000, { optional: true }) });
+      case "workflow.list": return { workflows: this.runs.workflows.list() };
+      case "run.start": {
+        const workflow = text(p.workflow, "워크플로", 60, { optional: true }) || "coding";
+        if (!this.hostOnly(workflow, p)) throw new UserError("이 워크플로는 Studio 화면에서만 시작할 수 있습니다.");
+        return this.runs.start(text(p.project, "프로젝트", 200, { optional: true }), text(p.task, "작업", 20_000, { optional: true }), workflow, p.input === undefined ? {} : record(p.input, "워크플로 입력"));
+      }
+      case "run.resume": {
+        const runId = text(p.runId, "작업 ID", 100);
+        if (!this.hostOnly(this.runs.get(runId).workflow, p)) throw new UserError("이 작업의 저장 승인은 Studio 화면에서 처리하세요.");
+        return this.runs.resume(runId, { actionId: text(p.actionId, "승인 ID", 100), decision: p.decision === "approve" ? "approve" : "reject", feedback: text(p.feedback, "피드백", 2000, { optional: true }) });
+      }
       case "run.cancel": return this.runs.cancel(text(p.runId, "작업 ID", 100));
       case "run.list": return { runs: this.runs.list() };
       case "run.get": return this.runs.get(text(p.runId, "작업 ID", 100));
+      case "run.trace": return { trace: this.runs.trace(text(p.runId, "작업 ID", 100)) };
       case "complete": {
         const model = createModel(p.purpose === "agent" ? this.settings.agentModel : this.settings.contentModel ?? this.settings.agentModel, this.settings);
         const output = await model.complete({ system: text(p.system, "시스템 지시", 20_000, { optional: true }) || "너는 Toris Studio의 콘텐츠 작성 도우미다. 확인하지 않은 사실을 단정하지 않는다.", messages: [{ role: "user", content: text(p.prompt, "요청", 60_000) }], maxTokens: Number(p.maxTokens) || undefined });
@@ -105,6 +115,13 @@ export class Runtime {
       case "image": return generateImage(this.settings, text(p.prompt, "이미지 프롬프트", 32_000), String(p.size ?? "1024x1024"));
       default: throw new UserError(`알 수 없는 요청입니다: ${method}`);
     }
+  }
+
+  /** Workflows without a project save through the host; the host marks its own calls. */
+  private hostOnly(workflow: string, p: Record<string, unknown>): boolean {
+    let needsProject = true;
+    try { needsProject = this.runs.workflows.get(workflow).needsProject; } catch { /* unknown ids fail in start */ }
+    return needsProject || p.host === true;
   }
 
   private buildIndex(project: string): { started: boolean } {

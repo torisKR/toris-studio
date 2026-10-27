@@ -36,18 +36,22 @@ export type Phase =
   | "testing"
   | "reviewing"
   | "awaiting_approval"
+  | "waiting"
   | "done"
   | "failed"
   | "cancelled";
 
 export type PendingAction =
   | { kind: "write_file"; id: string; agent: AgentRole; path: string; diff: string; content: string; baseHash: string | null; reason: string }
-  | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string };
+  | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string }
+  /** A draft the host saves to its database when the user approves; the runtime never writes it. */
+  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; payload: Record<string, unknown>; template: boolean; reason: string };
 
 /** What the UI sees of an approval: the diff, never the full file body. */
 export type ApprovalView =
   | Omit<Extract<PendingAction, { kind: "write_file" }>, "content" | "baseHash">
-  | Extract<PendingAction, { kind: "run_command" }>;
+  | Extract<PendingAction, { kind: "run_command" }>
+  | Extract<PendingAction, { kind: "save_draft" }>;
 
 export function approvalView(action: PendingAction): ApprovalView {
   if (action.kind !== "write_file") return action;
@@ -67,6 +71,8 @@ export type RunEvent = {
   message: string;
   detail?: string;
   approval?: ApprovalView;
+  /** Id of an approval that was decided; the UI removes its card. */
+  resolved?: string;
   changes?: string[];
 };
 

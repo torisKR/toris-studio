@@ -135,15 +135,15 @@
  {
   "id": "graph.write-without-approval",
   "file": "desktop/agent-runtime/src/graph/build.ts",
-  "find": "            return { messages, steps, pending, returnTo: \"worker\" };\n          }\n          case \"run_command\": {",
-  "replace": "            applyWrite(ctx.projectRoot, pending); return { messages, steps, pending, returnTo: \"worker\" };\n          }\n          case \"run_command\": {",
+  "find": "    const decision = await ctx.approve(pending, `${pending.path} 변경 승인을 기다립니다.`);",
+  "replace": "    applyWrite(ctx.projectRoot, pending); const decision = await ctx.approve(pending, `${pending.path} 변경 승인을 기다립니다.`);",
   "test": "desktop/agent-runtime/test/graph.test.ts"
  },
  {
   "id": "graph.reject-applies-anyway",
   "file": "desktop/agent-runtime/src/graph/build.ts",
-  "find": "const approved = decision.actionId === pending.id && decision.decision === \"approve\";",
-  "replace": "const approved = true;",
+  "find": "return decision.actionId === pending.id && decision.decision === \"approve\";",
+  "replace": "return true;",
   "test": "desktop/agent-runtime/test/graph.test.ts"
  },
  {
@@ -156,14 +156,14 @@
  {
   "id": "runs.stale-approval",
   "file": "desktop/agent-runtime/src/graph/runs.ts",
-  "find": "    if (!run.pending || run.pending.id !== decision.actionId) throw",
-  "replace": "    if (!run.pending) throw",
+  "find": "    const waiter = run.waiters.get(decision.actionId);",
+  "replace": "    const waiter = run.waiters.get(decision.actionId) ?? [...run.waiters.values()][0];",
   "test": "desktop/agent-runtime/test/graph.test.ts"
  },
  {
   "id": "runs.concurrent-project",
   "file": "desktop/agent-runtime/src/graph/runs.ts",
-  "find": "    if ([...this.runs.values()].some(run => run.project === project && !isTerminal(run.phase))) throw",
+  "find": "    if ([...this.runs.values()].some(run => slot(run) === slot({ project, workflow: spec.id }) && !isTerminal(run.phase))) throw",
   "replace": "    if (false) throw",
   "test": "desktop/agent-runtime/test/graph.test.ts"
  },
@@ -386,20 +386,6 @@
   "test": "tests/asset-ui.test.ts"
  },
  {
-  "id": "runs.checkpoint-kept",
-  "file": "desktop/agent-runtime/src/graph/runs.ts",
-  "find": "await this.checkpointer.deleteThread(run.runId);",
-  "replace": "void 0;",
-  "test": "desktop/agent-runtime/test/graph.test.ts"
- },
- {
-  "id": "runs.cancel-keeps-checkpoint",
-  "file": "desktop/agent-runtime/src/graph/runs.ts",
-  "find": "void run.driving.then(() => this.release(run));",
-  "replace": "void 0;",
-  "test": "desktop/agent-runtime/test/graph.test.ts"
- },
- {
   "id": "protocol.approval-content-leaks",
   "file": "desktop/agent-runtime/src/protocol.ts",
   "find": "if (action.kind !== \"write_file\") return action;",
@@ -408,9 +394,9 @@
  },
  {
   "id": "qa.model-overrules-failed-command",
-  "file": "desktop/agent-runtime/src/graph/build.ts",
-  "find": "review.verdict === \"pass\" && !commandFailed ? \"pass\"",
-  "replace": "review.verdict === \"pass\" ? \"pass\"",
+  "file": "desktop/agent-runtime/src/harness/verify.ts",
+  "find": "review === \"pass\" && !factsFailed ? \"pass\"",
+  "replace": "review === \"pass\" ? \"pass\"",
   "test": "desktop/agent-runtime/test/graph.test.ts"
  },
  {
@@ -465,8 +451,8 @@
  {
   "id": "office.everyone-busy",
   "file": "desktop/src/agent-office.ts",
-  "find": "last?.agent === agent.id ? ACTIVITY[run.phase] ?? \"thinking\" : \"waiting\"",
-  "replace": "ACTIVITY[run.phase] ?? \"thinking\"",
+  "find": "asking ? \"approval\" : active.has(agent.id) ? ACTIVITY[latest.phase] ?? \"thinking\" : \"waiting\"",
+  "replace": "asking ? \"approval\" : ACTIVITY[latest.phase] ?? \"thinking\"",
   "test": "tests/agent-office.test.ts"
  },
  {
@@ -503,5 +489,159 @@
   "find": "frontend: \"youngWoman\"",
   "replace": "frontend: \"youngMan\"",
   "test": "tests/pixel-office.test.ts"
+ },
+ {
+  "id": "par.lanes-serial",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "const settled = await Promise.allSettled(active.map(plan => runLane(plan, state, shared)));",
+  "replace": "const settled: PromiseSettledResult<LaneResult>[] = []; for (const plan of active) settled.push(await runLane(plan, state, shared).then(value => ({ status: \"fulfilled\" as const, value }), reason => ({ status: \"rejected\" as const, reason })));",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.one-lane-only",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "  return lanes.length ? lanes : [{ role:",
+  "replace": "  return lanes.length ? lanes.slice(0, 1) : [{ role:",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.qa-commands-serial",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "outcomes = await Promise.all(commands.map(argv => command(\"qa\", argv, \"변경 사항 검증\")));",
+  "replace": "outcomes = []; for (const argv of commands) outcomes.push(await command(\"qa\", argv, \"변경 사항 검증\"));",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.rework-everyone",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "  return named.length ? named : all;",
+  "replace": "  return all;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.approved-command-asks-again",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "      trusted.add(key);\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.manifest-keeps-trust",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "    if (isManifest(pending.path)) trusted.clear();",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.resolve-clears-all",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "    run.approvals = run.approvals.filter(a => a.id !== decision.actionId);",
+  "replace": "    run.approvals = [];",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.run-phase-follows-lane",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "  return !isTerminal(phase) && approvals > 0 ? \"awaiting_approval\" : phase;",
+  "replace": "  return phase;",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.qa-plans-every-round",
+  "file": "desktop/agent-runtime/src/graph/build.ts",
+  "find": "      if (!commands.length && !planned) {",
+  "replace": "      if (!commands.length) {",
+  "test": "desktop/agent-runtime/test/graph.test.ts"
+ },
+ {
+  "id": "par.ui-other-lane-clears-approval",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  let approvals = event.approval ? [...run.approvals.filter(a => a.id !== event.approval!.id), event.approval] : run.approvals;",
+  "replace": "  let approvals = event.approval ? [event.approval] : [];",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "par.ui-resolved-ignored",
+  "file": "desktop/src/agent-client.ts",
+  "find": "  if (event.resolved) approvals = approvals.filter(a => a.id !== event.resolved);",
+  "replace": "",
+  "test": "tests/agent-client.test.ts"
+ },
+ {
+  "id": "par.office-one-busy-desk",
+  "file": "desktop/src/agent-office.ts",
+  "find": "active.has(agent.id) ? ACTIVITY[latest.phase]",
+  "replace": "run.events.at(-1)?.agent === agent.id ? ACTIVITY[latest.phase]",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "par.office-lane-to-lane-paper",
+  "file": "desktop/src/agent-office.ts",
+  "find": "    else if (next !== stage) { previous = current; current = []; }",
+  "replace": "    else { previous = current.slice(-1); current = []; }",
+  "test": "tests/agent-office.test.ts"
+ },
+ {
+  "id": "harness.unknown-workflow-runs-coding",
+  "file": "desktop/agent-runtime/src/harness/workflow.ts",
+  "find": "    if (!spec) throw new UnknownWorkflow(id);",
+  "replace": "    if (!spec) return [...this.specs.values()][0];",
+  "test": "desktop/agent-runtime/test/harness.test.ts"
+ },
+ {
+  "id": "harness.check-failure-ignored",
+  "file": "desktop/agent-runtime/src/harness/verify.ts",
+  "find": "  const failedChecks = checks.filter(check => !check.ok);",
+  "replace": "  const failedChecks: CheckResult[] = [];",
+  "test": "desktop/agent-runtime/test/harness.test.ts"
+ },
+ {
+  "id": "hub.invented-links-kept",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "const sources = [...new Set(urls.filter(u => known.has(u)))];",
+  "replace": "const sources = [...new Set(urls)];",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.duplicate-title-allowed",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "if (seen.has(title.toLowerCase())) {",
+  "replace": "if (false) {",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.template-unlabelled",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "title: (\"[템플릿] \" + (t.keyword",
+  "replace": "title: (\"\" + (t.keyword",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.draft-saved-as-scheduled",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "status: \"draft\", scheduledAt: draft.scheduledAt",
+  "replace": "status: draft.scheduledAt ? \"scheduled\" : \"draft\", scheduledAt: draft.scheduledAt",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.triage-invented-product",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "if (!f) { problems.push(",
+  "replace": "if (!f && false) { problems.push(",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.skipped-failure-dropped",
+  "file": "desktop/agent-runtime/src/harness/hub.ts",
+  "find": "    if (tasks.some(t => t.productId === f.productId && t.source === f.source)) continue;\n    problems.push(",
+  "replace": "    continue;\n    problems.push(",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
+ },
+ {
+  "id": "hub.ui-can-start-without-host",
+  "file": "desktop/agent-runtime/src/runtime.ts",
+  "find": "return needsProject || p.host === true;",
+  "replace": "return true;",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
  }
 ]

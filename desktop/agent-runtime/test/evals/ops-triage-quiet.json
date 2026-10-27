@@ -1,0 +1,30 @@
+{
+ "name": "ops triage: nothing failing means no model call and no approval",
+ "workflow": "ops-triage",
+ "task": "",
+ "input": {
+  "products": [
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "name": "Toris 앱",
+    "statuses": [
+     {
+      "source": "play",
+      "state": "in_review",
+      "summary": "심사 중"
+     }
+    ]
+   }
+  ]
+ },
+ "files": {},
+ "script": {},
+ "decisions": [],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "확인이 필요한 문제가 없습니다"
+  ],
+  "maxModelCalls": 0
+ }
+}

@@ -1,0 +1,60 @@
+{
+ "name": "ops triage: invented items are dropped and a skipped failure still becomes a task",
+ "workflow": "ops-triage",
+ "task": "",
+ "input": {
+  "products": [
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "name": "Toris 앱",
+    "statuses": [
+     {
+      "source": "play",
+      "state": "in_review",
+      "summary": "심사 중"
+     },
+     {
+      "source": "github_ci",
+      "state": "failing",
+      "summary": "Android 실패"
+     }
+    ]
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "name": "toris.kr",
+    "statuses": [
+     {
+      "source": "http",
+      "state": "unhealthy",
+      "summary": "HTTP 503"
+     },
+     {
+      "source": "cloudflare",
+      "state": "deployed",
+      "summary": "배포됨"
+     }
+    ]
+   }
+  ]
+ },
+ "files": {},
+ "script": {
+  "triage": [
+   "{\"tasks\":[{\"productId\":\"00000000-0000-4000-8000-000000000003\",\"source\":\"http\",\"priority\":1,\"notes\":\"헬스체크 경로부터\"},{\"productId\":\"00000000-0000-4000-8000-000000000009\",\"source\":\"http\",\"priority\":1},{\"productId\":\"00000000-0000-4000-8000-000000000002\",\"source\":\"play\",\"priority\":1}]}"
+  ]
+ },
+ "decisions": [
+  "approve",
+  "approve"
+ ],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "작업 후보 2건 · 고친 점 3건",
+   "저장했습니다: Toris 앱 · GitHub CI",
+   "운영 점검을 마쳤습니다"
+  ],
+  "maxModelCalls": 1
+ }
+}

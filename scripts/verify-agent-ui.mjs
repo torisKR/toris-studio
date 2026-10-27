@@ -14,10 +14,10 @@ const providers = [
 ];
 let settings = { projectsRoot: '/Users/qa/projects', ollamaUrl: 'http://127.0.0.1:11434', agentModel: { provider: 'codex-cli', model: '' }, contentModel: null, image: null, embedding: { provider: 'local', model: '' } };
 let keys = { anthropic: false, openai: false, google: false, openrouter: false };
-const saved = [], decisions = [], started = [];
-const run = { runId: 'run-qa', project: 'demo-shop', task: '', phase: 'queued', agent: 'supervisor', createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', pending: null, changes: [], summary: '', events: [] };
+const saved = [], decisions = [], started = [], hubCalls = [];
+const run = { runId: 'run-qa', project: 'demo-shop', task: '', phase: 'queued', agent: 'supervisor', createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', approvals: [], changes: [], summary: '', events: [] };
 const approval = { kind: 'write_file', id: 'act-1', agent: 'backend', path: 'src/cart.ts', reason: '합계 계산 버그 수정', diff: '--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -1,3 +1,3 @@\n export function total(items) {\n-  return items.length;\n+  return items.reduce((s, i) => s + i.price, 0);\n }\n' };
-const ev = (seq, agent, phase, message, extra = {}) => ({ event: 'run', runId: 'run-qa', seq, at: `2026-10-27T00:00:0${seq}Z`, agent, phase, message, ...extra });
+const ev = (seq, agent, phase, message, extra = {}) => ({ event: 'run', runId: 'run-qa', seq, at: `2026-10-27T00:00:${String(seq).padStart(2, '0')}Z`, agent, phase, message, ...extra });
 
 const server = await createServer({ configFile: resolve('desktop/vite.config.ts'), server: { port: 0, strictPort: false } }); await server.listen();
 const browser = await chromium.launch({ headless: true });
@@ -30,6 +30,8 @@ try {
     if (command === 'ai_status') return { providers, contentModel: settings.contentModel, agentModel: settings.agentModel, image: settings.image };
     if (command === 'agent_settings_get') return { settings, keys, chromaUrl: 'http://127.0.0.1:18765' };
     if (command === 'agent_settings_save') { saved.push(args.input); settings = args.input.settings; for (const [k, v] of Object.entries(args.input.keys)) keys[k] = Boolean(v); return { settings, keys, chromaUrl: 'http://127.0.0.1:18765' }; }
+    if (command === 'hub_start') { hubCalls.push({ command, args }); return { runId: 'run-hub', workflow: args.workflow, project: '', task: '', phase: 'queued', agent: 'supervisor', createdAt: '2026-10-27T00:01:00Z', updatedAt: '2026-10-27T00:01:00Z', approvals: [], changes: [], summary: '', events: [{ event: 'run', runId: 'run-hub', seq: 1, at: '2026-10-27T00:01:01Z', agent: 'supervisor', phase: 'queued', message: '작업을 시작합니다.' }] }; }
+    if (command === 'hub_decide') { hubCalls.push({ command, args }); return { runId: args.runId }; }
     if (command === 'agent_call') {
       const { method, params } = args;
       if (method === 'status') return { version: '0.1.0', providers, chroma: true, projectsRoot: settings.projectsRoot };
@@ -124,15 +126,38 @@ try {
 
   await card.getByLabel('승인 의견').fill('좋아요');
   await card.getByRole('button', { name: '승인하고 실행' }).click();
-  await page.waitForFunction(() => !document.querySelector('[aria-label="승인 요청"]'));
+  await page.waitForFunction(() => !document.querySelector('[aria-label^="승인 요청"]'));
   assert.deepEqual(decisions, [{ runId: 'run-qa', actionId: 'act-1', decision: 'approve', feedback: '좋아요' }]);
   await emit(ev(7, 'backend', 'coding', 'src/cart.ts에 변경을 적용했습니다.', { changes: ['src/cart.ts'] }));
   await emit(ev(8, 'qa', 'awaiting_approval', '검증 명령 승인을 기다립니다: pnpm test', { approval: { kind: 'run_command', id: 'act-2', agent: 'qa', command: ['pnpm', 'test'], cwd: 'demo-shop', reason: '변경 사항 검증' } }));
   await page.getByLabel('실행할 명령').getByText('demo-shop$ pnpm test').waitFor();
   await page.getByRole('region', { name: '승인 요청' }).getByRole('button', { name: '거절' }).click();
-  await page.waitForFunction(() => !document.querySelector('[aria-label="승인 요청"]'));
+  await page.waitForFunction(() => !document.querySelector('[aria-label^="승인 요청"]'));
   assert.equal(decisions[1].decision, 'reject');
-  await emit(ev(9, 'supervisor', 'done', '작업을 완료했습니다.', { detail: '합계를 가격 합으로 고쳤습니다.', changes: ['src/cart.ts'] }));
+
+  // Frontend and Backend work at once: two requests are open together and each is decided on its own.
+  const uiWrite = { kind: 'write_file', id: 'act-fe', agent: 'frontend', path: 'src/Cart.tsx', reason: '합계 표시', diff: '--- a/src/Cart.tsx\n+++ b/src/Cart.tsx\n@@ -1 +1 @@\n-old\n+new\n' };
+  const apiCmd = { kind: 'run_command', id: 'act-be', agent: 'backend', command: ['pnpm', 'run', 'typecheck'], cwd: 'demo-shop', reason: '타입 확인' };
+  await emit(ev(10, 'frontend', 'awaiting_approval', 'src/Cart.tsx 변경 승인을 기다립니다.', { approval: uiWrite }));
+  await emit(ev(11, 'backend', 'reading', '파일을 읽고 있습니다.', { detail: 'src/api.ts' }));
+  await emit(ev(12, 'backend', 'awaiting_approval', '명령 실행 승인을 기다립니다: pnpm run typecheck', { approval: apiCmd }));
+  const feCard = page.getByRole('region', { name: '승인 요청 · Frontend Expert' });
+  const beCard = page.getByRole('region', { name: '승인 요청 · Backend Expert' });
+  await feCard.waitFor(); await beCard.waitFor();
+  await page.getByText('승인 요청 2건이 기다립니다.', { exact: false }).waitFor();
+  assert.match(await office.getByRole('button', { name: /Frontend Expert 책상/ }).getAttribute('aria-label'), /결재 대기/);
+  assert.match(await office.getByRole('button', { name: /Backend Expert 책상/ }).getAttribute('aria-label'), /결재 대기/);
+  await beCard.getByRole('button', { name: '승인하고 실행' }).click();
+  await beCard.waitFor({ state: 'detached' });
+  assert.deepEqual(decisions.at(-1), { runId: 'run-qa', actionId: 'act-be', decision: 'approve', feedback: '' });
+  assert.equal(await feCard.getByRole('button', { name: '승인하고 실행' }).isEnabled(), true, 'the other card stays open and usable');
+  await emit(ev(13, 'backend', 'testing', '실행 중: pnpm run typecheck', { resolved: 'act-be' }));
+  assert.equal(await page.locator('[aria-label^="승인 요청"]').count(), 1, 'backend progress keeps the frontend request');
+  await feCard.getByRole('button', { name: '승인하고 실행' }).click();
+  await feCard.waitFor({ state: 'detached' });
+  assert.equal(decisions.at(-1).actionId, 'act-fe');
+  report.checks.push('Two lanes can wait at once: one card per request, deciding one leaves the other open');
+  await emit(ev(14, 'supervisor', 'done', '작업을 완료했습니다.', { detail: '합계를 가격 합으로 고쳤습니다.', changes: ['src/cart.ts'] }));
   await page.locator('.agent-run .social-notice', { hasText: '합계를 가격 합으로 고쳤습니다.' }).waitFor();
   await page.locator('.agent-changes code', { hasText: 'src/cart.ts' }).waitFor();
   report.checks.push('Approve and reject send the exact action id; done shows summary and changed files');
@@ -144,6 +169,22 @@ try {
   assert.equal(await page.getByLabel('OpenAI API 키').inputValue(), '', 'key input clears after save');
   assert.equal((await page.content()).includes('sk-qa-secret-value'), false, 'saved key is never rendered');
   report.checks.push('API key goes only to agent_settings_save and is not shown again');
+
+  // Hub workflow: started through hub_start, saves decided through hub_decide, template drafts are labelled.
+  await page.getByRole('region', { name: '운영 워크플로' }).getByRole('button', { name: '주간 콘텐츠 초안 시작' }).click();
+  await page.locator('.agent-run h2', { hasText: '주간 콘텐츠 초안' }).waitFor();
+  assert.deepEqual(hubCalls[0], { command: 'hub_start', args: { workflow: 'weekly-content', task: '' } });
+  const draft = { kind: 'save_draft', id: 'act-draft', agent: 'supervisor', target: 'social_content', title: '[템플릿] AI: AI 팁', preview: 'threads\n\n템플릿 초안입니다. AI가 쓴 글이 아니니 내용을 직접 채우세요.', template: true, reason: '모델 없이 만든 템플릿 초안' };
+  await page.evaluate(p => window.__qaEmit('agent-event', p), { event: 'run', runId: 'run-hub', seq: 2, at: '2026-10-27T00:01:02Z', agent: 'supervisor', phase: 'awaiting_approval', message: '[템플릿] AI: AI 팁 저장 승인을 기다립니다.', approval: draft });
+  const draftCard = page.getByRole('region', { name: '승인 요청 · Supervisor' });
+  await draftCard.getByText('초안 저장 승인').waitFor();
+  await draftCard.getByText('템플릿 · AI 아님').waitFor();
+  await draftCard.getByLabel('저장할 내용').getByText('AI가 쓴 글이 아니니', { exact: false }).waitFor();
+  await draftCard.getByRole('button', { name: '승인하고 저장' }).click();
+  await draftCard.waitFor({ state: 'detached' });
+  assert.deepEqual(hubCalls.at(-1), { command: 'hub_decide', args: { runId: 'run-hub', actionId: 'act-draft', decision: 'approve', feedback: '' } });
+  assert.equal(decisions.filter(d => d.actionId === 'act-draft').length, 0, 'a hub save never goes to run.resume from the webview');
+  report.checks.push('Hub workflow starts via hub_start; a labelled template draft is saved only through hub_decide');
 
   // Model pickers on one row line up: their first select starts at the same height and has the same size.
   const pickerRows = () => page.evaluate(() => {

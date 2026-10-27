@@ -4,7 +4,7 @@ import type { RunSummary } from "./runs.js";
 
 export const MAX_SAVED_RUNS = 30;
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const PHASES = new Set(["queued", "thinking", "reading", "coding", "testing", "reviewing", "awaiting_approval", "done", "failed", "cancelled"]);
+const PHASES = new Set(["queued", "thinking", "reading", "coding", "testing", "reviewing", "awaiting_approval", "waiting", "done", "failed", "cancelled"]);
 const AGENTS = new Set(["supervisor", "frontend", "backend", "qa"]);
 
 /** Run logs on disk, one private JSON file per run, so they survive the app closing. */

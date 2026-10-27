@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nativeInvoke } from "./ai-client";
 import { AgentRunView } from "./AgentRunView";
 import { AgentSettingsCard } from "./AgentSettingsCard";
-import { PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, loadPanel, type IndexEvent, type IndexStatus, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
+import { HUB_WORKFLOWS, PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, decide as decideAction, loadPanel, runTitle, startHub, type HubWorkflow, type IndexEvent, type IndexStatus, type PendingAction, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
 import "./AgentPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -21,6 +21,8 @@ export function AgentPanel({ active }: { active: boolean }) {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  // Approval decisions in flight, by action id. Deciding one card never locks the others.
+  const [deciding, setDeciding] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const loaded = useRef(false);
@@ -76,20 +78,26 @@ export function AgentPanel({ active }: { active: boolean }) {
   }
   const startVector = () => act("vector", async () => { await nativeInvoke("vector_db_start"); await refresh(); setNotice("로컬 ChromaDB가 준비되었습니다."); });
   const buildIndex = () => act("index", async () => { await agentCall("index.build", { project }); setIndexing({ event: "index", project, phase: "scanning", done: 0, total: 0, message: "색인을 시작했습니다." }); });
-  const start = () => act("start", async () => {
-    const started = await agentCall<RunSummary>("run.start", { project, task });
+  const track = (started: RunSummary) => {
     const buffered = early.current.get(started.runId) ?? [];
     early.current.delete(started.runId);
     known.current.add(started.runId);
     const run = buffered.reduce<RunSummary>((acc, event) => applyEvent(acc, event) ?? acc, started);
-    setRuns(list => [run, ...list.filter(r => r.runId !== run.runId)]); setCurrent(run.runId); setTask("");
-  });
-  const decide = (decision: "approve" | "reject", feedback: string) => act("decide", async () => {
+    setRuns(list => [run, ...list.filter(r => r.runId !== run.runId)]); setCurrent(run.runId);
+  };
+  const start = () => act("start", async () => { track(await agentCall<RunSummary>("run.start", { project, task })); setTask(""); });
+  const startWorkflow = (workflow: HubWorkflow) => act("hub:" + workflow, async () => { track(await startHub(workflow, "")); });
+  const decide = async (action: PendingAction, decision: "approve" | "reject", feedback: string) => {
     const run = runs.find(r => r.runId === current);
-    if (!run?.pending) return;
-    const next = await agentCall<RunSummary>("run.resume", { runId: run.runId, actionId: run.pending.id, decision, feedback });
-    setRuns(list => list.map(r => (r.runId === next.runId ? { ...next, events: r.events.length >= next.events.length ? r.events : next.events } : r)));
-  });
+    if (!run || deciding.has(action.id) || !run.approvals.some(a => a.id === action.id)) return;
+    setDeciding(ids => new Set(ids).add(action.id)); setError("");
+    try {
+      await decideAction(run, action.id, decision, feedback);
+      // Drop only this card. The event stream owns everything else; a newer request may already be shown.
+      setRuns(list => list.map(r => (r.runId === run.runId ? { ...r, approvals: r.approvals.filter(a => a.id !== action.id) } : r)));
+    } catch (e) { setError(message(e)); }
+    finally { setDeciding(ids => { const next = new Set(ids); next.delete(action.id); return next; }); }
+  };
   const cancel = () => act("cancel", async () => { if (current) { const next = await agentCall<RunSummary>("run.cancel", { runId: current }); setRuns(list => list.map(r => (r.runId === next.runId ? next : r))); } });
   const openRun = (runId: string) => act("open", async () => { const full = await agentCall<RunSummary>("run.get", { runId }); setRuns(list => list.map(r => (r.runId === runId ? full : r))); setCurrent(runId); });
 
@@ -125,6 +133,13 @@ export function AgentPanel({ active }: { active: boolean }) {
           </div>}
         </section>
 
+        <section className="agent-card agent-hub" aria-label="운영 워크플로">
+          <h2>운영 워크플로</h2>
+          {HUB_WORKFLOWS.map(w => <div key={w.id} className="agent-hub-item"><strong>{w.label}</strong><p>{w.text}</p>
+            <button className="social-button compact" disabled={Boolean(busy)} onClick={() => void startWorkflow(w.id)}>{busy === "hub:" + w.id ? <LoaderCircle size={14} className="social-spin" /> : <Play size={14} />}{w.label} 시작</button></div>)}
+          <p className="agent-hint">프로젝트 폴더 없이 로컬 DB 자료만 읽습니다. 저장은 항목마다 승인을 받습니다.</p>
+        </section>
+
         <section className="agent-card" aria-label="작업 지시">
           <h2>작업 지시</h2>
           <textarea rows={5} maxLength={20000} value={task} onChange={e => setTask(e.target.value)} placeholder={selected ? `${selected.name}에서 할 일을 적어주세요. 예: 로그인 버튼 비활성 상태 스타일을 고치고 타입 검사를 통과시켜줘.` : "먼저 프로젝트를 선택하세요."} aria-label="에이전트 작업 지시" disabled={!selected} />
@@ -134,14 +149,14 @@ export function AgentPanel({ active }: { active: boolean }) {
         </section>
 
         {runs.length > 0 && <section className="agent-card" aria-label="작업 기록"><h2>작업 기록</h2>
-          <ul className="agent-history">{runs.map(r => <li key={r.runId}><button className={r.runId === current ? "active" : ""} onClick={() => void openRun(r.runId)}><strong>{r.project}</strong><span>{r.task.slice(0, 60)}</span><small data-phase={r.phase}>{PHASE_LABELS[r.phase]}</small></button></li>)}</ul>
+          <ul className="agent-history">{runs.map(r => <li key={r.runId}><button className={r.runId === current ? "active" : ""} onClick={() => void openRun(r.runId)}><strong>{runTitle(r)}</strong><span>{r.task.slice(0, 60)}</span><small data-phase={r.phase}>{PHASE_LABELS[r.phase]}</small></button></li>)}</ul>
           <p className="agent-hint">기록은 앱을 꺼도 최근 30개까지 남습니다.</p>
         </section>}
       </div>
 
       <div className="agent-column wide">
-        {run ? <AgentRunView run={run} busy={Boolean(busy)} onDecide={decide} onCancel={() => void cancel()} />
-          : <section className="agent-card agent-empty"><h2>에이전트 작업 보드</h2><p>프로젝트를 고르고 작업을 지시하면 Supervisor가 Frontend 또는 Backend Expert에게 배정합니다. 코드가 바뀌면 QA Reviewer가 빌드·테스트로 확인하고, 실패하면 Expert에게 돌려보냅니다.</p></section>}
+        {run ? <AgentRunView run={run} busy={action => deciding.has(action.id) || busy === "cancel"} onDecide={(action, decision, feedback) => void decide(action, decision, feedback)} onCancel={() => void cancel()} />
+          : <section className="agent-card agent-empty"><h2>에이전트 작업 보드</h2><p>프로젝트를 고르고 작업을 지시하면 Supervisor가 Frontend·Backend Expert에게 나눠 맡기고, 두 Expert는 동시에 일합니다. 코드가 바뀌면 QA Reviewer가 빌드·테스트로 확인하고, 문제가 있는 Expert에게만 돌려보냅니다.</p></section>}
         {view && status && <AgentSettingsCard view={view} providers={status.providers} busy={Boolean(busy)} onError={setError} onSaved={next => { setView(next); setNotice("모델 설정을 저장했습니다."); void refresh(); }} />}
       </div>
     </div>

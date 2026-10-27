@@ -13,8 +13,8 @@
  {
   "id": "ui.agent-approve-wrong-id",
   "file": "desktop/src/AgentPanel.tsx",
-  "find": "actionId: run.pending.id, decision,",
-  "replace": "actionId: \"x\", decision,",
+  "find": "await decideAction(run, action.id, decision, feedback);",
+  "replace": "await decideAction(run, \"x\", decision, feedback);",
   "cmd": [
    "node",
    "scripts/verify-agent-ui.mjs"

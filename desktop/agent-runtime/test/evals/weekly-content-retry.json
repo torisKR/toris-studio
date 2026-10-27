@@ -1,0 +1,69 @@
+{
+ "name": "weekly content: a failed draft round is rewritten, invented links are dropped, each save is approved",
+ "workflow": "weekly-content",
+ "task": "이번 주 초안",
+ "input": {
+  "now": "2026-10-27T00:00:00Z",
+  "channels": [
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "platform": "threads",
+    "name": "토리스"
+   }
+  ],
+  "content": [
+   {
+    "title": "이미 쓴 글"
+   }
+  ],
+  "trends": [
+   {
+    "keyword": "AI 영상",
+    "title": "짧은 AI 영상 편집 팁",
+    "url": "https://www.youtube.com/watch?v=aaa",
+    "source": "youtube",
+    "metric": "조회수 12만"
+   },
+   {
+    "keyword": "1인 창업",
+    "title": "1인 창업 첫 달 회고",
+    "url": "https://blog.naver.com/x/1",
+    "source": "naver_blog",
+    "metric": ""
+   }
+  ],
+  "events": [
+   {
+    "startsAt": "2026-10-28T05:00:00Z",
+    "title": "촬영"
+   }
+  ],
+  "work": [
+   {
+    "title": "스토어 문구 검토",
+    "dueAt": null
+   }
+  ]
+ },
+ "files": {},
+ "script": {
+  "content": [
+   "{\"drafts\":[{\"platform\":\"myspace\",\"title\":\"x\",\"body\":\"y\"},{\"platform\":\"threads\",\"title\":\"이미 쓴 글\",\"body\":\"z\"}]}",
+   "{\"drafts\":[{\"platform\":\"threads\",\"title\":\"AI 영상 3가지 팁\",\"body\":\"본문\",\"suggestedAt\":\"2026-10-29T10:00:00+09:00\",\"sourceUrls\":[\"https://www.youtube.com/watch?v=aaa\",\"https://invented.example.com/\"]},{\"platform\":\"naver_blog\",\"title\":\"창업 첫 달\",\"body\":\"본문2\",\"suggestedAt\":\"2027-01-01T00:00:00Z\",\"sourceUrls\":[]}],\"summary\":\"두 개\"}"
+  ]
+ },
+ "decisions": [
+  "approve",
+  "reject"
+ ],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "다시 쓰게",
+   "근거에 없는 링크|고친 점",
+   "저장했습니다",
+   "거절했습니다"
+  ],
+  "maxModelCalls": 2
+ }
+}
