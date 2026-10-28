@@ -24,6 +24,7 @@ export function shellFixture(command,args={}){
  if(command==='asset_command'&&args.action==='snapshot')return {assets:[],jobs:[],total:0,libraryTotal:0,offset:0,limit:100,jobTotal:0,settings:{}};
  if(command==='creation_bridge_info')return structuredClone(fixtureBridge);
  if(command==='creation_request_list')return {requests:[]};
+ if(command==='ai_status')return {providers:[],contentModel:null,agentModel:null,image:null};
  if(command==='set_main_activity'||command.startsWith('plugin:event|'))return 0;
  return unhandled;
 }

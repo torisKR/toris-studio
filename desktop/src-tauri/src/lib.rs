@@ -110,6 +110,13 @@ fn merge_bootstrapped_database(
     next
 }
 
+/// The one generated Tauri context. On macOS each `generate_context!` embeds an Info.plist
+/// symbol, so a second expansion in this crate (the startup smoke check) fails to link.
+#[cfg(feature = "desktop")]
+pub(crate) fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 #[cfg(feature = "desktop")]
 mod desktop {
     use super::*;
@@ -826,7 +833,7 @@ mod desktop {
                 }
                 crate::ipc_commands::app_command_registry!(registered_handler)
             })
-            .build(tauri::generate_context!())
+            .build(crate::app_context())
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {

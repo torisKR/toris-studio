@@ -6,11 +6,11 @@
 
 use serde::Deserialize;
 
-const NAVIGATION: [&str; 4] = ["SNS 관리", "콘텐츠", "제작", "게시"];
+const NAVIGATION: [&str; 5] = ["SNS 관리", "콘텐츠", "제작", "게시", "운영"];
 const READS: [&str; 9] = [
+    "ai_status",
     "analytics_dispatch:status",
     "browser_runtime_status",
-    "creation_bridge_info",
     "get_dashboard",
     "get_keychain_status",
     "get_scheduler_status",
@@ -182,7 +182,7 @@ mod native {
                 return 1;
             }
         };
-        let mut context = tauri::generate_context!();
+        let mut context = crate::app_context();
         // Never create the configured main window or select the development
         // server. The check exercises exactly the embedded packaged index.
         context.config_mut().app.windows.clear();

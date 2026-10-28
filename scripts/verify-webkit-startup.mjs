@@ -59,11 +59,11 @@ try{
   const response=await page.goto(`http://127.0.0.1:${server.address().port}`,{waitUntil:'networkidle'});
   assert.equal(response.headers()['content-security-policy'],config.app.security.csp);
   await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).waitFor({timeout:12000});
-  assert.deepEqual(await page.getByRole('navigation',{name:'주 메뉴',exact:true}).getByRole('button').allTextContents(),['SNS 관리','콘텐츠','제작','게시']);
+  assert.deepEqual(await page.getByRole('navigation',{name:'주 메뉴',exact:true}).getByRole('button').allTextContents(),['SNS 관리','콘텐츠','제작','게시','운영']);
   assert.equal(await page.getByLabel('분석 시작일',{exact:true}).inputValue(),'2026-12-05');
   assert.equal(await page.getByLabel('분석 종료일',{exact:true}).inputValue(),'2027-01-01');
   assert.deepEqual(errors,[],`WebKit production startup (${slashDisplay?'slash':'native'} display)`);
-  failures.push({display:slashDisplay?'slash':'native',pageErrors:errors.length,checks:'production CSP, four destinations, KST year boundary'});
+  failures.push({display:slashDisplay?'slash':'native',pageErrors:errors.length,checks:'production CSP, five destinations, KST year boundary'});
   await page.close();
  }
  console.log(JSON.stringify({browser:'WebKit',nativeProviderExecution:false,checks:failures},null,2));
