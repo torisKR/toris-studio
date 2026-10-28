@@ -298,6 +298,7 @@
     ".env.example",
     "scripts/check-secrets.sh",
     "scripts/release-security.sh",
+    ".gitleaksignore",
     "scripts/harness-check.test.mjs"
    ],
    "verify": [
