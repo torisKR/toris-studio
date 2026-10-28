@@ -52,14 +52,30 @@
     "scripts/render-*.ts",
     "desktop/src/motion/**",
     "scripts/verify-motion-*.mjs",
+    "desktop/src/production/**",
+    "scripts/verify-production-ui.mjs",
     "scripts/build-media-runtime.sh",
     "desktop/src-tauri/src/motion_ai.rs",
-    "desktop/src-tauri/examples/motion_ai_probe.rs"
+    "desktop/src-tauri/examples/motion_ai_probe.rs",
+    "desktop/src-tauri/src/production.rs",
+    "desktop/src-tauri/src/production_native.rs",
+    "desktop/src-tauri/src/video_runtime.rs",
+    "desktop/src-tauri/examples/production_probe.rs",
+    "runtime/wan_t2v_worker.py",
+    "runtime/wan_t2v_download.py",
+    "runtime/wan_t5_convert.py"
    ],
    "verify": [
     "node --import tsx --test tests/video-*.test.ts tests/editing.test.ts tests/update-scene.test.ts",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion:: media:: video_",
-    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_ai::"
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_ai::",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib production::",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib video_runtime",
+    "node scripts/verify-production-ui.mjs"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json",
+    "desktop/agent-runtime/test/ui-mutants.json"
    ]
   },
   {

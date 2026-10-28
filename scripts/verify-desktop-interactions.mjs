@@ -52,6 +52,7 @@ try {
   await search.fill('영상');
   await page.keyboard.press('Enter');
   await page.getByRole('heading', { name: '영상·모션', exact: true }).waitFor();
+  await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '직접 편집', exact: true }).click();
   await page.getByText('격리된 탐색 fixture의 템플릿 읽기 오류',{exact:true}).waitFor();
   await page.keyboard.press('Meta+k');
   await menu.waitFor();

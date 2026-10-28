@@ -89,9 +89,10 @@ test("native video menu and persistent panel render in the desktop app", async (
     const { App } = await tsImport("../desktop/src/App.tsx", { parentURL: import.meta.url, tsconfig: new URL("../desktop/tsconfig.json", import.meta.url).pathname });
     const markup = renderToStaticMarkup(createElement(App));
     assert.match(markup, /영상 제작/);
-    assert.match(markup, /<div hidden=""><nav class="video-mode-tabs" aria-label="영상 제작 모드"/);
-    // Before the AI status check finishes no model is known, so the form offers the model-free template draft.
-    assert.match(markup, /템플릿 초안 만들기|AI로 영상 초안 만들기/);
+    // The video tab opens on topic → AI video; the editors stay behind the secondary control and are not mounted yet.
+    assert.match(markup, /<section class="production" aria-labelledby="production-title"/);
+    assert.match(markup, /<nav class="video-alt-modes" aria-label="영상 제작 모드"><span>다른 방식으로 만들기<\/span><button type="button" aria-pressed="false">직접 편집<\/button><button type="button" aria-pressed="false">모션 그래픽<\/button><\/nav>/);
+    assert.doesNotMatch(markup, /템플릿 초안 만들기|AI로 영상 초안 만들기/, "the legacy editor mounts only when opened");
     const source = readFileSync(new URL("../desktop/src/App.tsx", import.meta.url), "utf8");
     const { sectionFor, sectionItems } = await import("../desktop/src/workspace-navigation");
     assert.equal(sectionFor("video"), "creation");

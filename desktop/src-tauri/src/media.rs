@@ -338,7 +338,7 @@ fn font_path() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn load_font() -> Result<Font, String> {
+pub(crate) fn load_font() -> Result<Font, String> {
     let path = if cfg!(debug_assertions) {
         font_path().ok_or("동봉 Noto CJK 또는 개발용 OS 글꼴이 없습니다.")?
     } else {
@@ -376,7 +376,7 @@ fn wrap_text(font: &Font, text: &str, size: f32, width: f32) -> Vec<String> {
     lines
 }
 
-fn fitting_text(
+pub(crate) fn fitting_text(
     font: &Font,
     text: &str,
     width: f32,
@@ -531,7 +531,7 @@ fn fitting_motion_headline(
     Err("장면 제목이 모션 영역을 초과합니다. 제목을 여러 장면으로 나누세요.".into())
 }
 
-struct Canvas {
+pub(crate) struct Canvas {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
@@ -548,7 +548,7 @@ impl Canvas {
             pixels,
         }
     }
-    fn transparent(width: u32, height: u32) -> Self {
+    pub(crate) fn transparent(width: u32, height: u32) -> Self {
         Self {
             width,
             height,
@@ -570,7 +570,7 @@ impl Canvas {
         }
         self.pixels[offset + 3] = combined as u8;
     }
-    fn rounded_card(&mut self, radius: u32, color: [u8; 3], alpha: u32) {
+    pub(crate) fn rounded_card(&mut self, radius: u32, color: [u8; 3], alpha: u32) {
         let radius = radius.min(self.width / 2).min(self.height / 2) as i32;
         for y in 0..self.height {
             for x in 0..self.width {
@@ -599,7 +599,15 @@ impl Canvas {
             }
         }
     }
-    fn text(&mut self, font: &Font, lines: &[String], size: f32, x: f32, y: f32, color: [u8; 3]) {
+    pub(crate) fn text(
+        &mut self,
+        font: &Font,
+        lines: &[String],
+        size: f32,
+        x: f32,
+        y: f32,
+        color: [u8; 3],
+    ) {
         let ascent = font
             .horizontal_line_metrics(size)
             .map(|metrics| metrics.ascent)
@@ -630,7 +638,7 @@ impl Canvas {
             }
         }
     }
-    fn save(&self, path: &Path) -> Result<(), String> {
+    pub(crate) fn save(&self, path: &Path) -> Result<(), String> {
         let file = fs::File::create(path).map_err(|_| "슬라이드 이미지를 만들 수 없습니다.")?;
         let mut encoder = png::Encoder::new(file, self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
@@ -1165,7 +1173,7 @@ fn tool_path(program: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(program))
 }
 
-async fn probe(path: &Path) -> Result<Value, String> {
+pub(crate) async fn probe(path: &Path) -> Result<Value, String> {
     let mut arguments = args(&[
         "-v",
         "error",

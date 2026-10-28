@@ -152,5 +152,38 @@
    "scripts/verify-voice-ui.mjs"
   ],
   "timeoutMs": 300000
+ },
+ {
+  "id": "ui.production-retry-wrong-scene",
+  "file": "desktop/src/production/ProductionStudio.tsx",
+  "find": "onClick={() => onRetry(\"scenes\", scene.id)}",
+  "replace": "onClick={() => onRetry(\"scenes\", job.scenes[0].id)}",
+  "cmd": [
+   "node",
+   "scripts/verify-production-ui.mjs"
+  ],
+  "timeoutMs": 300000
+ },
+ {
+  "id": "ui.production-approve-drops-edits",
+  "file": "desktop/src/production/ProductionStudio.tsx",
+  "find": "productionApi.approve(job.id, draft)",
+  "replace": "productionApi.approve(job.id, job.storyboard ?? draft)",
+  "cmd": [
+   "node",
+   "scripts/verify-production-ui.mjs"
+  ],
+  "timeoutMs": 300000
+ },
+ {
+  "id": "ui.production-editor-overwrites",
+  "file": "desktop/src/VideoPanel.tsx",
+  "find": "const target = existing ?? await invoke",
+  "replace": "const target = await invoke",
+  "cmd": [
+   "node",
+   "scripts/verify-production-ui.mjs"
+  ],
+  "timeoutMs": 300000
  }
 ]

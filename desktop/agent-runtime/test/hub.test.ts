@@ -72,7 +72,7 @@ test("triage keeps real failures only and fills the ones the model skipped", () 
 });
 
 test("hub workflows run without a project and refuse a second concurrent run", () => {
-  assert.deepEqual(defaultWorkflows().list().map(w => [w.id, w.needsProject]), [["coding", true], ["weekly-content", false], ["ops-triage", false]]);
+  assert.deepEqual(defaultWorkflows().list().map(w => [w.id, w.needsProject]), [["coding", true], ["weekly-content", false], ["ops-triage", false], ["video-production", false]]);
   const settings = parseSettings({ projectsRoot: "/nonexistent-root-for-test", chromaUrl: "http://127.0.0.1:9" });
   const model = new RoleModel({ content: [() => new Promise<string>(() => {})] as never });
   const manager = new RunManager(() => settings, () => {}, () => model);

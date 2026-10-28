@@ -1,0 +1,30 @@
+{
+ "name": "video production: a storyboard with a URL is re-asked once and the fixed one is accepted",
+ "workflow": "video-production",
+ "task": "",
+ "input": {
+  "topic": "아침 루틴으로 집중력 높이기",
+  "durationSec": 15,
+  "aspect": "9:16",
+  "style": "cinematic",
+  "narration": true,
+  "language": "ko"
+ },
+ "files": {},
+ "script": {
+  "unknown": [
+   "{\"title\":\"아침 루틴 3가지\",\"story\":\"물을 마시고 창문을 연다.\",\"style\":{\"look\":\"cinematic film look\",\"palette\":\"warm amber tones\",\"consistency\":\"same young woman in a grey hoodie\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"see https://example.com/clip.mp4\",\"transition\":\"cut\"},{\"id\":\"s2\",\"order\":2,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"a woman drinking water by the window, same young woman in a grey hoodie\",\"transition\":\"cut\"},{\"id\":\"s3\",\"order\":3,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"a woman drinking water by the window, same young woman in a grey hoodie\",\"transition\":\"cut\"}]}",
+   "{\"title\":\"아침 루틴 3가지\",\"story\":\"물을 마시고 창문을 연다.\",\"style\":{\"look\":\"cinematic film look\",\"palette\":\"warm amber tones\",\"consistency\":\"same young woman in a grey hoodie\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"a woman drinking water by the window, same young woman in a grey hoodie\",\"transition\":\"cut\"},{\"id\":\"s2\",\"order\":2,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"a woman drinking water by the window, same young woman in a grey hoodie\",\"transition\":\"cut\"},{\"id\":\"s3\",\"order\":3,\"durationSec\":5,\"script\":\"장면 대본\",\"narration\":\"물 한 잔을 마셔요.\",\"caption\":\"물 한 잔\",\"prompt\":\"a woman drinking water by the window, same young woman in a grey hoodie\",\"transition\":\"cut\"}]}"
+  ]
+ },
+ "decisions": [],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "다시 쓰게",
+   "검사 통과 · 장면 3개",
+   "스토리보드를 만들었습니다"
+  ],
+  "maxModelCalls": 2
+ }
+}

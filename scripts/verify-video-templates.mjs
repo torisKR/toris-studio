@@ -162,6 +162,12 @@ try {
     const menu = page.getByRole('dialog', { name: '어디로 이동할까요?' });
     await menu.getByRole('combobox', { name: '화면 이름 검색' }).fill(query);
     await page.keyboard.press('Enter');
+    // 영상·모션 opens on the production composer; templates live in the 직접 편집 editor.
+    if (query === '영상') {
+      const legacy = page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '직접 편집', exact: true });
+      await legacy.waitFor();
+      if (await legacy.getAttribute('aria-pressed') !== 'true') await legacy.click();
+    }
   };
   await navigate('영상');
   const gallery = page.getByRole('region', { name: '영상 템플릿 선택', exact: true });

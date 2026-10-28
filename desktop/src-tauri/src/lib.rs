@@ -48,6 +48,9 @@ pub mod ops;
 #[cfg(feature = "desktop")]
 mod ops_native;
 pub mod ops_status;
+pub mod production;
+#[cfg(feature = "desktop")]
+mod production_native;
 pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
@@ -68,6 +71,7 @@ pub mod video_embed;
 pub mod video_idea;
 pub mod video_project_export;
 pub mod video_research;
+pub mod video_runtime;
 pub mod video_template_library;
 pub mod video_templates;
 pub mod youtube;
@@ -725,6 +729,8 @@ mod desktop {
             .manage(updater::shared())
             .manage(agent_runtime::shared())
             .manage(tts_runtime::shared())
+            .manage(video_runtime::shared())
+            .manage(production::shared())
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
@@ -748,6 +754,15 @@ mod desktop {
             })
             .setup(move |app| {
                 crate::tray::setup(app)?;
+                {
+                    use tauri::{Emitter, Manager};
+                    let handle = app.handle().clone();
+                    let productions = app.state::<Arc<production::Productions>>();
+                    productions.set_emitter(Arc::new(move |event| {
+                        let _ = handle.emit_to("main", "production-event", event);
+                    }));
+                    productions.recover_all();
+                }
                 {
                     use tauri::{Emitter, Manager};
                     let handle = app.handle().clone();
@@ -879,6 +894,7 @@ mod desktop {
                     crate::publications::shutdown_media();
                     app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();
                     app.state::<Arc<tts_runtime::TtsRuntime>>().shutdown();
+                    app.state::<Arc<video_runtime::VideoRuntime>>().shutdown();
                 }
                 if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
                     // The updater holds the publication barrier until this signed restart.

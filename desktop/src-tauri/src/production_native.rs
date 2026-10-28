@@ -1,0 +1,417 @@
+//! IPC for AI video production. Settings and storyboard edits come from the window; every
+//! path, command and model run is decided in Rust. Publishing only creates a draft.
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tauri::State;
+
+type Jobs<'a> = State<'a, Arc<crate::production::Productions>>;
+type Video<'a> = State<'a, Arc<crate::video_runtime::VideoRuntime>>;
+type Tts<'a> = State<'a, Arc<crate::tts_runtime::TtsRuntime>>;
+type Agent<'a> = State<'a, Arc<crate::agent_runtime::AgentRuntime>>;
+
+fn job_id(input: &Value) -> Result<String, String> {
+    let id = input["jobId"].as_str().ok_or("작업 ID가 필요합니다.")?;
+    uuid::Uuid::parse_str(id).map_err(|_| "작업 ID 형식 오류")?;
+    Ok(id.to_owned())
+}
+
+#[tauri::command]
+pub async fn production_engine_status(video: Video<'_>, tts: Tts<'_>) -> Result<Value, String> {
+    let ffmpeg = crate::media::status()
+        .await
+        .map(|s| s["ffmpegAvailable"] == true)
+        .unwrap_or(false);
+    let mut status = video.status();
+    status["tts"] = tts.status().await;
+    status["ffmpeg"] = json!(ffmpeg);
+    Ok(status)
+}
+
+#[tauri::command]
+pub async fn production_engine_install(
+    window: tauri::WebviewWindow,
+    video: Video<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    video.inner().install(
+        input["engine"]
+            .as_str()
+            .unwrap_or(crate::video_runtime::DEFAULT_ENGINE),
+    )
+}
+
+#[tauri::command]
+pub async fn production_list() -> Result<Value, String> {
+    Ok(json!({"jobs": crate::production::list_jobs(&crate::production::root()?)}))
+}
+
+/// Lets the webview's asset protocol read only this job's own media files.
+fn allow_preview(app: &tauri::AppHandle, job: &Value) {
+    use tauri::Manager;
+    let scope = app.asset_protocol_scope();
+    for file in crate::production::preview_files(job) {
+        let _ = scope.allow_file(file);
+    }
+}
+
+fn view(app: &tauri::AppHandle, jobs: &crate::production::Productions, job: &Value) -> Value {
+    allow_preview(app, job);
+    let running = job["id"]
+        .as_str()
+        .is_some_and(|id| jobs.running_id().as_deref() == Some(id));
+    crate::production::job_view(job, running)
+}
+
+#[tauri::command]
+pub async fn production_get(
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    let id = job_id(&input)?;
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    Ok(view(&app, &jobs, &job))
+}
+
+/// Plans in the agent runtime (model or labelled template) and waits for the user's approval.
+#[tauri::command]
+pub async fn production_create(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    agent: Agent<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let settings = crate::production::parse_settings(&input)?;
+    let mut job = crate::production::new_job(&settings);
+    let id = job["id"].as_str().unwrap().to_owned();
+    job["stages"]["plan"]["status"] = json!("running");
+    let root = crate::production::root()?;
+    crate::production::write_json(&root.join(&id).join("job.json"), &job)?;
+    let shown = view(&app, &jobs, &job);
+    let jobs = jobs.inner().clone();
+    let agent = agent.inner().clone();
+    let plan_id = id.clone();
+    tauri::async_runtime::spawn(async move {
+        let planned = plan(&agent, &settings).await;
+        let _ = jobs.update(&plan_id, |job| {
+            match planned {
+                Ok(storyboard) => {
+                    job["draft"] = storyboard;
+                    job["status"] = json!("awaiting_approval");
+                    job["stage"] = json!("storyboard");
+                    job["stages"]["plan"]["status"] = json!("done");
+                    job["stages"]["storyboard"]["status"] = json!("running");
+                }
+                Err(error) => {
+                    job["status"] = json!("failed");
+                    job["stages"]["plan"]["status"] = json!("failed");
+                    job["errors"] = json!([{"at": chrono::Utc::now().to_rfc3339(), "stage": "plan", "message": error, "kind": "error"}]);
+                }
+            }
+            Ok(())
+        }).await;
+    });
+    Ok(shown)
+}
+
+async fn plan(
+    agent: &Arc<crate::agent_runtime::AgentRuntime>,
+    settings: &crate::production::Settings,
+) -> Result<Value, String> {
+    let run = agent.call("run.start", json!({"project": "", "task": settings.topic, "workflow": "video-production", "host": true,
+        "input": {"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko"}})).await?;
+    let run_id = run["runId"]
+        .as_str()
+        .ok_or("기획 작업을 시작하지 못했습니다.")?
+        .to_owned();
+    for _ in 0..900 {
+        let run = agent.call("run.get", json!({"runId": run_id})).await?;
+        match run["phase"].as_str() {
+            Some("done") => {
+                let summary: Value = serde_json::from_str(run["summary"].as_str().unwrap_or(""))
+                    .map_err(|_| "기획 결과 형식 오류")?;
+                let mut storyboard = summary["storyboard"].clone();
+                storyboard["template"] = json!(summary["template"] == true);
+                storyboard["provider"] = summary["provider"].clone();
+                storyboard["model"] = summary["model"].clone();
+                return crate::production::validate_storyboard(&storyboard, settings);
+            }
+            Some("failed") | Some("cancelled") => {
+                return Err(run["summary"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("기획에 실패했습니다.")
+                    .chars()
+                    .take(400)
+                    .collect())
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(700)).await,
+        }
+    }
+    Err("기획 시간이 초과되었습니다.".into())
+}
+
+#[tauri::command]
+pub async fn production_approve(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    video: Video<'_>,
+    tts: Tts<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    video.ready(
+        &crate::production::read_job(&crate::production::root()?, &id)?["settings"]["engine"]
+            .as_str()
+            .unwrap_or(""),
+    )?;
+    let job = jobs
+        .update(&id, |job| {
+            if job["status"] != "awaiting_approval" && job["storyboard"].is_null() {
+                return Err("스토리보드가 아직 준비되지 않았습니다.".into());
+            }
+            let storyboard = input
+                .get("storyboard")
+                .cloned()
+                .filter(|s| !s.is_null())
+                .unwrap_or_else(|| job["draft"].clone());
+            crate::production::apply_storyboard(job, storyboard)?;
+            job["status"] = json!("running");
+            job["stage"] = json!("scenes");
+            Ok(())
+        })
+        .await?;
+    jobs.inner()
+        .spawn(id, video.inner().clone(), tts.inner().clone())?;
+    Ok(view(&app, &jobs, &job))
+}
+
+#[tauri::command]
+pub async fn production_pause(
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    let id = job_id(&input)?;
+    jobs.cancel(&id);
+    let job = jobs
+        .update(&id, |job| {
+            if job["status"] == "running" {
+                job["status"] = json!("paused");
+            }
+            Ok(())
+        })
+        .await?;
+    Ok(view(&app, &jobs, &job))
+}
+
+#[tauri::command]
+pub async fn production_resume(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    video: Video<'_>,
+    tts: Tts<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    if job["storyboard"].is_null() {
+        return Err("스토리보드를 먼저 승인하세요.".into());
+    }
+    if job["status"] == "done" {
+        return Err("이미 완료된 영상입니다. 장면을 다시 만들려면 장면 재생성을 누르세요.".into());
+    }
+    video.ready(job["settings"]["engine"].as_str().unwrap_or(""))?;
+    jobs.inner()
+        .spawn(id.clone(), video.inner().clone(), tts.inner().clone())?;
+    production_get(app, jobs, json!({"jobId": id})).await
+}
+
+#[tauri::command]
+pub async fn production_cancel(
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    let id = job_id(&input)?;
+    jobs.cancel(&id);
+    let job = jobs
+        .update(&id, |job| {
+            if job["status"] != "done" {
+                job["status"] = json!("cancelled");
+            }
+            Ok(())
+        })
+        .await?;
+    Ok(view(&app, &jobs, &job))
+}
+
+#[tauri::command]
+pub async fn production_retry(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    video: Video<'_>,
+    tts: Tts<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    if jobs.running_id().as_deref() == Some(id.as_str()) {
+        return Err("진행 중에는 일시 중지한 뒤 다시 실행하세요.".into());
+    }
+    let stage = input["stage"]
+        .as_str()
+        .ok_or("다시 실행할 단계를 지정하세요.")?
+        .to_owned();
+    let scene = input["sceneId"].as_str().map(str::to_owned);
+    jobs.update(&id, |job| {
+        crate::production::mark_retry(job, scene.as_deref(), &stage)
+    })
+    .await?;
+    jobs.inner()
+        .spawn(id.clone(), video.inner().clone(), tts.inner().clone())?;
+    production_get(app, jobs, json!({"jobId": id})).await
+}
+
+/// Edit settings (subtitles, BGM, speaker) only touch what depends on them.
+#[tauri::command]
+pub async fn production_update_edit(
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    let id = job_id(&input)?;
+    if jobs.running_id().as_deref() == Some(id.as_str()) {
+        return Err("진행 중에는 일시 중지한 뒤 바꾸세요.".into());
+    }
+    let edit = input["edit"].clone();
+    jobs.update(&id, |job| {
+        let mut settings = job["settings"].clone();
+        let mut from = None::<&str>;
+        for (key, stage) in [
+            ("subtitleStyle", "subtitles"),
+            ("bgm", "edit"),
+            ("speaker", "voice"),
+        ] {
+            if let Some(value) = edit.get(key) {
+                if settings[key] != *value {
+                    settings[key] = value.clone();
+                    from = Some(match (from, stage) {
+                        (Some("voice"), _) | (_, "voice") => "voice",
+                        (Some("subtitles"), _) | (_, "subtitles") => "subtitles",
+                        _ => stage,
+                    });
+                }
+            }
+        }
+        let parsed = crate::production::parse_settings(&settings)?;
+        job["settings"] = serde_json::to_value(&parsed).map_err(|_| "설정 오류")?;
+        match from {
+            Some("voice") => {
+                if let Some(board) = job["storyboard"].clone().as_object() {
+                    crate::production::apply_storyboard(job, Value::Object(board.clone()))?;
+                }
+            }
+            Some(stage) => crate::production::invalidate_from(job, stage),
+            None => {}
+        }
+        if from.is_some() && job["status"] == "done" {
+            job["status"] = json!("paused");
+        }
+        Ok(())
+    })
+    .await
+    .map(|job| view(&app, &jobs, &job))
+}
+
+/// Returns the final MP4 path; the window opens it with the existing native preview command.
+#[tauri::command]
+pub async fn production_open_final(
+    window: tauri::WebviewWindow,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    let path = job["outputs"]["final"]
+        .as_str()
+        .ok_or("완성 영상이 없습니다.")?;
+    Ok(json!({"path": path}))
+}
+
+/// Copies the final MP4 where the user picks. The original stays in the job folder.
+#[tauri::command]
+pub async fn production_save_video(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    input: Value,
+) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    let source = std::path::PathBuf::from(
+        job["outputs"]["final"]
+            .as_str()
+            .ok_or("완성 영상이 없습니다.")?,
+    );
+    let name: String = job["storyboard"]["title"]
+        .as_str()
+        .unwrap_or("toris-video")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
+        .take(60)
+        .collect();
+    let picked = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("MP4 저장")
+            .set_file_name(format!("{}.mp4", name.trim()))
+            .add_filter("MP4 영상", &["mp4"])
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|_| "저장 위치 선택 실패")?;
+    let Some(target) = picked else {
+        return Ok(json!({"saved": null}));
+    };
+    let target = target.into_path().map_err(|_| "로컬 경로를 선택하세요.")?;
+    std::fs::copy(&source, &target).map_err(|_| "영상을 저장할 수 없습니다.")?;
+    Ok(json!({"saved": target}))
+}
+
+/// Imports the final MP4 into the publication media store and saves an unscheduled draft.
+/// Publishing still goes through the existing preflight and approval screens.
+#[tauri::command]
+pub async fn production_publication_draft(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<crate::AppState>>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    if job["status"] != "done" {
+        return Err("영상 제작이 끝난 뒤 게시 초안을 만드세요.".into());
+    }
+    let source = std::path::PathBuf::from(
+        job["outputs"]["final"]
+            .as_str()
+            .ok_or("완성 영상이 없습니다.")?,
+    );
+    let media = crate::publication_media::import(&source, "video").await?;
+    let draft = crate::production::publication_payload(
+        &job,
+        media["id"].as_str().ok_or("미디어 가져오기 실패")?,
+    );
+    let saved = crate::publications::save(&state.config_snapshot().await, draft).await?;
+    Ok(json!({"publication": saved, "media": media, "requiresApproval": true}))
+}

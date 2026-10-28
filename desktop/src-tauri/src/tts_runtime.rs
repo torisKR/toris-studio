@@ -479,6 +479,37 @@ impl TtsRuntime {
         }
     }
 
+    /// True only for a server this app started and that answers health checks.
+    pub async fn owned_running(&self) -> bool {
+        self.owned().await && health().await.is_some()
+    }
+
+    pub async fn healthy(&self) -> bool {
+        health().await.is_some()
+    }
+
+    /// Waits until the server answers or the timeout passes; reports the server's last log line on failure.
+    pub async fn wait_ready(&self, timeout: Duration) -> Result<(), String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if health().await.is_some() {
+                return Ok(());
+            }
+            if !self.owned().await {
+                return Err(self
+                    .exited
+                    .lock()
+                    .ok()
+                    .and_then(|e| e.clone())
+                    .unwrap_or_else(|| "음성 서버가 시작되지 않았습니다.".into()));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err("음성 서버가 제한 시간 안에 준비되지 않았습니다.".into());
+            }
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
+    }
+
     /// Installs only what is missing; returns immediately and reports progress via status().
     pub async fn install(self: &Arc<Self>) -> Result<Value, String> {
         if !supported() {

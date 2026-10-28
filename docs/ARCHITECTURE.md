@@ -26,6 +26,25 @@ Persistence
   Supabase Postgres + Storage
 ```
 
+## Desktop AI video production
+
+```text
+React 영상·모션 탭 (desktop/src/production)
+        | IPC production_* (input 하나)
+        v
+Rust production.rs ── job.json (단계별 원자 저장, 캐시 키, 재개·재시도)
+  |  plan      -> Node LangGraph "video-production" (스토리보드 데이터만, Zod 검증)
+  |  scenes    -> video_runtime.rs -> runtime/wan_t2v_worker.py (Wan2.1 1.3B MLX, 장면 1개씩, 메모리 상한)
+  |  voice     -> media::generate_voice -> Qwen3-TTS MLX :50010
+  |  subtitles -> 음성 길이 기반 SRT
+  |  edit      -> FFmpeg (cover, 앱이 그린 자막 PNG, 페이드, 코드 합성 BGM)
+  |  qa        -> ffprobe + blackframe, 실패 단계만 1회 재실행
+  v
+final.mp4 · subtitles.srt · storyboard.json · metadata.json · provenance.json · edit-project.json
+```
+
+장면 생성과 편집기 MP4 출력은 같은 영상 잠금을 씁니다. 장면 생성 중에는 앱이 켠 음성 서버를 멈췄다가 다시 켜고, 앱 밖에서 켠 음성 서버는 그대로 두고 메모리 상한을 낮춥니다. 계약은 [VIDEO_PRODUCTION.md](VIDEO_PRODUCTION.md)를 따릅니다.
+
 ## Why local-first
 
 초기 단계에서 가장 먼저 검증해야 하는 것은 결제나 멀티테넌시가 아니라 다음 네 가지입니다.

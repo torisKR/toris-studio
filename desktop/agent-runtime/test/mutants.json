@@ -671,5 +671,82 @@
   "find": "if (provider !== \"ollama\" && !settings.keys[provider as keyof RuntimeSettings[\"keys\"]]) {",
   "replace": "if (false) {",
   "test": "desktop/agent-runtime/test/models-check.test.ts"
+ },
+ {
+  "id": "prod.scene-unknown-fields",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "const Scene = z.strictObject({",
+  "replace": "const Scene = z.object({",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.root-unknown-fields",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "const StoryboardDraft = z.strictObject({",
+  "replace": "const StoryboardDraft = z.object({",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.url-allowed",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "  if (URL_LIKE.test(text)) return \"URL을 넣을 수 없습니다.\";\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.path-allowed",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "  if (PATH_LIKE.test(text)) return \"파일 경로를 넣을 수 없습니다.\";\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.code-allowed",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "  if (CODE_LIKE.test(text)) return \"코드 블록이나 명령을 넣을 수 없습니다.\";\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.control-allowed",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "  if (CONTROL.test(text)) return \"제어 문자가 들어 있습니다.\";\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.duration-sum-ignored",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "Math.abs(total - input.durationSec) > DURATION_TOLERANCE",
+  "replace": "false",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.scene-count-ignored",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "if (draft.scenes.length !== expected) problems.push",
+  "replace": "if (false) problems.push",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.narration-unbounded",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "if (hangulCount(narration) <= limit) return",
+  "replace": "if (true) return",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.no-retry",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "    if (s.rounds < MAX_ROUNDS) {\n      ctx.emit(\"qa\", \"reviewing\", \"스토리보드가",
+  "replace": "    if (false) {\n      ctx.emit(\"qa\", \"reviewing\", \"스토리보드가",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.template-unlabelled",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "    template: true,\n    provider: \"\",",
+  "replace": "    template: false,\n    provider: \"\",",
+  "test": "desktop/agent-runtime/test/production.test.ts"
  }
 ]

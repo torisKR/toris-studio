@@ -12,7 +12,7 @@ const EVALS = path.join(path.dirname(fileURLToPath(import.meta.url)), "evals");
 
 test("the registry lists the coding workflow and refuses unknown or duplicate ids", () => {
   const registry = defaultWorkflows();
-  assert.deepEqual(registry.list().map(w => w.id), ["coding", "weekly-content", "ops-triage"]);
+  assert.deepEqual(registry.list().map(w => w.id), ["coding", "weekly-content", "ops-triage", "video-production"]);
   assert.equal("build" in registry.list()[0], false, "list exposes no builder");
   assert.throws(() => registry.get("rm -rf"), /알 수 없는 워크플로/);
   const fresh = new WorkflowRegistry();

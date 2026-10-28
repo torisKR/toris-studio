@@ -510,5 +510,192 @@
    "media::tests::voice"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-storyboard-extra-field",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "                return Err(format!(\"장면에 지원하지 않는 필드가 있습니다: {key}\"));",
+  "replace": "                continue;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-url-allowed",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "        || lower.contains(\"http://\")\n        || lower.contains(\"https://\")\n",
+  "replace": "        || false\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-cache-ignored",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "            old.filter(|o| o[part][\"key\"] == key && o[part][\"status\"] == \"done\")",
+  "replace": "            old.filter(|o| o[part][\"key\"] == key && false)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-recover-drops-done",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "                if scene[part][\"status\"] == \"running\" {\n                    scene[part][\"status\"] = json!(\"pending\");",
+  "replace": "                if true {\n                    scene[part][\"status\"] = json!(\"pending\");",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-retry-all-scenes",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "                .iter_mut()\n                .find(|s| s[\"id\"] == id)\n                .ok_or(\"장면을 찾을 수 없습니다.\")?;\n            if scene[part][\"status\"] == \"skipped\" {",
+  "replace": "                .iter_mut()\n                .next()\n                .ok_or(\"장면을 찾을 수 없습니다.\")?;\n            if scene[part][\"status\"] == \"skipped\" {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-caption-past-voice",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "    let span = voice_sec.min(scene_sec).max(0.5);",
+  "replace": "    let span = scene_sec.max(0.5);",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-qa-black-ignored",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "black < 0.2,",
+  "replace": "true,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-commercial-always",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "    let video_commercial = engine.blocked.is_none()\n        && engine.weights_license == \"Apache-2.0\"",
+  "replace": "    let video_commercial = true\n        || engine.weights_license == \"Apache-2.0\"",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.video-blocked-enabled",
+  "file": "desktop/src-tauri/src/video_runtime.rs",
+  "find": "            return Err(reason.into());\n        }\n        if !supported() {\n            return Err(\"MLX 영상 엔진은 Apple Silicon Mac에서만 실행됩니다.\".into());",
+  "replace": "        }\n        if !supported() {\n            return Err(\"MLX 영상 엔진은 Apple Silicon Mac에서만 실행됩니다.\".into());",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "video_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.video-license-not-checked",
+  "file": "desktop/src-tauri/src/video_runtime.rs",
+  "find": "        || receipt[\"license\"] != \"apache-2.0\"\n",
+  "replace": "\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "video_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.video-shared-memory-cap",
+  "file": "desktop/src-tauri/src/video_runtime.rs",
+  "find": "    if external_tts_running {\n        SHARED_MEMORY_LIMIT_GB",
+  "replace": "    if external_tts_running {\n        MEMORY_LIMIT_GB",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "video_runtime"
+  ],
+  "timeoutMs": 900000
  }
 ]

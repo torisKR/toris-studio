@@ -1,4 +1,5 @@
 import { MotionStudio } from "./motion/MotionStudio";
+import { ProductionStudio } from "./production/ProductionStudio";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { openRenderPreview } from "./native-windows";
 import {
@@ -32,6 +33,8 @@ type Notice = { text: string; tone: "success" | "error" | "info" };
 type RenderOperation = { channel: Channel<VideoRenderProgressMessage> | null; session: ReturnType<typeof createRenderProgressSession> | null };
 type AiStatus = { providers: Array<{ id: string; label: string; available: boolean; detail: string }>; defaultProvider: string | null };
 type Props = { active: boolean; researchSeed?: VideoResearchSeed | null; onResearchSeedHandled?: (requestId: string) => void; onOpenKeywords?: () => void; onOpenSettings?: () => void };
+/** A finished AI production handed to the editor as its own saved project. */
+type EditorHandoff = { requestId: number; project: Record<string, unknown> };
 const sourceLabels: Record<string, string> = { youtube: "YouTube", naver_blog: "네이버 블로그", google_trends: "Google 트렌드" };
 const aiProviders = ["agent-model"] as const;
 
@@ -144,7 +147,7 @@ function SceneDataFields({ scene, onPatch }: { scene: StudioVideoScene; onPatch:
   </div>;
 }
 
-function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenKeywords, onOpenSettings }: Props) {
+function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenKeywords, onOpenSettings, handoff }: Props & { handoff?: EditorHandoff | null }) {
   const [projects, setProjects] = useState<StudioVideoProject[]>([]);
   const [project, setProject] = useState<StudioVideoProject | null>(null);
   const [baseline, setBaseline] = useState("");
@@ -210,6 +213,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
   const panelActive = useRef(active);
   const renderOperation = useRef<RenderOperation | null>(null);
   panelActive.current = active;
+  const handledHandoff = useRef(0);
   const onSeedHandled = useRef(onResearchSeedHandled);
   onSeedHandled.current = onResearchSeedHandled;
   selectedProject.current = project;
@@ -320,6 +324,26 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
       void loadProjects(); void checkStatus(); void checkAi();
     }
   }, [active, loadProjects, checkStatus, checkAi]);
+
+  // An AI production opened for editing: reuse the editor copy if it exists so earlier edits survive.
+  useEffect(() => {
+    if (!active || !handoff || busy || pending || importOpen || handledHandoff.current === handoff.requestId) return;
+    handledHandoff.current = handoff.requestId;
+    void (async () => {
+      setBusy("open");
+      try {
+        const saved = await invoke<StudioVideoProject[]>("video_list_projects");
+        const existing = saved.find(item => item.id === handoff.project.id);
+        const target = existing ?? await invoke<StudioVideoProject>("video_save_project", { input: handoff.project });
+        if (!mounted.current) return;
+        setProjects(current => [target, ...current.filter(item => item.id !== target.id)]);
+        setBusy(null);
+        requestProject({ kind: "select", project: target });
+        setNotice({ tone: "info", text: existing ? "이전에 편집기로 가져온 AI 영상을 열었습니다." : "AI 영상을 편집기 프로젝트로 가져왔습니다. 수정한 뒤 MP4로 다시 출력할 수 있으며, 원본 작업은 그대로 남습니다." });
+      } catch (error) { if (mounted.current) { setBusy(null); setNotice({ tone: "error", text: message(error) }); } }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, handoff, busy, pending, importOpen]);
 
   useEffect(() => {
     if (!active || !researchSeed || busy || pending || importOpen || acceptedSeeds.current.has(researchSeed.requestId)) return;
@@ -718,8 +742,19 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
 }
 
 export function VideoPanel(props: Props) {
- const [mode,setMode]=useState<"legacy"|"graphics">("legacy");
- const [motionOpened,setMotionOpened]=useState(false);
- useEffect(()=>{if(props.researchSeed)setMode("legacy");},[props.researchSeed]);
- return <><nav className="video-mode-tabs" aria-label="영상 제작 모드"><button aria-pressed={mode==="legacy"} onClick={()=>setMode("legacy")}>영상·프리셋</button><button aria-pressed={mode==="graphics"} onClick={()=>{setMotionOpened(true);setMode("graphics");}}>모션 그래픽</button></nav><div hidden={mode!=="legacy"}><LegacyVideoPanel {...props} active={props.active&&mode==="legacy"}/></div><div hidden={mode!=="graphics"}>{motionOpened&&<MotionStudio active={props.active&&mode==="graphics"}/> }</div></>;
+ // The tab's main view is topic → AI video. The legacy editor and motion graphics stay reachable
+ // behind a secondary control and mount only once opened (no background IPC from hidden editors).
+ const [mode,setMode]=useState<"production"|"legacy"|"graphics">("production");
+ const [opened,setOpened]=useState({legacy:false,graphics:false});
+ const [handoff,setHandoff]=useState<EditorHandoff|null>(null);
+ const show=(next:"production"|"legacy"|"graphics")=>{if(next!=="production")setOpened(o=>({...o,[next]:true}));setMode(next);};
+ const editInEditor=(project:Record<string,unknown>)=>{setHandoff(h=>({requestId:(h?.requestId??0)+1,project}));show("legacy");};
+ useEffect(()=>{if(props.researchSeed){setOpened(o=>({...o,legacy:true}));setMode("legacy");}},[props.researchSeed]);
+ const others=<><button type="button" aria-pressed={mode==="legacy"} onClick={()=>show("legacy")}>직접 편집</button><button type="button" aria-pressed={mode==="graphics"} onClick={()=>show("graphics")}>모션 그래픽</button></>;
+ return <>
+  {mode!=="production"&&<nav className="video-mode-back" aria-label="영상 제작 모드"><button type="button" onClick={()=>show("production")}><ArrowRight size={14} style={{transform:"rotate(180deg)"}} aria-hidden="true"/>주제 → AI 영상</button>{others}</nav>}
+  <div hidden={mode!=="production"}><ProductionStudio active={props.active&&mode==="production"} onOpenSettings={props.onOpenSettings} onEditInEditor={editInEditor}/><nav className="video-alt-modes" aria-label="영상 제작 모드"><span>다른 방식으로 만들기</span>{others}</nav></div>
+  <div hidden={mode!=="legacy"}>{opened.legacy&&<LegacyVideoPanel {...props} handoff={handoff} active={props.active&&mode==="legacy"}/>}</div>
+  <div hidden={mode!=="graphics"}>{opened.graphics&&<MotionStudio active={props.active&&mode==="graphics"}/>}</div>
+ </>;
 }
