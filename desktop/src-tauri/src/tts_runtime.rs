@@ -98,7 +98,11 @@ impl Paths {
             .or_else(|| std::env::var_os("HF_HOME").map(|path| PathBuf::from(path).join("hub")))
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| home.join(".cache/huggingface/hub"));
-        Self { dir: runtime.join("qwen3-tts-mlx"), home, hf_hub }
+        Self {
+            dir: runtime.join("qwen3-tts-mlx"),
+            home,
+            hf_hub,
+        }
     }
     fn managed_python(&self) -> PathBuf {
         self.dir.join("venv/bin/python")
@@ -106,7 +110,10 @@ impl Paths {
     pub fn python_candidates(&self) -> Vec<(&'static str, PathBuf)> {
         vec![
             ("toris", self.managed_python()),
-            ("mlx-narration", self.home.join("projects/MLX-Narration/.venv/bin/python")),
+            (
+                "mlx-narration",
+                self.home.join("projects/MLX-Narration/.venv/bin/python"),
+            ),
         ]
     }
     pub fn model_candidates(&self) -> Vec<(&'static str, PathBuf)> {
@@ -129,7 +136,8 @@ impl Paths {
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
-    let metadata = std::fs::metadata(path).map_err(|_| format!("{} 파일이 없습니다.", path.display()))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|_| format!("{} 파일이 없습니다.", path.display()))?;
     if !metadata.is_file() || metadata.len() > 4 * 1024 * 1024 {
         return Err(format!("{} 파일 형식을 확인하세요.", path.display()));
     }
@@ -139,12 +147,21 @@ fn read_json(path: &Path) -> Result<Value, String> {
 
 fn weights(directory: &Path) -> Result<(), String> {
     let mut found = false;
-    for entry in std::fs::read_dir(directory).map_err(|_| "모델 폴더를 읽을 수 없습니다.")?.flatten() {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|_| "모델 폴더를 읽을 수 없습니다.")?
+        .flatten()
+    {
         let path = entry.path();
-        if path.extension().is_some_and(|extension| extension == "safetensors") {
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "safetensors")
+        {
             // metadata() follows Hugging Face cache symlinks to the real blob.
             if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                return Err(format!("모델 가중치가 비어 있거나 덜 받아졌습니다: {}", path.display()));
+                return Err(format!(
+                    "모델 가중치가 비어 있거나 덜 받아졌습니다: {}",
+                    path.display()
+                ));
             }
             found = true;
         }
@@ -152,7 +169,10 @@ fn weights(directory: &Path) -> Result<(), String> {
     if found {
         Ok(())
     } else {
-        Err(format!("모델 가중치(.safetensors)가 없습니다: {}", directory.display()))
+        Err(format!(
+            "모델 가중치(.safetensors)가 없습니다: {}",
+            directory.display()
+        ))
     }
 }
 
@@ -182,7 +202,10 @@ fn base_env(command: &mut Command) {
         }
     }
     command
-        .env("PATH", std::env::join_paths(crate::agent_runtime::search_path()).unwrap_or_default())
+        .env(
+            "PATH",
+            std::env::join_paths(crate::agent_runtime::search_path()).unwrap_or_default(),
+        )
         .env("HF_HUB_DISABLE_TELEMETRY", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null())
@@ -218,7 +241,11 @@ pub async fn health() -> Option<Value> {
         .build()
         .ok()?;
     let response = client.get(format!("{BASE}/health")).send().await.ok()?;
-    if !response.status().is_success() || response.content_length().is_some_and(|length| length > 65536) {
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > 65536)
+    {
         return None;
     }
     let bytes = response.bytes().await.ok()?;
@@ -246,9 +273,20 @@ fn write_file(path: &Path, contents: &str) -> Result<(), String> {
 
 fn log_tail(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
-    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let tail = lines[lines.len().saturating_sub(6)..].join("\n");
-    (!tail.is_empty()).then(|| tail.chars().rev().take(1200).collect::<Vec<_>>().into_iter().rev().collect())
+    (!tail.is_empty()).then(|| {
+        tail.chars()
+            .rev()
+            .take(1200)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    })
 }
 
 #[derive(Default)]
@@ -276,7 +314,10 @@ impl TtsRuntime {
             paths,
             child: Mutex::new(None),
             exited: std::sync::Mutex::new(None),
-            install: Arc::new(std::sync::Mutex::new(Install { phase: "idle", ..Install::default() })),
+            install: Arc::new(std::sync::Mutex::new(Install {
+                phase: "idle",
+                ..Install::default()
+            })),
             python: Mutex::new(None),
         }
     }
@@ -302,13 +343,17 @@ impl TtsRuntime {
 
     async fn owned(&self) -> bool {
         let mut guard = self.child.lock().await;
-        let Some(child) = guard.as_mut() else { return false };
+        let Some(child) = guard.as_mut() else {
+            return false;
+        };
         match child.try_wait() {
             Ok(None) => true,
             _ => {
                 *guard = None;
-                *self.exited.lock().unwrap() =
-                    Some(log_tail(&self.log_path()).unwrap_or_else(|| "음성 서버가 시작 중에 종료되었습니다.".into()));
+                *self.exited.lock().unwrap() = Some(
+                    log_tail(&self.log_path())
+                        .unwrap_or_else(|| "음성 서버가 시작 중에 종료되었습니다.".into()),
+                );
                 false
             }
         }
@@ -323,7 +368,13 @@ impl TtsRuntime {
         let model = find_model(&self.paths);
         let owned = self.owned().await;
         let health = health().await;
-        let state = if health.is_some() { "running" } else if owned { "starting" } else { "stopped" };
+        let state = if health.is_some() {
+            "running"
+        } else if owned {
+            "starting"
+        } else {
+            "stopped"
+        };
         let install = {
             let install = self.install.lock().unwrap();
             json!({"phase": install.phase, "step": install.step, "log": install.log})
@@ -354,7 +405,9 @@ impl TtsRuntime {
             return Ok(self.status().await);
         }
         if port_open().await {
-            return Err(format!("포트 {PORT}을 다른 프로그램이 쓰고 있어 음성 서버를 켤 수 없습니다."));
+            return Err(format!(
+                "포트 {PORT}을 다른 프로그램이 쓰고 있어 음성 서버를 켤 수 없습니다."
+            ));
         }
         let (_, python) = self
             .python()
@@ -368,8 +421,11 @@ impl TtsRuntime {
         let log_path = self.log_path();
         std::fs::create_dir_all(log_path.parent().ok_or("로그 경로 오류")?)
             .map_err(|_| "로그 폴더를 만들 수 없습니다.")?;
-        let log = std::fs::File::create(&log_path).map_err(|_| "음성 서버 로그를 만들 수 없습니다.")?;
-        let log_err = log.try_clone().map_err(|_| "음성 서버 로그를 만들 수 없습니다.")?;
+        let log =
+            std::fs::File::create(&log_path).map_err(|_| "음성 서버 로그를 만들 수 없습니다.")?;
+        let log_err = log
+            .try_clone()
+            .map_err(|_| "음성 서버 로그를 만들 수 없습니다.")?;
         let mut command = Command::new(&python);
         command
             .arg("-m")
@@ -387,7 +443,11 @@ impl TtsRuntime {
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err));
         let mut guard = self.child.lock().await;
-        *guard = Some(command.spawn().map_err(|_| "음성 서버를 시작하지 못했습니다.")?);
+        *guard = Some(
+            command
+                .spawn()
+                .map_err(|_| "음성 서버를 시작하지 못했습니다.")?,
+        );
         drop(guard);
         *self.exited.lock().unwrap() = None;
         Ok(self.status().await)
@@ -403,7 +463,10 @@ impl TtsRuntime {
         }
         drop(guard);
         if health().await.is_some() {
-            return Err("앱 밖에서 켠 음성 서버라 여기서 끄지 않습니다. 터미널에서 pnpm tts:off로 끄세요.".into());
+            return Err(
+                "앱 밖에서 켠 음성 서버라 여기서 끄지 않습니다. 터미널에서 pnpm tts:off로 끄세요."
+                    .into(),
+            );
         }
         Ok(self.status().await)
     }
@@ -425,7 +488,11 @@ impl TtsRuntime {
             let mut install = self.install.lock().unwrap();
             let running = install.phase == "running";
             if !running {
-                *install = Install { phase: "running", step: "설치 상태 확인".into(), log: VecDeque::new() };
+                *install = Install {
+                    phase: "running",
+                    step: "설치 상태 확인".into(),
+                    log: VecDeque::new(),
+                };
             }
             running
         };
@@ -460,12 +527,19 @@ impl TtsRuntime {
         }
     }
 
-    async fn run(&self, program: &Path, args: &[&std::ffi::OsStr], minutes: u64) -> Result<(), String> {
+    async fn run(
+        &self,
+        program: &Path,
+        args: &[&std::ffi::OsStr],
+        minutes: u64,
+    ) -> Result<(), String> {
         let mut command = Command::new(program);
         command.args(args);
         base_env(&mut command);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|_| format!("{} 실행 실패", program.display()))?;
+        let mut child = command
+            .spawn()
+            .map_err(|_| format!("{} 실행 실패", program.display()))?;
         let mut readers = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             readers.push(tokio::spawn(collect(stdout, Arc::clone(&self.install))));
@@ -496,24 +570,53 @@ impl TtsRuntime {
             None => {
                 let venv = self.paths.dir.join("venv");
                 let python = self.paths.managed_python();
-                std::fs::create_dir_all(&self.paths.dir).map_err(|_| "설치 폴더를 만들 수 없습니다.")?;
-                let packages: Vec<&std::ffi::OsStr> = PACKAGES.iter().map(|package| std::ffi::OsStr::new(*package)).collect();
+                std::fs::create_dir_all(&self.paths.dir)
+                    .map_err(|_| "설치 폴더를 만들 수 없습니다.")?;
+                let packages: Vec<&std::ffi::OsStr> = PACKAGES
+                    .iter()
+                    .map(|package| std::ffi::OsStr::new(*package))
+                    .collect();
                 if let Some(uv) = which("uv") {
                     if !python.is_file() {
                         self.step("Python 3.12 가상환경 만들기 (uv)");
-                        self.run(&uv, &["venv".as_ref(), "--python".as_ref(), "3.12".as_ref(), venv.as_os_str()], 10).await?;
+                        self.run(
+                            &uv,
+                            &[
+                                "venv".as_ref(),
+                                "--python".as_ref(),
+                                "3.12".as_ref(),
+                                venv.as_os_str(),
+                            ],
+                            10,
+                        )
+                        .await?;
                     }
                     self.step("mlx-audio·FastAPI 설치 (고정 버전)");
-                    let mut args: Vec<&std::ffi::OsStr> = vec!["pip".as_ref(), "install".as_ref(), "--python".as_ref(), python.as_os_str()];
+                    let mut args: Vec<&std::ffi::OsStr> = vec![
+                        "pip".as_ref(),
+                        "install".as_ref(),
+                        "--python".as_ref(),
+                        python.as_os_str(),
+                    ];
                     args.extend(packages);
                     self.run(&uv, &args, 30).await?;
                 } else if let Some(system) = which("python3.12") {
                     if !python.is_file() {
                         self.step("Python 3.12 가상환경 만들기");
-                        self.run(&system, &["-m".as_ref(), "venv".as_ref(), venv.as_os_str()], 10).await?;
+                        self.run(
+                            &system,
+                            &["-m".as_ref(), "venv".as_ref(), venv.as_os_str()],
+                            10,
+                        )
+                        .await?;
                     }
                     self.step("mlx-audio·FastAPI 설치 (고정 버전)");
-                    let mut args: Vec<&std::ffi::OsStr> = vec!["-m".as_ref(), "pip".as_ref(), "install".as_ref(), "--disable-pip-version-check".as_ref()];
+                    let mut args: Vec<&std::ffi::OsStr> = vec![
+                        "-m".as_ref(),
+                        "pip".as_ref(),
+                        "install".as_ref(),
+                        "--disable-pip-version-check".as_ref(),
+                    ];
                     args.extend(packages);
                     self.run(&python, &args, 30).await?;
                 } else {
@@ -532,7 +635,17 @@ impl TtsRuntime {
         }
         self.step("Qwen3-TTS 1.7B CustomVoice 8bit 모델 받기 (약 2.4GB)");
         let model = self.paths.dir.join("model");
-        self.run(&python, &["-c".as_ref(), DOWNLOAD.as_ref(), MODEL_REPO.as_ref(), model.as_os_str()], 90).await?;
+        self.run(
+            &python,
+            &[
+                "-c".as_ref(),
+                DOWNLOAD.as_ref(),
+                MODEL_REPO.as_ref(),
+                model.as_os_str(),
+            ],
+            90,
+        )
+        .await?;
         validate_model(&model)
     }
 }
@@ -569,7 +682,9 @@ mod tests {
     }
 
     fn python_keys(name: &str) -> Vec<String> {
-        let start = NARRATION.find(&format!("\n{name} = {{")).expect("dict in narration.py");
+        let start = NARRATION
+            .find(&format!("\n{name} = {{"))
+            .expect("dict in narration.py");
         let body = &NARRATION[start..];
         let body = &body[..body.find("\n}").unwrap()];
         body.lines()
@@ -618,12 +733,20 @@ mod tests {
             .hf_hub
             .join("models--mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit/snapshots/abc");
         model(&snapshot, "custom_voice");
-        let sources: Vec<_> = paths.model_candidates().into_iter().map(|(source, _)| source).collect();
+        let sources: Vec<_> = paths
+            .model_candidates()
+            .into_iter()
+            .map(|(source, _)| source)
+            .collect();
         assert_eq!(sources, ["toris", "huggingface", "lmstudio"]);
         assert_eq!(find_model(&paths).unwrap(), ("huggingface", snapshot));
         model(&paths.dir.join("model"), "custom_voice");
         assert_eq!(find_model(&paths).unwrap().0, "toris");
-        let pythons: Vec<_> = paths.python_candidates().into_iter().map(|(source, _)| source).collect();
+        let pythons: Vec<_> = paths
+            .python_candidates()
+            .into_iter()
+            .map(|(source, _)| source)
+            .collect();
         assert_eq!(pythons, ["toris", "mlx-narration"]);
     }
 
@@ -632,7 +755,11 @@ mod tests {
         let license = license();
         assert_eq!(license["commercialUse"], true);
         assert_eq!(license["model"]["license"], "Apache-2.0");
-        assert!(license["runtime"].as_array().unwrap().iter().all(|item| ["MIT", "BSD-3-Clause"].contains(&item["license"].as_str().unwrap())));
+        assert!(license["runtime"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| ["MIT", "BSD-3-Clause"].contains(&item["license"].as_str().unwrap())));
     }
 
     #[test]
@@ -641,4 +768,3 @@ mod tests {
         assert_eq!(sampling("expressive")["top_k"], 60);
     }
 }
-

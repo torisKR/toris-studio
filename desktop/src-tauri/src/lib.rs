@@ -542,9 +542,7 @@ mod desktop {
         media::status().await
     }
     #[tauri::command]
-    pub async fn tts_status(
-        tts: State<'_, Arc<tts_runtime::TtsRuntime>>,
-    ) -> Result<Value, String> {
+    pub async fn tts_status(tts: State<'_, Arc<tts_runtime::TtsRuntime>>) -> Result<Value, String> {
         Ok(tts.status().await)
     }
     #[tauri::command]

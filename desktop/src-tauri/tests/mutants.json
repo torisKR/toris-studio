@@ -412,8 +412,8 @@
  {
   "id": "rs.motion-ai-extra-keys-kept",
   "file": "desktop/src-tauri/src/motion_ai.rs",
-  "find": "Some(Value::Array(ops)) if !ops.is_empty() => Ok(json!({\"operations\": ops})),",
-  "replace": "Some(Value::Array(ops)) if !ops.is_empty() => Ok(value.clone()),",
+  "find": "Ok(json!({\"operations\": ops}))",
+  "replace": "Ok(value.clone())",
   "cmd": [
    "cargo",
    "test",

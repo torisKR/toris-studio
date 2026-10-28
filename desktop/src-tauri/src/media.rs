@@ -1693,7 +1693,8 @@ pub async fn generate_voice(input: Value) -> Result<Value, String> {
         .timeout(Duration::from_secs(600))
         .build()
         .map_err(|_| "음성 HTTP 설정 오류")?;
-    const OFFLINE: &str = "로컬 음성 서버에 연결할 수 없습니다. 영상 화면의 로컬 음성에서 켜기를 누르세요.";
+    const OFFLINE: &str =
+        "로컬 음성 서버에 연결할 수 없습니다. 영상 화면의 로컬 음성에서 켜기를 누르세요.";
     let mut response = client
         .post(format!("{TTS_BASE}/narrate"))
         .json(&json!({"script":text,"speaker":speaker,"language":language,"style":voice.style,"emphasis":voice.emphasis,"quality":voice.quality,"pause_ms":voice.pause_ms,"max_tokens":4096}))
@@ -1703,10 +1704,18 @@ pub async fn generate_voice(input: Value) -> Result<Value, String> {
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         // A server started before narration support: plain synthesis with the same sampling preset.
         let mut body = json!({"text":text.replace("**", ""),"speaker":speaker,"language":language,"instruct":"따뜻하고 자연스러운 목소리로 편안하고 또렷하게 읽어 주세요.","max_tokens":4096});
-        if let (Some(body), Some(sampling)) = (body.as_object_mut(), crate::tts_runtime::sampling(voice.quality).as_object()) {
+        if let (Some(body), Some(sampling)) = (
+            body.as_object_mut(),
+            crate::tts_runtime::sampling(voice.quality).as_object(),
+        ) {
             body.extend(sampling.clone());
         }
-        response = client.post(format!("{TTS_BASE}/synthesize")).json(&body).send().await.map_err(|_| OFFLINE)?;
+        response = client
+            .post(format!("{TTS_BASE}/synthesize"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| OFFLINE)?;
     }
     if !response.status().is_success() {
         return Err(format!(
@@ -1782,7 +1791,10 @@ pub(crate) fn voice_options(value: &Value) -> Result<VoiceOptions, String> {
     if !value.is_null() && !value.is_object() {
         return Err("음성 설정 형식을 확인하세요.".into());
     }
-    let pick = |key: &str, allowed: &'static [&'static str], default: &'static str| -> Result<&'static str, String> {
+    let pick = |key: &str,
+                allowed: &'static [&'static str],
+                default: &'static str|
+     -> Result<&'static str, String> {
         match value.get(key) {
             None | Some(Value::Null) => Ok(default),
             Some(choice) => choice
@@ -1855,10 +1867,25 @@ mod tests {
     fn voice_options_accept_only_closed_choices() {
         assert_eq!(
             voice_options(&Value::Null).unwrap(),
-            VoiceOptions { speaker: "Sohee", style: "natural", emphasis: "normal", quality: "stable", pause_ms: 300 }
+            VoiceOptions {
+                speaker: "Sohee",
+                style: "natural",
+                emphasis: "normal",
+                quality: "stable",
+                pause_ms: 300
+            }
         );
         let chosen = voice_options(&json!({"speaker":"Ryan","style":"tech-news","emphasis":"strong","quality":"expressive","pauseMs":0})).unwrap();
-        assert_eq!((chosen.speaker, chosen.style, chosen.emphasis, chosen.quality, chosen.pause_ms), ("Ryan", "tech-news", "strong", "expressive", 0));
+        assert_eq!(
+            (
+                chosen.speaker,
+                chosen.style,
+                chosen.emphasis,
+                chosen.quality,
+                chosen.pause_ms
+            ),
+            ("Ryan", "tech-news", "strong", "expressive", 0)
+        );
         for bad in [
             json!({"speaker":"Sohee\n"}),
             json!({"speaker":"클론 목소리"}),

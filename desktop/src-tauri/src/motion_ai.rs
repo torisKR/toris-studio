@@ -51,7 +51,10 @@ pub fn request_message(r: &Value) -> Result<String, String> {
     })
     .to_string();
     if message.chars().count() > 50_000 {
-        return Err("프로젝트가 커서 한 번에 보낼 수 없습니다. 장면이나 요소 범위를 좁혀 다시 요청하세요.".into());
+        return Err(
+            "프로젝트가 커서 한 번에 보낼 수 없습니다. 장면이나 요소 범위를 좁혀 다시 요청하세요."
+                .into(),
+        );
     }
     Ok(message)
 }
@@ -62,9 +65,14 @@ pub fn parse_draft(text: &str) -> Result<Value, String> {
     if text.len() > 400_000 {
         return Err("응답이 너무 깁니다.".into());
     }
-    let fenced = text.split("```").nth(1).map(|block| block.trim_start_matches("json"));
+    let fenced = text
+        .split("```")
+        .nth(1)
+        .map(|block| block.trim_start_matches("json"));
     for candidate in fenced.into_iter().chain(std::iter::once(text)) {
-        let Some(start) = candidate.find('{') else { continue };
+        let Some(start) = candidate.find('{') else {
+            continue;
+        };
         let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
         for (offset, ch) in candidate[start..].char_indices() {
             if in_string {
@@ -82,12 +90,15 @@ pub fn parse_draft(text: &str) -> Result<Value, String> {
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        let value: Value = match serde_json::from_str(&candidate[start..=start + offset]) {
-                            Ok(value) => value,
-                            Err(_) => break,
-                        };
+                        let value: Value =
+                            match serde_json::from_str(&candidate[start..=start + offset]) {
+                                Ok(value) => value,
+                                Err(_) => break,
+                            };
                         return match value.get("operations") {
-                            Some(Value::Array(ops)) if !ops.is_empty() => Ok(json!({"operations": ops})),
+                            Some(Value::Array(ops)) if !ops.is_empty() => {
+                                Ok(json!({"operations": ops}))
+                            }
                             _ => Err(NO_JSON.into()),
                         };
                     }
@@ -124,7 +135,9 @@ where
         });
         match received {
             Ok(request) => {
-                return Ok(json!({"request": request, "provider": output["provider"], "model": output["model"], "attempts": attempt + 1}))
+                return Ok(
+                    json!({"request": request, "provider": output["provider"], "model": output["model"], "attempts": attempt + 1}),
+                )
             }
             Err(reason) => rejection = Some(reason),
         }
@@ -161,17 +174,31 @@ mod tests {
 
     #[test]
     fn parse_draft_accepts_fenced_or_wrapped_json_and_keeps_only_operations() {
-        let ops = r#"{"operations":[{"op":"set-duration","sceneId":"s2","durationSec":14}],"note":"x"}"#;
-        for text in [ops.to_string(), format!("여기 초안입니다.\n```json\n{ops}\n```"), format!("설명 {ops} 끝")] {
+        let ops =
+            r#"{"operations":[{"op":"set-duration","sceneId":"s2","durationSec":14}],"note":"x"}"#;
+        for text in [
+            ops.to_string(),
+            format!("여기 초안입니다.\n```json\n{ops}\n```"),
+            format!("설명 {ops} 끝"),
+        ] {
             let draft = parse_draft(&text).unwrap();
-            assert_eq!(draft.as_object().unwrap().len(), 1, "extra keys are dropped");
+            assert_eq!(
+                draft.as_object().unwrap().len(),
+                1,
+                "extra keys are dropped"
+            );
             assert_eq!(draft["operations"][0]["durationSec"], 14);
         }
     }
 
     #[test]
     fn parse_draft_rejects_prose_empty_and_missing_operations() {
-        for text in ["두 번째 장면을 느리게 했습니다.", "{\"operations\":[]}", "{\"scenes\":[]}", "{\"operations\": oops}"] {
+        for text in [
+            "두 번째 장면을 느리게 했습니다.",
+            "{\"operations\":[]}",
+            "{\"scenes\":[]}",
+            "{\"operations\": oops}",
+        ] {
             assert!(parse_draft(text).is_err(), "{text}");
         }
     }
@@ -180,12 +207,33 @@ mod tests {
     fn the_request_goes_to_the_model_as_data_with_canvas_and_no_local_paths() {
         let dir = tempfile::tempdir().unwrap();
         let r = request(dir.path(), "create", json!([]));
-        let message: Value = serde_json::from_str(&request_message(&motion_drafts::get_at(dir.path(), r["id"].as_str().unwrap()).unwrap()).unwrap()).unwrap();
+        let message: Value = serde_json::from_str(
+            &request_message(
+                &motion_drafts::get_at(dir.path(), r["id"].as_str().unwrap()).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(message["canvas"], json!({"width":1080,"height":1920}));
-        assert_eq!(message["instruction"], "전사 회의용 30초 설명 영상으로 만들어 줘");
+        assert_eq!(
+            message["instruction"],
+            "전사 회의용 30초 설명 영상으로 만들어 줘"
+        );
         assert!(message["project"]["scenes"][0].get("audioPath").is_none());
-        assert!(!SYSTEM.contains("전사 회의"), "the instruction never enters the system rules");
-        for op in ["add-scene", "delete-scene", "move-scene", "set-duration", "add-element", "replace-element", "delete-element", "set-table-value"] {
+        assert!(
+            !SYSTEM.contains("전사 회의"),
+            "the instruction never enters the system rules"
+        );
+        for op in [
+            "add-scene",
+            "delete-scene",
+            "move-scene",
+            "set-duration",
+            "add-element",
+            "replace-element",
+            "delete-element",
+            "set-table-value",
+        ] {
             assert!(SYSTEM.contains(op), "{op} is documented for the model");
         }
     }
@@ -203,25 +251,62 @@ mod tests {
         .await
         .unwrap();
         let (system, prompt) = seen.borrow_mut().take().unwrap();
-        assert_eq!(system, SYSTEM, "the rules travel separately from the request");
-        assert!(!prompt.contains("출력 규칙"), "the request message carries data only");
-        assert_eq!(serde_json::from_str::<Value>(&prompt).unwrap()["mode"], "create");
+        assert_eq!(
+            system, SYSTEM,
+            "the rules travel separately from the request"
+        );
+        assert!(
+            !prompt.contains("출력 규칙"),
+            "the request message carries data only"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&prompt).unwrap()["mode"],
+            "create"
+        );
         assert_eq!(result["request"]["status"], "received");
-        assert_eq!((result["provider"].as_str(), result["model"].as_str(), result["attempts"].as_u64()), (Some("kiro-cli"), Some("claude-opus-5.5"), Some(1)));
+        assert_eq!(
+            (
+                result["provider"].as_str(),
+                result["model"].as_str(),
+                result["attempts"].as_u64()
+            ),
+            (Some("kiro-cli"), Some("claude-opus-5.5"), Some(1))
+        );
         let next = motion_drafts::apply_at(dir.path(), id, project()).unwrap();
-        assert_eq!(next["scenes"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["intro"]);
-        assert_eq!(next["motionGraphics"]["tables"], project()["motionGraphics"]["tables"], "source numbers are untouched");
+        assert_eq!(
+            next["scenes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["intro"]
+        );
+        assert_eq!(
+            next["motionGraphics"]["tables"],
+            project()["motionGraphics"]["tables"],
+            "source numbers are untouched"
+        );
     }
 
     #[tokio::test]
     async fn a_rejected_answer_is_retried_once_with_the_reason() {
         let dir = tempfile::tempdir().unwrap();
-        let id = request(dir.path(), "create", json!([]))["id"].as_str().unwrap().to_owned();
+        let id = request(dir.path(), "create", json!([]))["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let prompts = RefCell::new(Vec::new());
         let result = generate(dir.path(), &id, |_, prompt| {
             prompts.borrow_mut().push(prompt);
             let first = prompts.borrow().len() == 1;
-            async move { answer(if first { "장면을 만들었습니다." } else { CREATE }) }
+            async move {
+                answer(if first {
+                    "장면을 만들었습니다."
+                } else {
+                    CREATE
+                })
+            }
         })
         .await
         .unwrap();
@@ -233,12 +318,27 @@ mod tests {
     async fn unsafe_or_out_of_scope_answers_leave_the_request_waiting() {
         let dir = tempfile::tempdir().unwrap();
         for (scope, text) in [
-            (json!([]), r#"{"operations":[{"op":"run-shell","command":"rm -rf /"}]}"#),
-            (json!([]), r##"{"operations":[{"op":"replace-element","sceneId":"s1","element":{"id":"title","kind":"text","x":0,"y":0,"width":10,"height":10,"z":1,"color":"#fff","start":0,"duration":1,"animation":"rise","text":"x","fontSize":40,"html":"<b>"}}]}"##),
-            (json!(["s1"]), r#"{"operations":[{"op":"set-duration","sceneId":"s2","durationSec":12}]}"#),
-            (json!([]), r#"{"operations":[{"op":"set-table-value","tableId":"sales","row":0,"label":"Q3","expectedValue":12,"value":18}]}"#),
+            (
+                json!([]),
+                r#"{"operations":[{"op":"run-shell","command":"rm -rf /"}]}"#,
+            ),
+            (
+                json!([]),
+                r##"{"operations":[{"op":"replace-element","sceneId":"s1","element":{"id":"title","kind":"text","x":0,"y":0,"width":10,"height":10,"z":1,"color":"#fff","start":0,"duration":1,"animation":"rise","text":"x","fontSize":40,"html":"<b>"}}]}"##,
+            ),
+            (
+                json!(["s1"]),
+                r#"{"operations":[{"op":"set-duration","sceneId":"s2","durationSec":12}]}"#,
+            ),
+            (
+                json!([]),
+                r#"{"operations":[{"op":"set-table-value","tableId":"sales","row":0,"label":"Q3","expectedValue":12,"value":18}]}"#,
+            ),
         ] {
-            let id = request(dir.path(), "edit", scope)["id"].as_str().unwrap().to_owned();
+            let id = request(dir.path(), "edit", scope)["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
             let calls = RefCell::new(0);
             let result = generate(dir.path(), &id, |_, _| {
                 *calls.borrow_mut() += 1;
@@ -247,24 +347,41 @@ mod tests {
             .await;
             assert!(result.is_err(), "{text}");
             assert_eq!(*calls.borrow(), 2);
-            assert_eq!(motion_drafts::get_at(dir.path(), &id).unwrap()["status"], "waiting");
+            assert_eq!(
+                motion_drafts::get_at(dir.path(), &id).unwrap()["status"],
+                "waiting"
+            );
         }
     }
 
     #[tokio::test]
     async fn provider_failures_are_not_retried_and_finished_requests_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let id = request(dir.path(), "create", json!([]))["id"].as_str().unwrap().to_owned();
+        let id = request(dir.path(), "create", json!([]))["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let calls = RefCell::new(0);
         let failed = generate(dir.path(), &id, |_, _| {
             *calls.borrow_mut() += 1;
-            async { Err::<Value, String>("kiro-cli 실행 실패 (코드 1): 로그인하세요".into()) }
+            async {
+                Err::<Value, String>("kiro-cli 실행 실패 (코드 1): 로그인하세요".into())
+            }
         })
         .await;
-        assert_eq!(failed.unwrap_err(), "kiro-cli 실행 실패 (코드 1): 로그인하세요");
+        assert_eq!(
+            failed.unwrap_err(),
+            "kiro-cli 실행 실패 (코드 1): 로그인하세요"
+        );
         assert_eq!(*calls.borrow(), 1);
-        generate(dir.path(), &id, |_, _| async { answer(CREATE) }).await.unwrap();
-        assert!(generate(dir.path(), &id, |_, _| async { answer(CREATE) }).await.is_err(), "a received draft is not overwritten");
+        generate(dir.path(), &id, |_, _| async { answer(CREATE) })
+            .await
+            .unwrap();
+        assert!(
+            generate(dir.path(), &id, |_, _| async { answer(CREATE) })
+                .await
+                .is_err(),
+            "a received draft is not overwritten"
+        );
     }
 }
-
