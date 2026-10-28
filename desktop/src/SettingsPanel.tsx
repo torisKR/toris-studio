@@ -2,10 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { ActivityStatus } from "./ActivityStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Check, CircleAlert, Database, Download, ExternalLink, Eye, EyeOff, KeyRound, LoaderCircle, Play, RefreshCw, ShieldCheck, Sparkles, Timer } from "lucide-react";
+import { Check, CircleAlert, Database, Download, ExternalLink, Eye, EyeOff, KeyRound, LoaderCircle, Mic, Play, RefreshCw, ShieldCheck, Sparkles, Timer } from "lucide-react";
 import { External } from "./External";
 import { UpdatePanel } from "./UpdatePanel";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
+import { LocalVoice } from "./LocalVoice";
 
 export type PublicSettings = {
   databaseConfigured: boolean;
@@ -286,6 +287,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
         <label htmlFor="settings-database">데이터베이스 연결 주소</label><input id="settings-database" type="password" value={form.databaseUrl} onChange={(event) => update("databaseUrl", event.target.value)} placeholder={settings.databaseConfigured ? "저장된 주소 사용 중 · 변경할 때만 입력" : "postgresql://사용자:비밀번호@127.0.0.1:포트/DB"} maxLength={2000} autoComplete="new-password" spellCheck={false} />
         <p className="social-form-hint">컨테이너가 실행 중이어야 연결됩니다. 주소를 저장하면 실제 DB 연결 상태를 다시 확인합니다.</p>
       </fieldset>
+      <section className="desktop-settings-section" aria-labelledby="settings-local-voice"><h2 id="settings-local-voice"><Mic size={18} />로컬 음성 (TTS)</h2><p>영상 내레이션을 이 Mac에서 만듭니다. 음성을 외부 서버로 보내지 않습니다. MLX-Narration을 이미 설치했다면 그 런타임과 모델을 그대로 씁니다.</p><LocalVoice active /></section>
       <section className="desktop-settings-section"><h2><Sparkles size={18} />AI 모델</h2><p>AI 작성·이미지 생성·코드 에이전트의 모델은 Agent 탭의 모델 설정에서 고릅니다. 구독 CLI(Claude Code·Codex·Gemini·Cursor·Kiro) 또는 API 키를 사용할 수 있습니다.</p><p className="social-form-hint">API 키는 OS 키체인에 저장하며 일반 설정 파일에는 넣지 않습니다. 각 공급자의 요금과 사용 한도가 적용됩니다.</p></section>
       <fieldset disabled={locked} className="desktop-settings-section"><legend><KeyRound size={18} />수집 API</legend>
         <p>Google 트렌드는 키 없이 수집합니다. YouTube와 네이버 블로그 수집에 필요한 API 정보를 추가하세요.</p>

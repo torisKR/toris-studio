@@ -215,7 +215,9 @@ pnpm remotion:render -- shorts
 
 ### Qwen3-TTS가 비활성화될 때
 
-Apple Silicon Mac에서 로컬 TTS 런타임과 모델을 한 번 설치합니다.
+데스크톱 앱에서는 설정 › 로컬 음성에서 설치·켜기·끄기를 할 수 있습니다. `~/projects/MLX-Narration`의 Python 환경과 Hugging Face 모델 캐시가 있으면 읽기 전용으로 그대로 씁니다. 모델은 Apache-2.0이라 생성한 음성을 상업적으로 쓸 수 있습니다. 실제 사람 목소리를 흉내 내려면 그 사람의 동의가 필요합니다.
+
+터미널에서는 Apple Silicon Mac에 로컬 TTS 런타임과 모델을 한 번 설치합니다.
 
 ```bash
 pnpm tts:setup

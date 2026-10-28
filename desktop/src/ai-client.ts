@@ -6,6 +6,9 @@ export const nativeInvoke: BridgeInvoke = (command, args) => invoke(command, arg
 
 export type ModelChoice = { provider: string; model: string };
 export type ProviderInfo = { id: string; label: string; kind: "api" | "subscription" | "local"; plan?: string; available: boolean; detail: string; suggestedModels: string[]; supportsImages?: boolean };
+export type ModelOption = { id: string; label: string; detail?: string };
+/** agent_call models.check: the provider's live state and the models this login or key can use. */
+export type ProviderCheck = { provider: string; state: "connected" | "signed-out" | "missing" | "needs-key" | "offline" | "error"; detail: string; account?: string; models: ModelOption[]; source: "account" | "suggested"; checkedAt: string };
 export type AiStatus = { providers: ProviderInfo[]; contentModel: ModelChoice | null; agentModel: ModelChoice | null; image: ModelChoice | null };
 export type AiText = { text: string; provider: string; model: string };
 

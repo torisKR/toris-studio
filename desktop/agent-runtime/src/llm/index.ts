@@ -1,8 +1,8 @@
 import type { ApiProviderId, CliProviderId, ModelChoice, ProviderId, RuntimeSettings } from "../protocol.js";
 import { UserError } from "../util.js";
-import { cliModel, cliVersion, findBinary } from "./cli.js";
+import { checkCli, cliModel, cliVersion, findBinary } from "./cli.js";
 import { apiModel, listApiModels, localUrl } from "./http.js";
-import { PROVIDER_LABELS, type ChatModel, type ProviderInfo } from "./types.js";
+import { PROVIDER_LABELS, type ChatModel, type ModelOption, type ProviderCheck, type ProviderInfo } from "./types.js";
 
 export const API_PROVIDERS: ApiProviderId[] = ["anthropic", "openai", "google", "openrouter", "ollama"];
 export const CLI_PROVIDERS: CliProviderId[] = ["claude-cli", "codex-cli", "gemini-cli", "cursor-cli", "kiro-cli"];
@@ -50,4 +50,27 @@ export async function listModels(provider: ProviderId, settings: RuntimeSettings
   if (isCli(provider)) return suggested;
   const live = await listApiModels(provider, settings.keys, settings.ollamaUrl);
   return live.length ? live : suggested;
+}
+
+const options = (ids: string[]): ModelOption[] => ids.map(id => ({ id, label: id }));
+
+/** Connection check for the settings picker: CLIs report their login, APIs list models with the saved key. */
+export async function checkProvider(provider: ProviderId, settings: RuntimeSettings): Promise<ProviderCheck> {
+  const suggested = options(PROVIDER_LABELS[provider].suggested);
+  const checkedAt = new Date().toISOString();
+  if (isCli(provider)) return { provider, checkedAt, ...(await checkCli(provider, settings.searchPath, suggested)) };
+  if (provider !== "ollama" && !settings.keys[provider as keyof RuntimeSettings["keys"]]) {
+    return { provider, checkedAt, state: "needs-key", detail: "아래 API 키 칸에 키를 넣고 저장하면 연결을 확인합니다.", models: suggested, source: "suggested" };
+  }
+  if (provider === "ollama" && !(await ollamaReachable(settings.ollamaUrl))) {
+    return { provider, checkedAt, state: "offline", detail: settings.ollamaUrl + "에서 Ollama가 응답하지 않습니다. ollama serve로 켜세요.", models: suggested, source: "suggested" };
+  }
+  try {
+    const live = await listApiModels(provider, settings.keys, settings.ollamaUrl, { strict: true });
+    return live.length
+      ? { provider, checkedAt, state: "connected", detail: provider === "ollama" ? "Ollama 실행 중 · 설치한 모델 " + live.length + "개" : "API 키 확인됨 · 모델 " + live.length + "개", models: options(live), source: "account" }
+      : { provider, checkedAt, state: provider === "ollama" ? "offline" : "error", detail: provider === "ollama" ? "설치한 모델이 없습니다. ollama pull로 모델을 받으세요." : "모델 목록이 비어 있습니다.", models: suggested, source: "suggested" };
+  } catch (error) {
+    return { provider, checkedAt, state: "error", detail: error instanceof Error ? error.message : String(error), models: suggested, source: "suggested" };
+  }
 }

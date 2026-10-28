@@ -25,9 +25,10 @@ pub const CHROMA_URL: &str = "http://127.0.0.1:18765";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Methods the UI may call. Anything else (e.g. `configure`) is host-only.
-pub const UI_METHODS: [&str; 16] = [
+pub const UI_METHODS: [&str; 17] = [
     "status",
     "models.list",
+    "models.check",
     "projects.list",
     "index.status",
     "index.build",
@@ -536,7 +537,7 @@ impl AgentRuntime {
         self.ensure().await?;
         let timeout = match method {
             "complete" | "image" => Duration::from_secs(420),
-            "search" | "models.list" | "status" => Duration::from_secs(90),
+            "search" | "models.list" | "models.check" | "status" => Duration::from_secs(90),
             _ => Duration::from_secs(60),
         };
         self.send(method, params, timeout).await

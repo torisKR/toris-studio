@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { Play, Save, Plus, Undo2, Redo2, Copy, Trash2, Sparkles, Download, RefreshCw } from 'lucide-react';
 import { openRenderPreview } from '../native-windows';
 import type { VideoRenderProgressMessage } from '../video-render-progress';
+import { aiStatus, contentReady, modelLabel, type AiStatus } from '../ai-client';
 import { remoteDesktopPrompt, canApplyReview, editingKey, history, pushHistory, undoHistory, redoHistory, newMotionProject, newMotionScene, duplicateElement, element, parseTable, dimensions, changeFormat, templateKinds, templateLabels, type MotionProject, type MotionScene, type MotionRequest, type MotionImage, type ElementKind, type GraphicElement, type TemplateKind } from './model';
 import './MotionStudio.css';
 type Frame = {
@@ -61,6 +62,8 @@ export function MotionStudio({ active }: {
     const [template, setTemplate] = useState<TemplateKind>('title');
     const [addKind, setAddKind] = useState<ElementKind>('text');
     const [scope, setScope] = useState<'all' | 'scene' | 'element'>('all');
+    const [models, setModels] = useState<AiStatus | null>(null);
+    const [showHandoff, setShowHandoff] = useState(false);
     const pRef = useRef(p);
     pRef.current = p;
     const busyRef = useRef(false);
@@ -82,7 +85,9 @@ export function MotionStudio({ active }: {
     const total = p.scenes.reduce((a, s) => a + s.durationSec, 0);
     const conflicted = !!request && key(request.project) !== key(p);
     const rendered = outputKey === key(p);
-    const handoff = request?.mcpExecutable ? remoteDesktopPrompt(request) : '';
+    const handoff = showHandoff && request?.mcpExecutable ? remoteDesktopPrompt(request) : '';
+    const modelName = modelLabel(models, models?.contentModel ?? models?.agentModel);
+    const modelReady = contentReady(models);
     function commit(next: MotionProject) { setH(current => pushHistory(current, next)); setReview(null); }
     function mutate(edit: (next: MotionProject) => void) { const next = structuredClone(pRef.current); edit(next); commit(next); }
     function updateElement(patch: Partial<GraphicElement>) { mutate(n => { const el = n.scenes.find(s => s.id === selected.id)?.graphics.elements.find(el => el.id === elementId); if (el)
@@ -100,6 +105,7 @@ export function MotionStudio({ active }: {
     } }
     async function load() { const all = await invoke<MotionProject[]>('video_list_projects'); setProjects(all.filter(p => p.motionGraphics?.version === 1)); }
     useEffect(() => { void load().catch(e => setNotice(error(e))); }, []);
+    useEffect(() => { if (active) void aiStatus().then(setModels).catch(() => setModels(null)); }, [active]);
     useEffect(() => { const id = window.setTimeout(() => { try {
         localStorage.setItem(storage, JSON.stringify({ project: p, baseline }));
     }
@@ -171,21 +177,38 @@ export function MotionStudio({ active }: {
         }
         mutate(n => n.scenes[index].graphics.elements.push(el));
     } setElementId(el.id); }
-    async function requestAI() {
+    async function saveRequest() {
         if (!instruction.trim())
-            throw new Error('외부 AI에 전달할 제작·수정 지시를 입력하세요.');
+            throw new Error('만들거나 바꿀 내용을 입력하세요.');
         if (scope === 'element' && !e)
             throw new Error('변경할 요소를 선택하세요.');
         const snapshot = pRef.current;
         const r = await invoke<MotionRequest>('motion_request_create', { input: { project: snapshot, instruction, allowDataEdits, mode: requestMode, sceneIds: scope === 'all' ? [] : [selected.id], elementIds: scope === 'element' ? [e!.id] : [] } });
         setRequest(r);
         setReview(null);
+        return r;
+    }
+    /** Claude Motion style: the Agent tab's content model writes the draft; nothing applies until review. */
+    async function generateWithModel() {
+        if (!modelReady)
+            throw new Error('Agent 탭 → 모델 설정에서 콘텐츠 작성 모델을 고르세요. 예: Kiro CLI · claude-opus-5.5');
+        const r = await saveRequest();
+        setShowHandoff(false);
+        setNotice(`${modelName}이(가) 장면을 만들고 있습니다. 1~3분 걸릴 수 있습니다.`);
+        const result = await invoke<{ request: MotionRequest; attempts: number }>('motion_generate', { id: r.id });
+        setRequest(result.request);
+        await showReview(result.request.draft?.operations.some(op => op.op === 'add-scene') ? undefined : selected.id, result.request);
+        setNotice(`${modelName} 초안을 받았습니다${result.attempts > 1 ? ' (규칙 확인 후 한 번 다시 요청)' : ''}. 전후 장면을 확인하고 적용하세요.`);
+    }
+    async function requestAI() {
+        const r = await saveRequest();
+        setShowHandoff(true);
         remoteDesktopPrompt(r);
         setNotice('요청 저장됨 · 전달문을 Studio MCP가 연결된 AI 도구에 붙여넣으세요. 초안 수신을 기다립니다.');
     }
-    async function showReview(id = selected.id) { if (!request)
-        return; const current = pRef.current; const k = key(current); const rid = request.id; const next = await invoke<MotionProject>('motion_draft_preview', { id: rid, project: current }); const beforeIndex = current.scenes.findIndex(s => s.id === id), afterIndex = next.scenes.findIndex(s => s.id === id); const before = beforeIndex < 0 ? null : await invoke<Frame>('motion_preview', { project: current, index: beforeIndex, time: Math.min(2, current.scenes[beforeIndex].durationSec - 1 / 24) }); const after = afterIndex < 0 ? null : await invoke<Frame>('motion_preview', { project: next, index: afterIndex, time: Math.min(2, next.scenes[afterIndex].durationSec - 1 / 24) }); if (key(pRef.current) !== k)
-        throw new Error('검토 중 편집 내용이 변경됐습니다. 다시 요청하세요.'); setReview({ before, after, project: next, key: k, requestId: rid, sceneId: id }); }
+    async function showReview(id?: string, target: MotionRequest | null = request) { if (!target)
+        return; const current = pRef.current; const k = key(current); const rid = target.id; const next = await invoke<MotionProject>('motion_draft_preview', { id: rid, project: current }); const sceneKey = id && next.scenes.some(s => s.id === id) ? id : next.scenes[0]?.id ?? current.scenes[0].id; const beforeIndex = current.scenes.findIndex(s => s.id === sceneKey), afterIndex = next.scenes.findIndex(s => s.id === sceneKey); const before = beforeIndex < 0 ? null : await invoke<Frame>('motion_preview', { project: current, index: beforeIndex, time: Math.min(2, current.scenes[beforeIndex].durationSec - 1 / 24) }); const after = afterIndex < 0 ? null : await invoke<Frame>('motion_preview', { project: next, index: afterIndex, time: Math.min(2, next.scenes[afterIndex].durationSec - 1 / 24) }); if (key(pRef.current) !== k)
+        throw new Error('검토 중 편집 내용이 변경됐습니다. 다시 요청하세요.'); setReview({ before, after, project: next, key: k, requestId: rid, sceneId: sceneKey }); }
     function numeric(name: keyof GraphicElement, label: string, min: number, max: number, step = 1) { return <label>{label}<input type="number" value={typeof e?.[name] === 'number' ? e[name] as number : 0} min={min} max={max} step={step} onChange={event => { const value = Number(event.target.value); if (event.target.value !== '' && Number.isFinite(value) && value >= min && value <= max)
         updateElement({ [name]: value }); }}/></label>; }
     return <fieldset className="motion-studio" aria-label="모션 그래픽 제작" disabled={busy === '초안 적용' || busy === '요소 추가'}>
@@ -244,9 +267,9 @@ export function MotionStudio({ active }: {
         setNotice(error(err));
     } }}><Copy size={15}/></button><button aria-label="선택 요소 삭제" onClick={removeElement}><Trash2 size={15}/></button></div></div>{e.kind === 'text' && <><label>텍스트<textarea value={e.text} maxLength={2000} onChange={ev => updateElement({ text: ev.target.value })}/></label>{numeric('fontSize', '글자 크기', 8, 300)}</>}<div className="motion-fields">{numeric('x', 'X', -w, w * 2)}{numeric('y', 'Y', -height, height * 2)}{numeric('width', '너비', 1, w * 2)}{numeric('height', '높이', 1, height * 2)}{numeric('z', '겹침 순서', -1000, 1000)}{numeric('start', '등장 시각', 0, selected.durationSec, 0.1)}{numeric('duration', '표시 길이', 1 / 24, 180, 0.1)}</div><label>색상<input type="color" value={e.color} onChange={ev => updateElement({ color: ev.target.value })}/></label><label>애니메이션<select aria-label="애니메이션" value={e.animation} onChange={ev => updateElement({ animation: ev.target.value as GraphicElement['animation'] })}>{Object.entries({ none: '정지', fade: '등장 · 불투명도', rise: '아래에서 이동', slide: '옆에서 이동', zoom: '확대', draw: '차트 그리기', 'fade-out': '퇴장' }).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>{e.tableId && <label>원본 표<select aria-label="원본 표" value={e.tableId} onChange={ev => updateElement({ tableId: ev.target.value })}>{p.motionGraphics.tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}<small className="motion-id">ID: {e.id}</small></>}
    </aside></div>
-  <section className="motion-ai" aria-label="외부 AI 모션 요청"><div><h3><Sparkles size={18}/>외부 AI 도구와 함께 편집</h3><p>Studio MCP가 연결된 ChatGPT·Claude 같은 도구가 초안을 보냅니다. 받은 초안은 검토 뒤 적용하며, 새 음성은 생성하지 않습니다.</p><textarea aria-label="모션 제작·수정 지시" value={instruction} maxLength={6000} onChange={ev => setInstruction(ev.target.value)} placeholder="예: 원본 표로 5장면 설명 영상을 만들어줘 / 두 번째 장면을 12초로 늘려줘"/><div className="motion-actions"><label>요청 방식<select aria-label="요청 방식" value={requestMode} onChange={ev => setRequestMode(ev.target.value as typeof requestMode)}><option value="create">새 구성 제작</option><option value="edit">기존 내용 수정</option></select></label><label>변경 범위<select aria-label="변경 범위" value={scope} onChange={ev => setScope(ev.target.value as typeof scope)}><option value="all">전체 프로젝트</option><option value="scene">선택 장면 수정</option><option value="element">선택 요소만 수정</option></select></label><label className="motion-check"><input type="checkbox" checked={allowDataEdits} disabled={scope !== 'all'} onChange={ev => setAllowDataEdits(ev.target.checked)}/>원본 수치 변경 초안 허용 · 전후 값 검토</label><button disabled={!!busy || !instruction.trim()} onClick={() => void run('외부 AI 요청', requestAI)}><Sparkles size={16}/>외부 AI에 요청</button></div></div>
+  <section className="motion-ai" aria-label="AI 모션 만들기"><div><h3><Sparkles size={18}/>설명으로 애니메이션 만들기</h3><p>누가 볼지, 어디서 재생할지, 길이를 적고 자료(설명문·표·이미지)를 넣으면 {modelName}이(가) 텍스트·도형·차트를 움직이는 장면을 만듭니다. 실사 영상이나 사람은 만들지 않으며, 받은 초안은 전후 장면을 확인한 뒤 적용합니다.</p><div className="motion-examples" role="group" aria-label="예시 요청">{['이 분기 자료를 전사 회의용 30초 설명 영상으로 만들어 줘', '요금제 3개를 비교하는 영업 킥오프용 애니메이션을 만들어 줘', '신규 고객 설정 단계를 짧게 둘러보는 영상으로 만들어 줘', '두 번째 장면을 느리게 해 줘'].map(text => <button key={text} type="button" onClick={() => { setInstruction(text); setRequestMode(text.startsWith('두 번째') ? 'edit' : 'create'); }}>{text}</button>)}</div><textarea aria-label="모션 제작·수정 지시" value={instruction} maxLength={6000} onChange={ev => setInstruction(ev.target.value)} placeholder="예: 원본 표로 5장면 설명 영상을 만들어줘 / Q3 숫자를 18%로 바꿔 줘"/><div className="motion-actions"><label>요청 방식<select aria-label="요청 방식" value={requestMode} onChange={ev => setRequestMode(ev.target.value as typeof requestMode)}><option value="create">새 구성 제작</option><option value="edit">기존 내용 수정</option></select></label><label>변경 범위<select aria-label="변경 범위" value={scope} onChange={ev => setScope(ev.target.value as typeof scope)}><option value="all">전체 프로젝트</option><option value="scene">선택 장면 수정</option><option value="element">선택 요소만 수정</option></select></label><label className="motion-check"><input type="checkbox" checked={allowDataEdits} disabled={scope !== 'all'} onChange={ev => setAllowDataEdits(ev.target.checked)}/>원본 수치 변경 초안 허용 · 전후 값 검토</label><button className="primary" disabled={!!busy || !instruction.trim()} onClick={() => void run('AI로 만들기', generateWithModel)}><Sparkles size={16}/>AI로 만들기</button></div><details className="motion-handoff-option"><summary>다른 AI 도구로 만들기 · Studio MCP</summary><p>Claude·ChatGPT처럼 Studio MCP를 연결한 도구가 초안을 보내게 하려면 요청을 저장하고 전달문을 붙여넣으세요.</p><button disabled={!!busy || !instruction.trim()} onClick={() => void run('외부 AI 요청', requestAI)}>외부 AI에 요청</button></details></div>
    {handoff && <div className="motion-handoff"><label>외부 AI 전달문<textarea aria-label="외부 AI 전달문" readOnly value={handoff} rows={8}/></label><button disabled={!!busy} onClick={() => void run('전달문 복사', async () => { await invoke('copy_text', { text: handoff }); setNotice('전달문을 복사했습니다. Studio MCP가 연결된 AI 도구에 붙여넣으세요.'); })}><Copy size={16}/>전달문 복사</button><p>AI 도구는 Studio MCP로 요청을 읽고 초안만 반환합니다. 받은 초안은 여기에서 검토·적용하세요.</p></div>}
-   {request && <article className="motion-request"><strong>{request.status === 'received' ? '변경 초안 수신 · 검토 필요' : '요청 저장됨 · 외부 AI 응답 대기'}</strong><p>{request.instruction}</p>{conflicted && <p role="alert">요청 이후 수동 편집 충돌이 있습니다. 현재 편집 내용으로 다시 요청하세요.</p>}<small>{request.id}</small><div className="motion-actions"><button disabled={!!busy || request.status !== 'received' || conflicted} onClick={() => void run('변경 검토', showReview)}>변경 검토</button><button disabled={!!busy} onClick={() => void run('요청 거절', async () => { await invoke('motion_request_cancel', { id: request.id }); setRequest(null); setReview(null); setNotice('요청을 거절했습니다. 기존 편집은 유지합니다.'); })}>거절·취소</button><button aria-label="초안 상태 새로고침" disabled={!!busy} onClick={() => void run('상태 조회', async () => { const all = await invoke<MotionRequest[]>('motion_request_list'); setRequest(all.find(r => r.id === request.id) ?? null); })}><RefreshCw size={15}/></button></div></article>}
+   {request && <article className="motion-request"><strong>{request.status === 'received' ? '변경 초안 수신 · 검토 필요' : '요청 저장됨 · 초안 대기'}</strong><p>{request.instruction}</p>{conflicted && <p role="alert">요청 이후 수동 편집 충돌이 있습니다. 현재 편집 내용으로 다시 요청하세요.</p>}<small>{request.id}</small><div className="motion-actions"><button disabled={!!busy || request.status !== 'received' || conflicted} onClick={() => void run('변경 검토', () => showReview(selected.id))}>변경 검토</button><button disabled={!!busy} onClick={() => void run('요청 거절', async () => { await invoke('motion_request_cancel', { id: request.id }); setRequest(null); setReview(null); setNotice('요청을 거절했습니다. 기존 편집은 유지합니다.'); })}>거절·취소</button><button aria-label="초안 상태 새로고침" disabled={!!busy} onClick={() => void run('상태 조회', async () => { const all = await invoke<MotionRequest[]>('motion_request_list'); setRequest(all.find(r => r.id === request.id) ?? null); })}><RefreshCw size={15}/></button></div></article>}
   </section>
   {review && request && review.requestId === request.id && <section className="motion-review" aria-label="변경 전후 검토"><h3>변경 초안 · {request.draft?.operations.length}개 변경</h3><ol>{request.draft?.operations.map((op, i) => <li key={i}>{String(op.op)} · {String(op.sceneId ?? (op.scene as MotionScene)?.id ?? '새 장면')}{op.elementId ? ` · ${String(op.elementId)}` : ''}{op.durationSec ? ` · ${String(op.durationSec)}초` : ''}{op.op === 'set-table-value' ? ` · ${String(op.tableId)} / ${String(op.label)}: ${String(op.expectedValue)} → ${String(op.value)}` : ''}</li>)}</ol><label>검토 장면<select aria-label="검토 장면" value={review.sceneId} disabled={!!busy} onChange={ev => void run('변경 검토', () => showReview(ev.target.value))}>{Array.from(new Map([...p.scenes, ...review.project.scenes].map(s => [s.id, s])).values()).map(s => <option key={s.id} value={s.id}>{s.headline || s.id}</option>)}</select></label><div className="motion-review-images"><figure><figcaption>현재 장면</figcaption>{review.before ? <img src={review.before.dataUrl} alt="변경 전 장면"/> : <p>새로 추가한 장면</p>}</figure><figure><figcaption>변경 후 장면</figcaption>{review.after ? <img src={review.after.dataUrl} alt="변경 후 장면"/> : <p>삭제할 장면</p>}</figure></div><details><summary>모든 변경 데이터 확인</summary><pre>{JSON.stringify(request.draft, null, 2)}</pre></details><div className="motion-actions"><button className="primary" disabled={!!busy || conflicted} onClick={() => void run('초안 적용', async () => { if (!canApplyReview(review, request.id, pRef.current))
         throw new Error('편집 충돌이 있습니다. 다시 요청하세요.'); const next = await invoke<MotionProject>('motion_draft_apply', { id: request.id, project: pRef.current }); if (!canApplyReview(review, request.id, pRef.current))

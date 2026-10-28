@@ -24,6 +24,7 @@ pub mod media;
 pub mod media_runtime;
 pub mod models;
 pub mod motion;
+pub mod motion_ai;
 pub mod motion_drafts;
 #[cfg(feature = "desktop")]
 mod motion_native;
@@ -60,6 +61,7 @@ mod startup_smoke;
 #[cfg(feature = "desktop")]
 mod tray;
 pub mod trends;
+pub mod tts_runtime;
 pub mod updater;
 pub mod vault;
 pub mod video_embed;
@@ -540,6 +542,36 @@ mod desktop {
         media::status().await
     }
     #[tauri::command]
+    pub async fn tts_status(
+        tts: State<'_, Arc<tts_runtime::TtsRuntime>>,
+    ) -> Result<Value, String> {
+        Ok(tts.status().await)
+    }
+    #[tauri::command]
+    pub async fn tts_install(
+        window: tauri::WebviewWindow,
+        tts: State<'_, Arc<tts_runtime::TtsRuntime>>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        tts.inner().install().await
+    }
+    #[tauri::command]
+    pub async fn tts_start(
+        window: tauri::WebviewWindow,
+        tts: State<'_, Arc<tts_runtime::TtsRuntime>>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        tts.start().await
+    }
+    #[tauri::command]
+    pub async fn tts_stop(
+        window: tauri::WebviewWindow,
+        tts: State<'_, Arc<tts_runtime::TtsRuntime>>,
+    ) -> Result<Value, String> {
+        updater::authorize(&window)?;
+        tts.stop().await
+    }
+    #[tauri::command]
     pub async fn youtube_lookup_channel(
         state: State<'_, Arc<AppState>>,
         input: Value,
@@ -694,6 +726,7 @@ mod desktop {
             .manage(state.clone())
             .manage(updater::shared())
             .manage(agent_runtime::shared())
+            .manage(tts_runtime::shared())
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
@@ -847,6 +880,7 @@ mod desktop {
                 if let tauri::RunEvent::Exit = event {
                     crate::publications::shutdown_media();
                     app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();
+                    app.state::<Arc<tts_runtime::TtsRuntime>>().shutdown();
                 }
                 if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
                     // The updater holds the publication barrier until this signed restart.

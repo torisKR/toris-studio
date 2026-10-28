@@ -374,5 +374,141 @@
    "ops_status::"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.motion-ai-no-retry",
+  "file": "desktop/src-tauri/src/motion_ai.rs",
+  "find": "for attempt in 0..2 {",
+  "replace": "for attempt in 0..1 {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.motion-ai-instruction-in-system",
+  "file": "desktop/src-tauri/src/motion_ai.rs",
+  "find": "let output = complete(SYSTEM, prompt).await?;",
+  "replace": "let output = complete(SYSTEM, format!(\"{SYSTEM}{prompt}\")).await?;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.motion-ai-extra-keys-kept",
+  "file": "desktop/src-tauri/src/motion_ai.rs",
+  "find": "Some(Value::Array(ops)) if !ops.is_empty() => Ok(json!({\"operations\": ops})),",
+  "replace": "Some(Value::Array(ops)) if !ops.is_empty() => Ok(value.clone()),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.motion-ai-overwrites-received",
+  "file": "desktop/src-tauri/src/motion_ai.rs",
+  "find": "if r[\"status\"] != \"waiting\" {",
+  "replace": "if r[\"status\"] == \"cancelled\" {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.tts-partial-model-accepted",
+  "file": "desktop/src-tauri/src/tts_runtime.rs",
+  "find": "if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "tts_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.tts-base-model-accepted",
+  "file": "desktop/src-tauri/src/tts_runtime.rs",
+  "find": "if config[\"model_type\"] != \"qwen3_tts\" || config[\"tts_model_type\"] != \"custom_voice\" {",
+  "replace": "if config[\"model_type\"] != \"qwen3_tts\" {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "tts_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.voice-any-speaker",
+  "file": "desktop/src-tauri/src/media.rs",
+  "find": ".and_then(|choice| allowed.iter().copied().find(|item| *item == choice))",
+  "replace": ".map(|_| allowed[0])",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "media::tests::voice"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.voice-pause-unbounded",
+  "file": "desktop/src-tauri/src/media.rs",
+  "find": ".filter(|pause| *pause <= 2000)",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "media::tests::voice"
+  ],
+  "timeoutMs": 900000
  }
 ]

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { RunHistory } from "./graph/history.js";
 import { RunManager } from "./graph/runs.js";
-import { createModel, isProvider, listModels, providerStatus } from "./llm/index.js";
+import { checkProvider, createModel, isProvider, listModels, providerStatus } from "./llm/index.js";
 import { defaultSearchPath } from "./llm/cli.js";
 import { generateImage } from "./llm/image.js";
 import { listProjects } from "./projects.js";
@@ -87,6 +87,7 @@ export class Runtime {
       }
       case "status": return { version: VERSION, providers: await providerStatus(this.settings), chroma: await new ChromaClient(this.settings.chromaUrl).heartbeat(), projectsRoot: this.settings.projectsRoot };
       case "models.list": if (!isProvider(p.provider)) throw new UserError("공급자를 확인하세요."); return { models: await listModels(p.provider, this.settings) };
+      case "models.check": if (!isProvider(p.provider)) throw new UserError("공급자를 확인하세요."); return checkProvider(p.provider, this.settings);
       case "projects.list": return { projects: listProjects(this.settings.projectsRoot) };
       case "index.status": return new ProjectIndex(this.settings).status(text(p.project, "프로젝트", 200));
       case "index.build": return this.buildIndex(text(p.project, "프로젝트", 200));

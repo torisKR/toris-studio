@@ -2,3 +2,12 @@
 
 fieldset.motion-studio{border:0;width:100%;min-width:0;box-sizing:border-box;margin:0}.motion-studio .motion-check{flex-direction:row;align-items:center;max-width:230px;font-size:11px}.motion-check input[type=checkbox]{width:18px;min-height:18px;flex-shrink:0;accent-color:#8ae3bb}
 .motion-handoff{grid-column:1/-1;order:1}
+
+/* Claude Motion style request: example prompts and the folded MCP handoff. */
+.motion-examples{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
+.motion-studio .motion-examples button{min-height:34px;padding:6px 11px;border-radius:999px;font-size:12px;background:#15232b;color:#c9d8df;transition:background-color .18s ease,border-color .18s ease}
+.motion-studio .motion-examples button:hover{background:#1d3340;border-color:#8ae3bb}
+.motion-handoff-option{margin-top:12px;font-size:12px;color:#aebfc9}
+.motion-handoff-option summary{cursor:pointer;min-height:32px;padding:6px 0}
+.motion-handoff-option p{margin:6px 0 10px!important;font-size:12px}
+

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 const STORE_LIMIT: u64 = 16 * 1024 * 1024;
 const AUDIO_LIMIT: usize = 32 * 1024 * 1024;
-const TTS_BASE: &str = "http://127.0.0.1:50010";
+const TTS_BASE: &str = crate::tts_runtime::BASE;
 static PROJECT_LOCK: Mutex<()> = Mutex::new(());
 static RENDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static VOICE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -250,6 +250,9 @@ pub(crate) fn validate_project(project: &Value) -> Result<(), String> {
         }
     }
     crate::graphics::validate(project)?;
+    if let Some(voice) = project.get("voice") {
+        voice_options(voice)?;
+    }
     if total > 7200.0 {
         return Err("프로젝트 전체 길이는 2시간 이하여야 합니다.".into());
     }
@@ -1682,28 +1685,29 @@ pub async fn generate_voice(input: Value) -> Result<Value, String> {
         "zh" | "Chinese" => "Chinese",
         _ => return Err("음성 언어를 확인하세요.".into()),
     };
-    let speaker = input
-        .get("speaker")
-        .and_then(Value::as_str)
-        .unwrap_or("Sohee");
-    if speaker.len() > 64 || speaker.is_empty() || speaker.chars().any(char::is_control) {
-        return Err("음성 화자 이름을 확인하세요.".into());
-    }
-    let instruct = input
-        .get("instruct")
-        .and_then(Value::as_str)
-        .unwrap_or("따뜻하고 자연스러운 목소리로 편안하고 또렷하게 읽어 주세요.");
-    if instruct.chars().count() > 2000 {
-        return Err("음성 지시문은 2000자 이하여야 합니다.".into());
-    }
+    let voice = voice_options(input.get("voice").unwrap_or(&Value::Null))?;
+    let speaker = voice.speaker;
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(600))
         .build()
         .map_err(|_| "음성 HTTP 설정 오류")?;
-    let response = client.post(format!("{TTS_BASE}/synthesize")).json(&json!({"text":text,"speaker":speaker,"language":language,"instruct":instruct,"temperature":0.85,"top_p":0.95,"top_k":50,"repetition_penalty":1.05,"max_tokens":4096}))
-        .send().await.map_err(|_| "로컬 Qwen3 음성 서버에 연결할 수 없습니다. 포트 50010의 서버를 실행하세요.")?;
+    const OFFLINE: &str = "로컬 음성 서버에 연결할 수 없습니다. 영상 화면의 로컬 음성에서 켜기를 누르세요.";
+    let mut response = client
+        .post(format!("{TTS_BASE}/narrate"))
+        .json(&json!({"script":text,"speaker":speaker,"language":language,"style":voice.style,"emphasis":voice.emphasis,"quality":voice.quality,"pause_ms":voice.pause_ms,"max_tokens":4096}))
+        .send()
+        .await
+        .map_err(|_| OFFLINE)?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        // A server started before narration support: plain synthesis with the same sampling preset.
+        let mut body = json!({"text":text.replace("**", ""),"speaker":speaker,"language":language,"instruct":"따뜻하고 자연스러운 목소리로 편안하고 또렷하게 읽어 주세요.","max_tokens":4096});
+        if let (Some(body), Some(sampling)) = (body.as_object_mut(), crate::tts_runtime::sampling(voice.quality).as_object()) {
+            body.extend(sampling.clone());
+        }
+        response = client.post(format!("{TTS_BASE}/synthesize")).json(&body).send().await.map_err(|_| OFFLINE)?;
+    }
     if !response.status().is_success() {
         return Err(format!(
             "로컬 음성 생성에 실패했습니다 (HTTP {}).",
@@ -1760,8 +1764,48 @@ pub async fn generate_voice(input: Value) -> Result<Value, String> {
     }
     write_private(&directory.join(filename), &bytes)?;
     Ok(
-        json!({"audioPath":reference,"durationSec":info.duration,"sampleRate":info.sample_rate,"speaker":speaker,"provider":"qwen3-tts-mlx","processing":"rust-http-wav-validation"}),
+        json!({"audioPath":reference,"durationSec":info.duration,"sampleRate":info.sample_rate,"speaker":speaker,"style":voice.style,"quality":voice.quality,"provider":"qwen3-tts-mlx","processing":"rust-http-wav-validation"}),
     )
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct VoiceOptions {
+    pub speaker: &'static str,
+    pub style: &'static str,
+    pub emphasis: &'static str,
+    pub quality: &'static str,
+    pub pause_ms: u64,
+}
+
+/// Closed choices only; anything else is rejected before it reaches the TTS server.
+pub(crate) fn voice_options(value: &Value) -> Result<VoiceOptions, String> {
+    if !value.is_null() && !value.is_object() {
+        return Err("음성 설정 형식을 확인하세요.".into());
+    }
+    let pick = |key: &str, allowed: &'static [&'static str], default: &'static str| -> Result<&'static str, String> {
+        match value.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(choice) => choice
+                .as_str()
+                .and_then(|choice| allowed.iter().copied().find(|item| *item == choice))
+                .ok_or_else(|| format!("음성 설정 {key} 값을 확인하세요.")),
+        }
+    };
+    use crate::tts_runtime::{EMPHASIS, QUALITY, SPEAKERS, STYLES};
+    let pause_ms = match value.get("pauseMs") {
+        None | Some(Value::Null) => 300,
+        Some(pause) => pause
+            .as_u64()
+            .filter(|pause| *pause <= 2000)
+            .ok_or("문장 사이 쉼은 0~2000ms여야 합니다.")?,
+    };
+    Ok(VoiceOptions {
+        speaker: pick("speaker", SPEAKERS, "Sohee")?,
+        style: pick("style", STYLES, "natural")?,
+        emphasis: pick("emphasis", EMPHASIS, "normal")?,
+        quality: pick("quality", QUALITY, "stable")?,
+        pause_ms,
+    })
 }
 
 pub async fn status() -> Result<Value, String> {
@@ -1807,6 +1851,32 @@ pub async fn status() -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn voice_options_accept_only_closed_choices() {
+        assert_eq!(
+            voice_options(&Value::Null).unwrap(),
+            VoiceOptions { speaker: "Sohee", style: "natural", emphasis: "normal", quality: "stable", pause_ms: 300 }
+        );
+        let chosen = voice_options(&json!({"speaker":"Ryan","style":"tech-news","emphasis":"strong","quality":"expressive","pauseMs":0})).unwrap();
+        assert_eq!((chosen.speaker, chosen.style, chosen.emphasis, chosen.quality, chosen.pause_ms), ("Ryan", "tech-news", "strong", "expressive", 0));
+        for bad in [
+            json!({"speaker":"Sohee\n"}),
+            json!({"speaker":"클론 목소리"}),
+            json!({"style":"shout"}),
+            json!({"emphasis":1}),
+            json!({"quality":"max"}),
+            json!({"pauseMs":2001}),
+            json!({"pauseMs":-1}),
+            json!("Sohee"),
+        ] {
+            assert!(voice_options(&bad).is_err(), "{bad}");
+        }
+        let mut project = json!({"title":"음성","format":"shorts","template":"reference-briefing","language":"ko","scenes":[{"id":"s","headline":"","body":"","narration":"","durationSec":3}]});
+        project["voice"] = json!({"speaker":"Aiden","style":"story"});
+        assert!(validate_project(&project).is_ok());
+        project["voice"] = json!({"speaker":"Unknown"});
+        assert!(validate_project(&project).is_err());
+    }
     fn project() -> Value {
         json!({"id":"00000000-0000-4000-8000-000000000002","title":"Rust 한국어 영상","format":"youtube-landscape","template":"reference-briefing","language":"ko","scenes":[{"id":"first","headline":"첫 번째 장면","body":"로컬 처리와 안전한 저장을 확인합니다.","narration":"","durationSec":0.5},{"id":"second","headline":"두 번째 장면","body":"Rust에서 MP4를 생성합니다.","narration":"","durationSec":0.5}]})
     }

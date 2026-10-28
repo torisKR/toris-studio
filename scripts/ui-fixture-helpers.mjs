@@ -25,6 +25,7 @@ export function shellFixture(command,args={}){
  if(command==='creation_bridge_info')return structuredClone(fixtureBridge);
  if(command==='creation_request_list')return {requests:[]};
  if(command==='ai_status')return {providers:[],contentModel:null,agentModel:null,image:null};
+ if(command==='tts_status')return {supported:true,state:'stopped',owned:false,narration:false,installed:false,python:null,model:null,install:{phase:'idle',step:'',log:[]},lastError:null,endpoint:'http://127.0.0.1:50010',license:{commercialUse:true,model:{name:'Qwen3-TTS-12Hz-1.7B-CustomVoice',license:'Apache-2.0',url:'https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'},runtime:[{name:'mlx-audio',license:'MIT'}]}};
  if(command==='set_main_activity'||command.startsWith('plugin:event|'))return 0;
  return unhandled;
 }

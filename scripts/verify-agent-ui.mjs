@@ -9,9 +9,18 @@ const out = resolve(process.env.TORIS_QA_OUT ?? '/private/tmp/toris-agent-ui'); 
 const report = { adapter: 'Chromium with explicit IPC fixtures; no model, file write or command execution', checks: [], errors: [] };
 const providers = [
   { id: 'codex-cli', label: 'Codex CLI', kind: 'subscription', plan: 'ChatGPT Plus·Pro 구독', available: true, detail: 'codex-cli 0.164.0', suggestedModels: [] },
+  { id: 'kiro-cli', label: 'Kiro CLI', kind: 'subscription', plan: 'Kiro 구독', available: true, detail: 'kiro-cli 2.35.1', suggestedModels: ['auto'] },
+  { id: 'claude-cli', label: 'Claude Code', kind: 'subscription', plan: 'Claude Pro·Max 구독', available: true, detail: 'claude 2.1', suggestedModels: ['sonnet'] },
   { id: 'openai', label: 'OpenAI API', kind: 'api', available: false, detail: 'API 키 미등록', suggestedModels: ['gpt-5'] },
   { id: 'ollama', label: 'Ollama (로컬)', kind: 'local', available: false, detail: '꺼짐', suggestedModels: [] },
 ];
+const checkedAt = '2026-10-28T00:00:00Z';
+const modelChecks = {
+  'codex-cli': { provider: 'codex-cli', state: 'connected', detail: 'ChatGPT 계정 로그인됨', models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }], source: 'account', checkedAt },
+  'kiro-cli': { provider: 'kiro-cli', state: 'connected', detail: 'Kiro 계정 로그인됨 · Google', account: 'qa@example.com', models: [{ id: 'auto', label: 'auto', detail: '1x 크레딧' }, { id: 'claude-opus-5.5', label: 'claude-opus-5.5', detail: '2x 크레딧' }], source: 'account', checkedAt },
+  'claude-cli': { provider: 'claude-cli', state: 'signed-out', detail: '터미널에서 claude를 실행하고 /login으로 로그인하세요.', models: [{ id: 'sonnet', label: 'sonnet' }], source: 'suggested', checkedAt },
+};
+const modelCheckCalls = [];
 let settings = { projectsRoot: '/Users/qa/projects', ollamaUrl: 'http://127.0.0.1:11434', agentModel: { provider: 'codex-cli', model: '' }, contentModel: null, image: null, embedding: { provider: 'local', model: '' } };
 let keys = { anthropic: false, openai: false, google: false, openrouter: false };
 const saved = [], decisions = [], started = [], hubCalls = [];
@@ -39,6 +48,11 @@ try {
       if (method === 'run.list') return { runs: [] };
       if (method === 'index.status') return { indexed: true, chunks: 128, stale: false, embedder: 'local-hash-v1-768', chroma: true };
       if (method === 'models.list') return { models: [] };
+      if (method === 'models.check') {
+        modelCheckCalls.push(params.provider);
+        if (params.provider === 'openai') return { provider: 'openai', state: keys.openai ? 'connected' : 'needs-key', detail: keys.openai ? 'API 키 확인됨 · 모델 2개' : '아래 API 키 칸에 키를 넣고 저장하면 연결을 확인합니다.', models: keys.openai ? [{ id: 'gpt-5', label: 'gpt-5' }, { id: 'gpt-4.1', label: 'gpt-4.1' }] : [{ id: 'gpt-5', label: 'gpt-5' }], source: keys.openai ? 'account' : 'suggested', checkedAt: new Date().toISOString() };
+        return modelChecks[params.provider] ?? { provider: params.provider, state: 'missing', detail: '미설치', models: [], source: 'suggested', checkedAt };
+      }
       if (method === 'run.start') {
         started.push(params);
         // The runtime streams events before run.start returns; the panel must not drop them.
@@ -163,10 +177,37 @@ try {
   await page.locator('.agent-changes code', { hasText: 'src/cart.ts' }).waitFor();
   report.checks.push('Approve and reject send the exact action id; done shows summary and changed files');
 
+  // Provider → model: both are selects; the model list comes from the provider's live check.
+  const modelCard = page.getByRole('region', { name: '모델 설정' });
+  const agentPicker = modelCard.getByRole('group', { name: '에이전트' });
+  const contentPicker = modelCard.getByRole('group', { name: '콘텐츠 작성' });
+  await agentPicker.locator('.agent-connection.ok').getByText('연결됨').waitFor();
+  assert.ok(modelCheckCalls.includes('codex-cli'), 'the saved provider is checked on open');
+  assert.equal(await agentPicker.getByRole('combobox', { name: '에이전트 모델' }).evaluate(el => el.tagName), 'SELECT', 'model is a select, not free text');
+  assert.equal(await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 모델' }).isDisabled(), true, 'model select waits for a provider');
+  await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 공급자' }).selectOption('kiro-cli');
+  await contentPicker.locator('.agent-connection.checking, .agent-connection.ok').first().waitFor();
+  await contentPicker.locator('.agent-connection.ok').getByText('qa@example.com', { exact: false }).waitFor();
+  const contentModel = contentPicker.getByRole('combobox', { name: '콘텐츠 작성 모델' });
+  assert.deepEqual(await contentModel.locator('option').evaluateAll(list => list.map(o => o.value)), ['', 'auto', 'claude-opus-5.5'], 'the account models fill the select');
+  await contentModel.selectOption('claude-opus-5.5');
+  await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 공급자' }).selectOption('claude-cli');
+  await contentPicker.locator('.agent-connection.warn').getByText('로그인 필요').waitFor();
+  assert.equal(await contentPicker.locator('.agent-connection.ok').count(), 0, 'signed-out is never shown as connected');
+  await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 공급자' }).selectOption('kiro-cli');
+  await contentModel.selectOption('claude-opus-5.5');
+  const checksBefore = modelCheckCalls.filter(p => p === 'kiro-cli').length;
+  await contentPicker.getByRole('button', { name: 'Kiro CLI 다시 확인' }).click();
+  await page.waitForFunction(n => window.__qaChecks?.() > n, checksBefore).catch(() => {});
+  assert.ok(modelCheckCalls.filter(p => p === 'kiro-cli').length > checksBefore, 'retry runs a new check');
+  await page.screenshot({ path: resolve(out, 'agent-models.png'), fullPage: false });
+  report.checks.push('Provider and model are selects; the account model list fills the model select; connected, signed-out and retry are shown live');
+
   await page.getByLabel('OpenAI API 키').fill('sk-qa-secret-value');
   await page.getByRole('region', { name: '모델 설정' }).getByRole('button', { name: '저장' }).click();
   await page.getByText('모델 설정을 저장했습니다.').waitFor();
   assert.deepEqual(saved.at(-1).keys, { openai: 'sk-qa-secret-value' });
+  assert.deepEqual(saved.at(-1).settings.contentModel, { provider: 'kiro-cli', model: 'claude-opus-5.5' }, 'the chosen provider and model are saved');
   assert.equal(await page.getByLabel('OpenAI API 키').inputValue(), '', 'key input clears after save');
   assert.equal((await page.content()).includes('sk-qa-secret-value'), false, 'saved key is never rendered');
   report.checks.push('API key goes only to agent_settings_save and is not shown again');
@@ -206,9 +247,10 @@ try {
   await assertAligned(1380);
   const [selectHeight, inputHeight] = await page.evaluate(() => {
     const box = document.querySelector('.agent-grid > .agent-picker');
-    return [box.querySelector('select'), box.querySelector('input')].map(el => Math.round(el.getBoundingClientRect().height));
+    const [provider, model] = box.querySelectorAll('select');
+    return [provider, model].map(el => Math.round(el.getBoundingClientRect().height));
   });
-  assert.ok(Math.abs(selectHeight - inputHeight) <= 1, `select ${selectHeight}px vs input ${inputHeight}px`);
+  assert.ok(Math.abs(selectHeight - inputHeight) <= 1, `provider select ${selectHeight}px vs model select ${inputHeight}px`);
 
   await page.setViewportSize({ width: 820, height: 900 });
   await assertAligned(820);

@@ -1,4 +1,5 @@
 import type { Graphics, MotionSources } from "./graphics";
+import type { VoiceSettings } from "./voice-options";
 export type VideoFormat = "youtube-landscape" | "vertical" | "shorts";
 export type EditingPresetId = "project-explainer" | "project-explainer-still";
 
@@ -41,6 +42,7 @@ export type VideoProject = {
   template: VideoTemplateId;
   editingPreset?: EditingPresetId;
   language: "ko" | "ja" | "zh" | "en";
+  voice?: VoiceSettings;
   scenes: VideoScene[];
   createdAt: string;
   updatedAt: string;

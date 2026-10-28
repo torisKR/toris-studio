@@ -19,6 +19,8 @@ import { duplicateVideoProject } from "./video-project-actions";
 import { createSingleFlight } from "./desktop-interactions";
 import "./VideoPanel.css";
 import { applyGeneratedSceneVoice, generateSceneVoices, type GeneratedSceneVoice } from "../../lib/video/voice-generation";
+import { DEFAULT_VOICE, VOICE_EMPHASIS, VOICE_QUALITY, VOICE_SPEAKERS, VOICE_STYLES, type VoiceSettings } from "../../lib/video/voice-options";
+import { LocalVoice } from "./LocalVoice";
 
 type MediaStatus = {
   ffmpegAvailable: boolean; ffprobeAvailable: boolean; fontAvailable: boolean;
@@ -112,6 +114,20 @@ function MotionPreview({ scene, format, active, disabled }: { scene: StudioVideo
 }
 
 /** Inputs for transitions, captions and the data presets. Rust re-validates every value on save and render. */
+/** Project narration voice: MLX-Narration speakers, tones and quality presets (closed choices). */
+function VoiceFields({ voice, disabled, onChange }: { voice?: VoiceSettings; disabled: boolean; onChange: (voice: VoiceSettings) => void }) {
+  const value = { ...DEFAULT_VOICE, ...voice };
+  const set = <K extends keyof VoiceSettings>(key: K, next: VoiceSettings[K]) => onChange({ ...value, [key]: next });
+  return <fieldset className="voice-settings" disabled={disabled}><legend><Mic size={14} />내레이션 음성</legend>
+    <label>화자<select aria-label="내레이션 화자" value={value.speaker} onChange={event => set("speaker", event.target.value as VoiceSettings["speaker"])}>{Object.entries(VOICE_SPEAKERS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+    <label>톤<select aria-label="내레이션 톤" value={value.style} onChange={event => set("style", event.target.value as VoiceSettings["style"])}>{Object.entries(VOICE_STYLES).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+    <label>강조 세기<select aria-label="강조 세기" value={value.emphasis} onChange={event => set("emphasis", event.target.value as VoiceSettings["emphasis"])}>{Object.entries(VOICE_EMPHASIS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+    <label>품질<select aria-label="음성 품질" value={value.quality} onChange={event => set("quality", event.target.value as VoiceSettings["quality"])}>{Object.entries(VOICE_QUALITY).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+    <label>문장 사이 쉼<select aria-label="문장 사이 쉼" value={value.pauseMs} onChange={event => set("pauseMs", Number(event.target.value))}>{[...new Set([0, 150, 300, 500, 800, 1200, value.pauseMs])].sort((a, b) => a - b).map(ms => <option key={ms} value={ms}>{ms}ms</option>)}</select></label>
+    <p>내레이션 줄 앞에 <code>[차분한 다큐]</code> <code>[Ryan]</code> <code>[쉼:600]</code>을 붙여 줄마다 바꾸고, <code>**단어**</code>로 강조합니다. 태그와 ** 표시는 자막에 나오지 않습니다.</p>
+  </fieldset>;
+}
+
 function SceneDataFields({ scene, onPatch }: { scene: StudioVideoScene; onPatch: (patch: Partial<StudioVideoScene>) => void }) {
   const preset = readMotion(scene.motion)?.preset;
   const [chartDraft, setChartDraft] = useState(() => chartText(scene.chart));
@@ -483,7 +499,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
     let done = 0;
     try {
       done = await generateSceneVoices(source.scenes,
-        scene => invoke<GeneratedSceneVoice>("video_generate_voice", { input: { projectId: source.id, sceneId: scene.id, text: scene.narration, language: source.language } }),
+        scene => invoke<GeneratedSceneVoice>("video_generate_voice", { input: { projectId: source.id, sceneId: scene.id, text: scene.narration, language: source.language, voice: source.voice ?? DEFAULT_VOICE } }),
         (scene, voice) => setProject(current => current ? applyGeneratedSceneVoice(current as VideoProject, source as VideoProject, scene.id, voice) as StudioVideoProject : current),
         completed => { if (mounted.current) setNotice({ tone: "info", text: `음성 생성 중 (${completed}/${total})` }); },
         () => mounted.current);
@@ -608,7 +624,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
       <div className="desktop-video-status" aria-label="영상 처리 환경">
         <span className={status?.ffmpegAvailable ? "ready" : ""}>FFmpeg {status ? status.ffmpegAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
         <span className={status?.fontAvailable ? "ready" : ""}>자막 글꼴 {status ? status.fontAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
-        <span className={status?.ttsConfigured ? "ready" : ""}>로컬 음성(Qwen3) {status ? status.ttsConfigured ? "준비됨" : "꺼짐 · pnpm tts:on" : "확인 필요"}</span>
+        <LocalVoice active={active} compact onRunningChange={() => void checkStatus()} />
         {status && !status.ffprobeAvailable && <span>FFprobe 없음</span>}
       </div>
       <ol className="desktop-video-flow" aria-label="영상 제작 단계"><li className={selectedTemplate || research || busy === "idea" ? "current" : ""}><span>01</span><strong>템플릿·주제 선택</strong></li><li className={project && !render && busy !== "render" ? "current" : ""}><span>02</span><strong>초안·모션 편집</strong></li><li className={render || busy === "render" ? "current" : ""}><span>03</span><strong>MP4 출력</strong></li></ol>
@@ -679,8 +695,9 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
       </aside>
 
       {project && scene ? <div className="desktop-video-editor">
-        <div className="desktop-video-editor-heading"><div><h2>{project.title || "제목 없는 영상"}</h2><span>{dirty ? "저장하지 않은 변경사항" : "로컬에 저장됨"} <i />{project.scenes.length}장면 · {duration.toFixed(1)}초</span></div><div><button className="social-button compact" aria-label="영상 프로젝트 복제" disabled={!!busy || !!pending || importOpen} onClick={() => requestProject({ kind: "duplicate", project: duplicateVideoProject(project) })}><Copy size={14} />복제</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("markdown")}><Download size={14} />Markdown 내보내기</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("json")}><FileJson size={14} />JSON 내보내기</button><button className="social-button" disabled={!!busy || !dirty} onClick={() => void saveProject()}>{busy === "save" ? <LoaderCircle size={15} className="social-spin" /> : <Save size={15} />}저장</button><button className="social-button" disabled={!!busy || !status?.ttsConfigured} title={status?.ttsConfigured ? undefined : "로컬 음성 서버를 켜세요 (pnpm tts:on)"} onClick={() => void generateVoices()}>{busy === "voice" ? <LoaderCircle size={15} className="social-spin" /> : <Mic size={15} />}{busy === "voice" ? "음성 생성 중" : "음성 생성"}</button><button className="social-button primary" disabled={!!busy || !canRender} onClick={() => void renderProject()}>{busy === "render" ? <LoaderCircle size={15} className="social-spin" /> : <Clapperboard size={15} />}{busy === "render" ? "MP4 출력 중" : "MP4 출력"}</button></div></div>
+        <div className="desktop-video-editor-heading"><div><h2>{project.title || "제목 없는 영상"}</h2><span>{dirty ? "저장하지 않은 변경사항" : "로컬에 저장됨"} <i />{project.scenes.length}장면 · {duration.toFixed(1)}초</span></div><div><button className="social-button compact" aria-label="영상 프로젝트 복제" disabled={!!busy || !!pending || importOpen} onClick={() => requestProject({ kind: "duplicate", project: duplicateVideoProject(project) })}><Copy size={14} />복제</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("markdown")}><Download size={14} />Markdown 내보내기</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("json")}><FileJson size={14} />JSON 내보내기</button><button className="social-button" disabled={!!busy || !dirty} onClick={() => void saveProject()}>{busy === "save" ? <LoaderCircle size={15} className="social-spin" /> : <Save size={15} />}저장</button><button className="social-button" disabled={!!busy || !status?.ttsConfigured} title={status?.ttsConfigured ? undefined : "화면 위쪽의 로컬 음성에서 켜기를 누르세요"} onClick={() => void generateVoices()}>{busy === "voice" ? <LoaderCircle size={15} className="social-spin" /> : <Mic size={15} />}{busy === "voice" ? "음성 생성 중" : "음성 생성"}</button><button className="social-button primary" disabled={!!busy || !canRender} onClick={() => void renderProject()}>{busy === "render" ? <LoaderCircle size={15} className="social-spin" /> : <Clapperboard size={15} />}{busy === "render" ? "MP4 출력 중" : "MP4 출력"}</button></div></div>
         <fieldset className="desktop-video-project-fields" disabled={!!busy}><legend className="social-sr-only">영상 기본 정보</legend><label>영상 제목<input value={project.title} maxLength={300} onChange={(event) => patchProject({ title: event.target.value })} /></label><div className="desktop-video-metadata"><label>출력 형식<select value={project.format} onChange={(event) => patchProject({ format: event.target.value as VideoFormat })}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>음성 언어<select value={project.language} onChange={(event) => patchProject({ language: event.target.value as VideoProject["language"] })}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label></div></fieldset>
+        <VoiceFields voice={project.voice} disabled={!!busy} onChange={voice => patchProject({ voice })} />
         {projectResearch && <details className="desktop-video-saved-research"><summary><BookOpen size={15} />영상 기획에 사용한 자료 {projectResearch.sources.length}개 <span>{projectResearch.provider === "local" ? "기본 초안" : projectResearch.provider}</span></summary><p><Hash size={12} />{projectResearch.keyword || "키워드 미지정"} · {projectResearch.topic}</p><ResearchSources sources={projectResearch.sources} /><p className="desktop-video-source-review">원문 사실과 표현을 검토하고 내 관점으로 편집하세요. 원본 미디어는 복사되지 않았습니다.</p></details>}
         {projectIdea && <div className="desktop-video-saved-idea"><div><Sparkles size={15} /><strong>{projectIdea.provider === "template" ? "템플릿으로 시작한 영상 초안" : "AI가 구성한 영상 초안"}</strong><span>{ideaCategories[projectIdea.category]}</span></div><p>{projectIdea.topic}</p><small>{projectIdea.provider === "template" ? "AI 미사용" : aiStatus.providers.find((provider) => provider.id === ideaProviderOf(projectIdea.provider))?.label ?? projectIdea.provider} · {projectDate(projectIdea.createdAt)} 생성 · toris-video-motion</small><p className="desktop-video-source-review">AI가 만든 설명과 표현을 확인하고 편집하세요. 주제로 생성한 초안에는 검증된 출처가 자동으로 연결되지 않습니다.</p></div>}
         <div className="desktop-video-scenes-header"><h3>장면 편집</h3><button className="social-button compact subtle" disabled={!!busy || project.scenes.length >= 120} onClick={addScene}><Plus size={14} />장면 추가</button></div>

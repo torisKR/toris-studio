@@ -97,5 +97,60 @@
    "scripts/verify-desktop-interactions.mjs"
   ],
   "timeoutMs": 400000
+ },
+ {
+  "id": "ui.motion-model-applies-without-review",
+  "file": "desktop/src/motion/MotionStudio.tsx",
+  "find": "        setRequest(result.request);\n        await showReview(",
+  "replace": "        setRequest(result.request);\n        commit(await invoke<MotionProject>('motion_draft_apply', { id: result.request.id, project: pRef.current }));\n        await showReview(",
+  "cmd": [
+   "node",
+   "scripts/verify-motion-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.model-list-ignores-account",
+  "file": "desktop/src/AgentSettingsCard.tsx",
+  "find": "const models = optionsWith(ready?.models ?? (provider?.suggestedModels ?? []).map(id => ({ id, label: id })), value?.model ?? \"\");",
+  "replace": "const models = optionsWith((provider?.suggestedModels ?? []).map(id => ({ id, label: id })), value?.model ?? \"\");",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.any-check-shown-connected",
+  "file": "desktop/src/AgentSettingsCard.tsx",
+  "find": "const ok = check.state === \"connected\";",
+  "replace": "const ok = true;",
+  "cmd": [
+   "node",
+   "scripts/verify-agent-ui.mjs"
+  ],
+  "timeoutMs": 400000
+ },
+ {
+  "id": "ui.voice-badge-without-license",
+  "file": "desktop/src/LocalVoice.tsx",
+  "find": "if (!status?.license.commercialUse) return null;",
+  "replace": "if (status) return null;",
+  "cmd": [
+   "node",
+   "scripts/verify-voice-ui.mjs"
+  ],
+  "timeoutMs": 300000
+ },
+ {
+  "id": "ui.voice-starts-before-install",
+  "file": "desktop/src/LocalVoice.tsx",
+  "find": "{status.installed && !running && status.state !== \"starting\" &&",
+  "replace": "{!running && status.state !== \"starting\" &&",
+  "cmd": [
+   "node",
+   "scripts/verify-voice-ui.mjs"
+  ],
+  "timeoutMs": 300000
  }
 ]

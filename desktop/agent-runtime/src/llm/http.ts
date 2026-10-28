@@ -110,7 +110,8 @@ export function apiModel(provider: ApiProviderId, model: string, keys: Partial<R
 }
 
 /** Live model list for an API provider; never throws for UI convenience. */
-export async function listApiModels(provider: ApiProviderId, keys: Partial<Record<string, string>>, ollamaUrl: string): Promise<string[]> {
+/** strict: throw the provider's error (bad key, quota) instead of returning an empty list. */
+export async function listApiModels(provider: ApiProviderId, keys: Partial<Record<string, string>>, ollamaUrl: string, { strict = false } = {}): Promise<string[]> {
   const key = keys[provider] ?? "";
   if (provider !== "ollama" && !key) return [];
   const secrets = [key];
@@ -138,7 +139,8 @@ export async function listApiModels(provider: ApiProviderId, keys: Partial<Recor
         return ((value.models as Array<{ name: string }>) ?? []).map(m => m.name);
       }
     }
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }

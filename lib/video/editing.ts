@@ -1,5 +1,6 @@
 import { getPreset } from "./presets";
 import type { EditingPresetId, VideoFormat, VideoProject, VideoScene } from "./types";
+import { spokenNarration } from "./voice-options";
 
 export type PixelRect = { x: number; y: number; width: number; height: number };
 export const EDITING_PRESETS: Record<EditingPresetId, { label: string; motion: boolean }> = {
@@ -89,7 +90,7 @@ export function resolveCaptionCues(scene: VideoScene, format: VideoFormat): NonN
   // Explicit empty array suppresses captions. Manual timing is never redistributed.
   if (scene.captionCues !== undefined) return scene.captionCues;
   const layout = getEditingLayout(format);
-  const lines = wrapText(scene.narration.replace(/\s+/g, " "), layout.caption.width - 48, layout.captionMinFont);
+  const lines = wrapText(spokenNarration(scene.narration).replace(/\s+/g, " "), layout.caption.width - 48, layout.captionMinFont);
   const chunks: string[] = [];
   for (let i = 0; i < lines.length; i += 2) chunks.push(lines.slice(i, i + 2).join("\n"));
   return chunks.map((text, i) => ({ text, startSec: i * scene.durationSec / chunks.length, endSec: (i + 1) * scene.durationSec / chunks.length }));

@@ -14,6 +14,24 @@ pub fn motion_request_create(window: tauri::WebviewWindow, input: Value) -> Resu
     check(&window)?;
     with_bridge(crate::motion_drafts::request(input)?)
 }
+/// Claude Motion style generation with the Agent tab's content model (e.g. kiro-cli · claude-opus-5.5).
+#[tauri::command]
+pub async fn motion_generate(
+    window: tauri::WebviewWindow,
+    runtime: tauri::State<'_, std::sync::Arc<crate::agent_runtime::AgentRuntime>>,
+    id: String,
+) -> Result<Value, String> {
+    check(&window)?;
+    let runtime = runtime.inner().clone();
+    let root = crate::motion_drafts::root_dir()?;
+    let mut result = crate::motion_ai::generate(&root, &id, |system, prompt| {
+        let runtime = runtime.clone();
+        async move { runtime.call("complete", json!({"system": system, "prompt": prompt, "purpose": "content", "maxTokens": 16000})).await }
+    })
+    .await?;
+    result["request"] = with_bridge(result["request"].take())?;
+    Ok(result)
+}
 #[tauri::command]
 pub fn motion_request_list(window: tauri::WebviewWindow) -> Result<Value, String> {
     check(&window)?;

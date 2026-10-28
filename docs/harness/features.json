@@ -52,11 +52,14 @@
     "scripts/render-*.ts",
     "desktop/src/motion/**",
     "scripts/verify-motion-*.mjs",
-    "scripts/build-media-runtime.sh"
+    "scripts/build-media-runtime.sh",
+    "desktop/src-tauri/src/motion_ai.rs",
+    "desktop/src-tauri/examples/motion_ai_probe.rs"
    ],
    "verify": [
     "node --import tsx --test tests/video-*.test.ts tests/editing.test.ts tests/update-scene.test.ts",
-    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion:: media:: video_"
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion:: media:: video_",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_ai::"
    ]
   },
   {
@@ -67,10 +70,24 @@
     "lib/stt/**",
     "scripts/*qwen*",
     "scripts/*whisper*",
-    "scripts/qwen_tts_*.py"
+    "scripts/qwen_tts_*.py",
+    "desktop/src/LocalVoice*",
+    "desktop/src-tauri/src/tts_runtime.rs",
+    "runtime/narration.py",
+    "runtime/qwen3_tts_server.py",
+    "lib/video/voice-options.ts",
+    "tests/test_narration.py",
+    "tests/voice-options.test.ts",
+    "scripts/verify-voice-ui.mjs"
    ],
    "verify": [
-    "node --import tsx --test tests/tts-*.test.ts tests/voice-generation.test.ts"
+    "node --import tsx --test tests/tts-*.test.ts tests/voice-generation.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib tts_runtime:: media::tests::voice",
+    "python3 -m unittest tests.test_narration -v",
+    "node scripts/verify-voice-ui.mjs"
+   ],
+   "mutants": [
+    "desktop/agent-runtime/test/ui-mutants.json"
    ]
   },
   {
@@ -145,7 +162,8 @@
    "paths": [
     "desktop/src/ContentBoard*",
     "desktop/src/Overview*",
-    "desktop/src/Keyword*", "desktop/src/content-preview.ts",
+    "desktop/src/Keyword*",
+    "desktop/src/content-preview.ts",
     "desktop/src/AiDiscovery*",
     "desktop/src/ai-*.ts",
     "desktop/src-tauri/src/social.rs",

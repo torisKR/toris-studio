@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import type { CliProviderId } from "../protocol.js";
 import { UserError, clip, parseJsonObject } from "../util.js";
-import type { ChatModel, CompleteInput } from "./types.js";
+import type { ChatModel, CompleteInput, ModelOption, ProviderCheck } from "./types.js";
 
 const CLI_TIMEOUT_MS = 6 * 60_000;
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -126,7 +126,7 @@ class CliModel implements ChatModel {
   }
 }
 
-function run(command: string, args: string[], stdin: string, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+function run(command: string, args: string[], stdin: string, cwd: string, env: NodeJS.ProcessEnv, signal?: AbortSignal, limit = MAX_OUTPUT) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, shell: false, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     let stdout = "", stderr = "", done = false;
@@ -134,7 +134,7 @@ function run(command: string, args: string[], stdin: string, cwd: string, env: N
     const abort = () => { child.kill("SIGTERM"); finish(() => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))); };
     const timer = setTimeout(() => { child.kill("SIGTERM"); finish(() => reject(new UserError("CLI 응답 시간이 초과되었습니다."))); }, CLI_TIMEOUT_MS);
     signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.on("data", chunk => { if (stdout.length < MAX_OUTPUT) stdout += chunk; });
+    child.stdout.on("data", chunk => { if (stdout.length < limit) stdout += chunk; });
     child.stderr.on("data", chunk => { if (stderr.length < 64_000) stderr += chunk; });
     child.on("error", error => finish(() => reject(new UserError(`CLI를 실행하지 못했습니다: ${error.message}`))));
     child.on("close", code => finish(() => resolve({ code: code ?? 1, stdout, stderr })));
@@ -161,3 +161,128 @@ export async function cliVersion(provider: CliProviderId, searchPath: string[]):
     return "설치됨";
   }
 }
+
+// eslint-disable-next-line no-control-regex
+const plain = (text: string) => text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+
+/** kiro-cli chat --list-models --format json */
+export function parseKiroModels(stdout: string): ModelOption[] {
+  const list = parseJsonObject(stdout).models;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap(item => {
+    const model = item as { model_id?: unknown; model_name?: unknown; description?: unknown; rate_multiplier?: unknown };
+    if (typeof model.model_id !== "string" || !model.model_id) return [];
+    const rate = typeof model.rate_multiplier === "number" ? model.rate_multiplier + "x 크레딧" : "";
+    const description = typeof model.description === "string" ? model.description : "";
+    return [{ id: model.model_id, label: typeof model.model_name === "string" && model.model_name ? model.model_name : model.model_id, detail: [rate, description].filter(Boolean).join(" · ").slice(0, 160) }];
+  });
+}
+
+/** cursor-agent models: "id - Label" per line. */
+export function parseCursorModels(stdout: string): ModelOption[] {
+  return plain(stdout).split("\n").flatMap(line => {
+    const found = line.trim().match(/^([A-Za-z0-9][\w.:/[\]=,-]*)\s+-\s+(.+)$/);
+    if (!found) return [];
+    const label = found[2].replace(/[\u200b\u200c\u200d]/g, "").trim();
+    const isDefault = /\(default\)\s*$/i.test(label);
+    return [{ id: found[1], label: label.replace(/\s*\(default\)\s*$/i, ""), ...(isDefault ? { detail: "기본 모델" } : {}) }];
+  });
+}
+
+/** codex debug models: JSON catalog; only models the picker lists. */
+export function parseCodexModels(stdout: string): ModelOption[] {
+  const list = parseJsonObject(stdout).models;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap(item => {
+    const model = item as { slug?: unknown; display_name?: unknown; description?: unknown; visibility?: unknown };
+    if (typeof model.slug !== "string" || !model.slug || model.visibility !== "list") return [];
+    return [{ id: model.slug, label: typeof model.display_name === "string" && model.display_name ? model.display_name : model.slug, ...(typeof model.description === "string" && model.description ? { detail: model.description.slice(0, 160) } : {}) }];
+  });
+}
+
+const LOGIN_HINT: Record<CliProviderId, string> = {
+  "claude-cli": "터미널에서 claude를 실행하고 /login으로 로그인하세요.",
+  "codex-cli": "터미널에서 codex login으로 ChatGPT 계정에 로그인하세요.",
+  "gemini-cli": "터미널에서 gemini를 실행하고 Google 계정으로 로그인하세요.",
+  "cursor-cli": "터미널에서 cursor-agent login으로 로그인하세요.",
+  "kiro-cli": "터미널에서 kiro-cli login으로 로그인하세요.",
+};
+
+/** Login state from each CLI's own status command. Output text decides; nothing is sent to a model. */
+export function parseCliLogin(provider: CliProviderId, code: number, stdout: string, stderr: string): { signedIn: boolean; account?: string; detail: string } {
+  const text = plain(stdout + "\n" + stderr);
+  const email = text.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/)?.[0];
+  switch (provider) {
+    case "claude-cli": {
+      let value: Record<string, unknown> = {};
+      try { value = parseJsonObject(stdout); } catch { /* not JSON */ }
+      const signedIn = value.loggedIn === true;
+      const method = typeof value.authMethod === "string" && value.authMethod !== "none" ? value.authMethod : "";
+      return { signedIn, account: typeof value.email === "string" ? value.email : email, detail: signedIn ? "Claude 계정 로그인됨" + (method ? " · " + method : "") : LOGIN_HINT[provider] };
+    }
+    case "codex-cli": {
+      const signedIn = code === 0 && /logged in/i.test(text) && !/not logged in/i.test(text);
+      return { signedIn, account: email, detail: signedIn ? (/chatgpt/i.test(text) ? "ChatGPT 계정 로그인됨" : "로그인됨") : LOGIN_HINT[provider] };
+    }
+    case "cursor-cli": {
+      const signedIn = /logged in/i.test(text) && !/not logged in/i.test(text);
+      return { signedIn, account: email, detail: signedIn ? "Cursor 계정 로그인됨" : LOGIN_HINT[provider] };
+    }
+    case "kiro-cli": {
+      const signedIn = code === 0 && !/not logged in|not authenticated|login required/i.test(text);
+      const via = text.match(/logged in with ([\w ]+)/i)?.[1]?.trim();
+      return { signedIn, account: email, detail: signedIn ? "Kiro 계정 로그인됨" + (via ? " · " + via : "") : LOGIN_HINT[provider] };
+    }
+    case "gemini-cli":
+      return { signedIn: code === 0, detail: code === 0 ? "Google 계정 로그인 정보 있음 · 첫 요청 때 확인합니다." : LOGIN_HINT[provider] };
+  }
+}
+
+const STATUS_ARGS: Partial<Record<CliProviderId, string[]>> = {
+  "claude-cli": ["auth", "status"],
+  "codex-cli": ["login", "status"],
+  "cursor-cli": ["status"],
+  "kiro-cli": ["whoami"],
+};
+const MODEL_ARGS: Partial<Record<CliProviderId, { args: string[]; parse: (stdout: string) => ModelOption[]; limit?: number }>> = {
+  "kiro-cli": { args: ["chat", "--list-models", "--format", "json"], parse: parseKiroModels },
+  "cursor-cli": { args: ["models"], parse: parseCursorModels },
+  "codex-cli": { args: ["debug", "models"], parse: parseCodexModels, limit: 24 * 1024 * 1024 },
+};
+
+async function quick(binary: string, args: string[], searchPath: string[], limit?: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  const scratch = mkdtempSync(path.join(tmpdir(), "toris-agent-check-"));
+  try { return await run(binary, args, "", scratch, cliEnv(searchPath), controller.signal, limit); }
+  finally { clearTimeout(timer); rmSync(scratch, { recursive: true, force: true }); }
+}
+
+/** Installed? Signed in? Which models does this account offer? Never sends a prompt. */
+export async function checkCli(provider: CliProviderId, searchPath: string[], suggested: ModelOption[]): Promise<Omit<ProviderCheck, "provider" | "checkedAt">> {
+  const binary = findBinary(provider, searchPath);
+  if (!binary) return { state: "missing", detail: BINARIES[provider] + " CLI가 설치되어 있지 않습니다.", models: suggested, source: "suggested" };
+  let login: ReturnType<typeof parseCliLogin>;
+  try {
+    const statusArgs = STATUS_ARGS[provider];
+    if (statusArgs) {
+      const result = await quick(binary, statusArgs, searchPath);
+      login = parseCliLogin(provider, result.code, result.stdout, result.stderr);
+    } else {
+      login = parseCliLogin(provider, existsSync(path.join(homedir(), ".gemini/oauth_creds.json")) ? 0 : 1, "", "");
+    }
+  } catch {
+    return { state: "error", detail: "로그인 상태를 확인하지 못했습니다. 잠시 뒤 다시 확인하세요.", models: suggested, source: "suggested" };
+  }
+  if (!login.signedIn) return { state: "signed-out", detail: login.detail, models: suggested, source: "suggested" };
+  const lister = MODEL_ARGS[provider];
+  let models: ModelOption[] = [];
+  if (lister) {
+    try {
+      const result = await quick(binary, lister.args, searchPath, lister.limit);
+      if (result.code === 0) models = lister.parse(result.stdout);
+    } catch { /* fall back to suggestions */ }
+  }
+  return { state: "connected", detail: login.detail, ...(login.account ? { account: login.account } : {}), models: models.length ? models : suggested, source: models.length ? "account" : "suggested" };
+}
+

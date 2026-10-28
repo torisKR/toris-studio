@@ -75,7 +75,23 @@
 .agent-timeline li[data-phase="done"] > span:last-of-type { color: #86d4a4; }
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 /* Pickers share the grid's rows (title, hint, select, model, status) so a row of cards lines up. */
-.agent-picker { display: grid; grid-row: span 5; grid-template-rows: subgrid; row-gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--social-line); border-radius: 9px; min-width: 0; }
+.agent-picker { display: grid; grid-row: span 5; grid-template-rows: subgrid; row-gap: 6px; margin: 0; padding: 10px; border: 1px solid var(--social-line); border-radius: 9px; min-width: 0; transition: border-color .25s ease, box-shadow .25s ease; }
+.agent-picker:has(.agent-connection.ok) { border-color: #2f5a45; box-shadow: inset 3px 0 0 #3f9a6c; }
+.agent-picker:has(.agent-connection.warn) { border-color: #5a4a2f; box-shadow: inset 3px 0 0 #c99a3f; }
+.agent-card select:disabled { opacity: .55; cursor: not-allowed; }
+.agent-connection { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--social-line); background: var(--social-inset); line-height: 1.45; animation: agent-connection-in .32s cubic-bezier(.2,.8,.2,1); }
+.agent-connection > svg { flex-shrink: 0; margin-top: 2px; }
+.agent-connection > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.agent-connection b { font-weight: 600; }
+.agent-connection.ok { border-color: #2f5a45; background: #13261d; color: #b6e6cb; }
+.agent-connection.ok > svg { animation: agent-check-pop .42s cubic-bezier(.2,1.6,.4,1); }
+.agent-connection.warn { border-color: #5a4a2f; background: #261f13; color: #f0d29a; }
+.agent-connection.checking { color: var(--social-muted); }
+.agent-recheck { flex-shrink: 0; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.agent-recheck:hover, .agent-recheck:focus-visible { border-color: currentColor; }
+@keyframes agent-connection-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@keyframes agent-check-pop { 0% { transform: scale(.4); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .agent-connection, .agent-connection.ok > svg { animation: none; } .agent-picker { transition: none; } }
 .agent-picker > * { align-self: start; }
 .agent-picker .agent-hint { margin: 0; }
 .agent-picker-title { font-size: 13px; font-weight: 600; }
