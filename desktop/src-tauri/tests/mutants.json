@@ -697,5 +697,22 @@
    "video_runtime"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-approval-drops-planner",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "                Some(value) if !value.is_null() => board.insert(key.into(), value.clone()),",
+  "replace": "                Some(value) if !value.is_null() => None,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production"
+  ],
+  "timeoutMs": 900000
  }
 ]

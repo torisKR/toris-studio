@@ -175,11 +175,13 @@ pub async fn production_approve(
             if job["status"] != "awaiting_approval" && job["storyboard"].is_null() {
                 return Err("스토리보드가 아직 준비되지 않았습니다.".into());
             }
+            let draft = job["draft"].clone();
             let storyboard = input
                 .get("storyboard")
                 .cloned()
                 .filter(|s| !s.is_null())
-                .unwrap_or_else(|| job["draft"].clone());
+                .map(|edited| crate::production::with_plan_origin(edited, &draft))
+                .unwrap_or_else(|| draft.clone());
             crate::production::apply_storyboard(job, storyboard)?;
             job["status"] = json!("running");
             job["stage"] = json!("scenes");

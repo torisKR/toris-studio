@@ -530,6 +530,20 @@ pub fn invalidate_from(job: &mut Value, stage: &str) {
 }
 
 /// Builds scene entries from an approved storyboard, keeping cached results whose keys still match.
+/// Who planned the storyboard comes from the planner's own draft. The window sends only the edited
+/// content, so it can neither drop nor forge the AI/template origin recorded in provenance.
+pub fn with_plan_origin(mut storyboard: Value, draft: &Value) -> Value {
+    if let Some(board) = storyboard.as_object_mut() {
+        for key in ["template", "provider", "model"] {
+            match draft.get(key) {
+                Some(value) if !value.is_null() => board.insert(key.into(), value.clone()),
+                _ => board.remove(key),
+            };
+        }
+    }
+    storyboard
+}
+
 pub fn apply_storyboard(job: &mut Value, storyboard: Value) -> Result<(), String> {
     let settings: Settings =
         serde_json::from_value(job["settings"].clone()).map_err(|_| "작업 설정 오류")?;
@@ -2143,6 +2157,26 @@ mod tests {
         assert_eq!(draft["targets"], json!([]));
         assert!(draft.get("scheduledAt").is_none());
         assert_eq!(draft["contentKind"], "video");
+    }
+
+    #[test]
+    fn edited_approval_keeps_the_planner_recorded_in_the_draft() {
+        let s = settings();
+        let mut draft = board(6, 5.0);
+        draft["provider"] = json!("kiro-cli");
+        draft["model"] = json!("claude-opus-5.5");
+        draft["template"] = json!(false);
+        let mut edited = board(6, 5.0);
+        edited["title"] = json!("고친 제목");
+        edited["provider"] = json!("forged");
+        let mut job = new_job(&s);
+        apply_storyboard(&mut job, with_plan_origin(edited, &draft)).unwrap();
+        assert_eq!(job["storyboard"]["title"], "고친 제목");
+        assert_eq!(job["storyboard"]["provider"], "kiro-cli");
+        assert_eq!(job["storyboard"]["model"], "claude-opus-5.5");
+        let template = with_plan_origin(board(6, 5.0), &json!({"template": true}));
+        assert_eq!(template["template"], true);
+        assert!(template.get("provider").is_none());
     }
 
     #[test]

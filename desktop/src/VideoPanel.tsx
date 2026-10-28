@@ -214,6 +214,10 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
   const renderOperation = useRef<RenderOperation | null>(null);
   panelActive.current = active;
   const handledHandoff = useRef(0);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [revealEditor, setRevealEditor] = useState(0);
+  // Bring the handed-off project into view once the editor renders it.
+  useEffect(() => { if (revealEditor) editorRef.current?.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }, [revealEditor]);
   const onSeedHandled = useRef(onResearchSeedHandled);
   onSeedHandled.current = onResearchSeedHandled;
   selectedProject.current = project;
@@ -339,6 +343,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
         setProjects(current => [target, ...current.filter(item => item.id !== target.id)]);
         setBusy(null);
         requestProject({ kind: "select", project: target });
+        setRevealEditor(n => n + 1);
         setNotice({ tone: "info", text: existing ? "이전에 편집기로 가져온 AI 영상을 열었습니다." : "AI 영상을 편집기 프로젝트로 가져왔습니다. 수정한 뒤 MP4로 다시 출력할 수 있으며, 원본 작업은 그대로 남습니다." });
       } catch (error) { if (mounted.current) { setBusy(null); setNotice({ tone: "error", text: message(error) }); } }
     })();
@@ -718,7 +723,7 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
         <p className="desktop-video-library-path">{status?.dataPath ?? "프로젝트는 로컬 작업 폴더에 저장됩니다."}</p>
       </aside>
 
-      {project && scene ? <div className="desktop-video-editor">
+      {project && scene ? <div className="desktop-video-editor" ref={editorRef}>
         <div className="desktop-video-editor-heading"><div><h2>{project.title || "제목 없는 영상"}</h2><span>{dirty ? "저장하지 않은 변경사항" : "로컬에 저장됨"} <i />{project.scenes.length}장면 · {duration.toFixed(1)}초</span></div><div><button className="social-button compact" aria-label="영상 프로젝트 복제" disabled={!!busy || !!pending || importOpen} onClick={() => requestProject({ kind: "duplicate", project: duplicateVideoProject(project) })}><Copy size={14} />복제</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("markdown")}><Download size={14} />Markdown 내보내기</button><button className="social-button compact" disabled={!!busy || !!pending || importOpen} onClick={() => void exportProject("json")}><FileJson size={14} />JSON 내보내기</button><button className="social-button" disabled={!!busy || !dirty} onClick={() => void saveProject()}>{busy === "save" ? <LoaderCircle size={15} className="social-spin" /> : <Save size={15} />}저장</button><button className="social-button" disabled={!!busy || !status?.ttsConfigured} title={status?.ttsConfigured ? undefined : "화면 위쪽의 로컬 음성에서 켜기를 누르세요"} onClick={() => void generateVoices()}>{busy === "voice" ? <LoaderCircle size={15} className="social-spin" /> : <Mic size={15} />}{busy === "voice" ? "음성 생성 중" : "음성 생성"}</button><button className="social-button primary" disabled={!!busy || !canRender} onClick={() => void renderProject()}>{busy === "render" ? <LoaderCircle size={15} className="social-spin" /> : <Clapperboard size={15} />}{busy === "render" ? "MP4 출력 중" : "MP4 출력"}</button></div></div>
         <fieldset className="desktop-video-project-fields" disabled={!!busy}><legend className="social-sr-only">영상 기본 정보</legend><label>영상 제목<input value={project.title} maxLength={300} onChange={(event) => patchProject({ title: event.target.value })} /></label><div className="desktop-video-metadata"><label>출력 형식<select value={project.format} onChange={(event) => patchProject({ format: event.target.value as VideoFormat })}>{Object.entries(formatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>음성 언어<select value={project.language} onChange={(event) => patchProject({ language: event.target.value as VideoProject["language"] })}><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option></select></label></div></fieldset>
         <VoiceFields voice={project.voice} disabled={!!busy} onChange={voice => patchProject({ voice })} />

@@ -339,6 +339,8 @@ try {
   assert.equal(count('video_save_project'), 1);
   assert.equal(last('video_save_project').args.input.production.jobId, 'job-1', 'the editor copy keeps the production job id');
   assert.equal(last('video_save_project').args.input.scenes[0].mediaType, 'video');
+  await page.locator('.desktop-video-editor').waitFor();
+  await page.waitForFunction(() => { const r = document.querySelector('.desktop-video-editor')?.getBoundingClientRect(); return !!r && r.top < innerHeight && r.bottom > 0; }, null, { timeout: 5000 });
   await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '주제 → AI 영상', exact: true }).click();
   await page.getByRole('region', { name: '완성 영상' }).getByRole('button', { name: '편집기에서 다듬기', exact: true }).click();
   await page.getByRole('status').filter({ hasText: '이전에 편집기로 가져온 AI 영상을 열었습니다.' }).waitFor();
