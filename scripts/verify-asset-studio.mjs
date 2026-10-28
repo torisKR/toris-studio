@@ -104,8 +104,8 @@ try {
   await page.getByRole('button',{name:'요청 큐에 추가',exact:true}).click();
   await page.getByText('2개 요청을 저장했습니다.',{exact:false}).waitFor();
   assert.equal((await worker('snapshot')).jobs.length,2);
-  await page.getByRole('button',{name:'ChatGPT에 전달할 요청 복사',exact:true}).click();
-  await page.getByText('전달문을 복사했습니다.',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'다른 AI 도구용 요청 복사',exact:true}).click();
+  await page.getByText('2개 요청을 복사했습니다.',{exact:false}).waitFor();
   assert.match(clipboard,/studio_asset_receive/);assert.match(clipboard,/--studio-mcp/);for(const job of (await worker('snapshot')).jobs)assert.ok(clipboard.includes(job.id));
   reports.checks.push('Create two persistent queued requests and copy actionable ChatGPT handoff');
   await page.screenshot({path:resolve(artifacts,'02-queue.png'),fullPage:true});

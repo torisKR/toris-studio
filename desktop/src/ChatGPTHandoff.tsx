@@ -28,9 +28,9 @@ export function CreationInbox({ active, kind, onReview }: { active: boolean; kin
     void read(); const timer = setInterval(() => void read(), 4000);
     return () => { alive = false; clearInterval(timer); };
   }, [active, kind, refreshKey]);
-  return <section className="creation-inbox" aria-label="제작 요청과 수신 초안"><div className="workspace-inline-heading"><h2>요청과 받은 초안</h2><button className="social-button compact" onClick={() => setRefreshKey(n => n + 1)}><RefreshCw size={14}/>새로고침</button></div>
+  return <section className={`creation-inbox${requests.length || error ? "" : " is-empty"}`} aria-label="제작 요청과 수신 초안"><div className="workspace-inline-heading"><h2>요청과 받은 초안{!requests.length && !error && <small> · 받은 초안 없음</small>}</h2><button className="social-button compact" onClick={() => setRefreshKey(n => n + 1)}><RefreshCw size={14}/>새로고침</button></div>
     {error && <p className="social-form-error" role="alert">{error}</p>}
-    {!requests.length && <p className="social-muted">제작 요청을 저장하면 이곳에서 실제 조회·초안 수신을 확인할 수 있습니다.</p>}
+    
     {requests.slice(0, 12).map(request => <article key={request.id}><div><strong>{request.title}</strong><small>{creationStateLabel(request.status)} · {new Date(request.createdAt).toLocaleString("ko-KR")}</small></div><div className="workspace-inline-actions">{request.status === "draft-received" && request.draft && <button className="social-button primary compact" disabled={busy} onClick={() => { setBusy(true); void Promise.resolve(onReview(request)).catch(e => setError(String(e))).finally(() => setBusy(false)); }}>초안 검토</button>}{request.status !== "cancelled" && <button className="social-button compact" disabled={busy} aria-label={`${request.title} 요청 거절·취소`} onClick={() => { setBusy(true); void creationApi("cancel", { requestId: request.id, revision: request.revision }).then(() => setRefreshKey(n => n + 1)).catch(e => setError(String(e))).finally(() => setBusy(false)); }}><X size={14}/>거절·취소</button>}</div></article>)}
   </section>;
 }

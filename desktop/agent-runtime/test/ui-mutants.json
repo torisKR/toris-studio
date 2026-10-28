@@ -86,5 +86,16 @@
    "scripts/verify-agent-ui.mjs"
   ],
   "timeoutMs": 400000
+ },
+ {
+  "id": "ui.tray-asset-opens-form",
+  "file": "desktop/src/OperationTray.tsx",
+  "find": "onClick={()=>{onNavigate(item.view,item.focus);setOpen(false);}}",
+  "replace": "onClick={()=>{onNavigate(item.view);setOpen(false);}}",
+  "cmd": [
+   "node",
+   "scripts/verify-desktop-interactions.mjs"
+  ],
+  "timeoutMs": 400000
  }
 ]

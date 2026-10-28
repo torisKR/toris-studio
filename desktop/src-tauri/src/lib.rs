@@ -578,10 +578,18 @@ mod desktop {
         if updates.installing() {
             return Err("업데이트 설치가 끝난 뒤 키워드 탐색을 실행하세요.".into());
         }
-        let _permit = state
-            .trend_lock
-            .try_lock()
-            .map_err(|_| "기존 트렌드 수집을 마친 뒤 실행하세요.")?;
+        // Only a fresh official collection competes with the trend scheduler for the network.
+        // A local search reads saved rows and must work while background collection runs.
+        let _permit = if input.mode == "official" {
+            Some(
+                state
+                    .trend_lock
+                    .try_lock()
+                    .map_err(|_| "기존 트렌드 수집을 마친 뒤 실행하세요.")?,
+            )
+        } else {
+            None
+        };
         keyword::search(&state.config_snapshot().await, input).await
     }
     #[tauri::command]

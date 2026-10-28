@@ -599,7 +599,6 @@ pub async fn search(config: &AppConfig, input: SearchInput) -> Result<SearchResu
             library.total
         ));
     }
-    warnings.push("로컬 목록 검색은 저장된 본문의 앞 3,000자까지 분석합니다. 선택한 콘텐츠 상세에서 전체 수집 본문을 볼 수 있습니다.".into());
     if input.source == "google_trends" || (input.mode == "official" && input.source == "all") {
         warnings.push("Google Trends는 공개 인기 RSS의 주제 필터입니다. 일반 Google 검색 결과와 SEO 순위를 제공하지 않습니다.".into());
     }

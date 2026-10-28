@@ -92,8 +92,8 @@
 .asset-thumbnail.large { aspect-ratio:1/1; max-height:380px; }
 .asset-card-meta { padding:12px 13px; }
 .asset-card-meta>div:first-child { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.asset-card-meta small { color:var(--asset-muted); font-size:10px; }
-.asset-purpose { font-size:10px; padding:3px 6px; border-radius:4px; background:#1c304c; color:#b5d0ff; white-space:nowrap; }
+.asset-card-meta small { color:var(--asset-muted); font-size:11px; }
+.asset-purpose { font-size:11px; padding:3px 6px; border-radius:4px; background:#1c304c; color:#b5d0ff; white-space:nowrap; }
 .asset-purpose.project { background:#2c2446; color:#d9c8ff; }
 .asset-card-meta h3 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:9px; font-size:14px; }
 .asset-card-meta p { display:flex; flex-wrap:wrap; gap:5px 8px; margin-top:5px; color:var(--asset-muted); font-size:11px; }
@@ -119,12 +119,12 @@
 .asset-details summary { cursor:pointer; color:#c5d3e5; font-size:12px; }
 .asset-details p { margin:12px 0; color:var(--asset-muted); font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .asset-details small { display:block; color:#8f9db1; margin:14px 0 5px; font-size:11px; }
-.asset-details code { display:block; overflow-wrap:anywhere; font-size:10px; color:#c1cede; }
+.asset-details code { display:block; overflow-wrap:anywhere; font-size:11px; color:#c1cede; }
 .asset-inspector-actions { display:grid; gap:8px; }
 .asset-model-wrap { position:relative; background:var(--asset-inset); }
 .asset-model-canvas { height:300px; width:100%; }
 .asset-model-canvas canvas { width:100%; height:100%; display:block; }
-.asset-model-help { padding:9px 12px; text-align:center; font-size:10px; color:var(--asset-muted); }
+.asset-model-help { padding:9px 12px; text-align:center; font-size:11px; color:var(--asset-muted); }
 .asset-preview-status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; color:var(--asset-muted); font-size:12px; text-align:center; pointer-events:none; }
 .asset-preview-status.error { color:#ffc0c6; background:var(--asset-inset); }
 .asset-queue { padding-top:4px; }
@@ -137,7 +137,7 @@
 .asset-job-info h3 { display:flex; align-items:center; gap:10px; overflow-wrap:anywhere; }
 .asset-job-info h3 small { color:var(--asset-muted); font-size:11px; font-weight:400; }
 .asset-job-info p { color:var(--asset-muted); font-size:12px; margin-top:5px; }
-.asset-job-info code { display:block; color:#8292a8; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:4px; }
+.asset-job-info code { display:block; color:#8292a8; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:4px; }
 .asset-job-status { color:#e6be83; font-size:11px; white-space:nowrap; }
 .asset-job-status.completed { color:#8ae3bb; }
 .asset-job-status.cancelled { color:var(--asset-muted); }

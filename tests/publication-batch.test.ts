@@ -51,3 +51,13 @@ test("KST inputs reject calendar normalization and batch slots handle simultaneo
   assert.deepEqual(client.batchSchedule(publication, ids, "2026-10-20T23:55", 0, now).targets.map(target => target.scheduledAt), ["2026-10-20T14:55:00.000Z", "2026-10-20T14:55:00.000Z"]);
   assert.equal(client.scheduleInput(client.batchSchedule(publication, ids, "2026-10-20T23:55", 10, now).targets[1].scheduledAt), "2026-10-21T00:05");
 });
+
+test("the batch form defaults to the next whole KST hour, which batchSchedule accepts as future", () => {
+  const at = Date.parse("2026-10-28T09:55:00Z"); // 18:55 KST
+  assert.equal(client.nextKstHour(at), "2026-10-28T19:00");
+  assert.equal(client.nextKstHour(Date.parse("2026-12-31T14:30:00Z")), "2027-01-01T00:00", "rolls over the KST year boundary");
+  const target = client.newTarget("threads");
+  const result = client.batchSchedule({ ...client.newPublication(), targets: [target] }, [target.id], client.nextKstHour(at), 0, at);
+  assert.equal(result.targets[0].scheduledAt, "2026-10-28T10:00:00.000Z");
+});
+

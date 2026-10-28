@@ -605,21 +605,18 @@ function LegacyVideoPanel({ active, researchSeed, onResearchSeedHandled, onOpenK
 
   return <section className="desktop-video" aria-label="영상 스튜디오">
     <div className="desktop-video-engine">
-      <Clapperboard size={20} aria-hidden="true" />
-      <div><strong>영상 스튜디오</strong><p>AI로 장면·본문·내레이션을 만들고, 선택한 모션과 로컬 미디어를 적용해 MP4로 출력합니다.</p></div>
+      <div className="desktop-video-status" aria-label="영상 처리 환경">
+        <span className={status?.ffmpegAvailable ? "ready" : ""}>FFmpeg {status ? status.ffmpegAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
+        <span className={status?.fontAvailable ? "ready" : ""}>자막 글꼴 {status ? status.fontAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
+        <span className={status?.ttsConfigured ? "ready" : ""}>로컬 음성(Qwen3) {status ? status.ttsConfigured ? "준비됨" : "꺼짐 · pnpm tts:on" : "확인 필요"}</span>
+        {status && !status.ffprobeAvailable && <span>FFprobe 없음</span>}
+      </div>
+      <ol className="desktop-video-flow" aria-label="영상 제작 단계"><li className={selectedTemplate || research || busy === "idea" ? "current" : ""}><span>01</span><strong>템플릿·주제 선택</strong></li><li className={project && !render && busy !== "render" ? "current" : ""}><span>02</span><strong>초안·모션 편집</strong></li><li className={render || busy === "render" ? "current" : ""}><span>03</span><strong>MP4 출력</strong></li></ol>
       <button className="social-button compact" disabled={!!busy || loading} onClick={() => { void checkStatus(); void loadProjects(); void checkAi(); }}><RefreshCw size={14} />상태 확인</button>
-    </div>
-    <div className="desktop-video-status" aria-label="영상 처리 환경">
-      <span className={status?.ffmpegAvailable ? "ready" : ""}>FFmpeg {status ? status.ffmpegAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
-      <span className={status?.fontAvailable ? "ready" : ""}>자막 글꼴 {status ? status.fontAvailable ? "준비됨" : "없음" : "확인 필요"}</span>
-      <span className={status?.ttsConfigured ? "ready" : ""}>로컬 음성(Qwen3) {status ? status.ttsConfigured ? "준비됨" : "꺼짐 · pnpm tts:on" : "확인 필요"}</span>
-      {status && !status.ffprobeAvailable && <span>FFprobe 없음</span>}
     </div>
     {statusError && <p className="social-form-error" role="alert">처리 환경: {statusError}</p>}
     {notice && <div className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={17} /> : <CircleAlert size={17} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="영상 알림 닫기" onClick={() => setNotice(null)}><X size={15} /></button></div>}
     {researchWarnings.length > 0 && <div className="desktop-video-research-warnings" role="status"><CircleAlert size={16} /><div><strong>초안 생성 안내</strong>{researchWarnings.map((warning, index) => <p key={index}>{warning}</p>)}</div></div>}
-
-    <ol className="desktop-video-flow" aria-label="영상 제작 단계"><li className={selectedTemplate || research || busy === "idea" ? "current" : ""}><span>01</span><strong>템플릿·주제 선택</strong></li><li className={project && !render && busy !== "render" ? "current" : ""}><span>02</span><strong>초안·모션 편집</strong></li><li className={render || busy === "render" ? "current" : ""}><span>03</span><strong>MP4 출력</strong></li></ol>
 
     {templateLibraryError && <p className="social-form-error" role="alert">템플릿 라이브러리: {templateLibraryError}</p>}
     <CreationInbox active={active} kind="video" onReview={request => { if(!request.draft?.project) throw new Error("영상 초안이 없습니다."); if(dirty && !window.confirm("편집 중인 프로젝트는 유지하고 수신 초안을 새 프로젝트로 검토할까요?")) return; setImportJson(JSON.stringify(request.draft.project,null,2)); setImportError(""); setImportOpen(true); }}/>

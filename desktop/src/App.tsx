@@ -18,6 +18,7 @@ import { OperationTray } from "./OperationTray";
 import { MAIN_SECTIONS, sectionFor, sectionItems, restoreView, rememberView, type View, type Section } from "./workspace-navigation";
 import "./Workspace.css";
 import { AssetStudio } from "./assets/AssetStudio";
+import { plainPreview } from "./content-preview";
 import { AiDiscovery } from "./AiDiscovery";
 import { BookOpen } from "lucide-react";
 import { ActivityStatus, ActivitySkeleton } from "./ActivityStatus";
@@ -216,9 +217,10 @@ function TrendCard({ trend, index, canSave, onSave, onUseInAi }: {
 export function App() {
   const [tab, updateTab] = useState<Tab>(() => { try { return restoreView(localStorage.getItem("toris.workspace.view")); } catch { return "sns"; } });
   const rememberedViews = useRef<Partial<Record<Section, View>>>({});
-  const setTab = (next: Tab) => { requestAnimationFrame(() => document.querySelector<HTMLElement>(".social-page-heading h1")?.focus({preventScroll:true})); rememberedViews.current = rememberView(rememberedViews.current, next); updateTab(next); try { localStorage.setItem("toris.workspace.view", next); } catch {} };
+  const setTab = (next: Tab) => { if (next !== tab) window.scrollTo({ top: 0 }); requestAnimationFrame(() => document.querySelector<HTMLElement>(".social-page-heading h1")?.focus({preventScroll:true})); rememberedViews.current = rememberView(rememberedViews.current, next); updateTab(next); try { localStorage.setItem("toris.workspace.view", next); } catch {} };
   const section = sectionFor(tab);
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
+  const [assetQueueRequest, setAssetQueueRequest] = useState(0);
   const [aiReferences, setAiReferences] = useState<AiMaterial[]>([]);
   const [aiSelectionNotice, setAiSelectionNotice] = useState("");
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
@@ -372,7 +374,7 @@ export function App() {
   }
 
   function renderContentCard(item: SocialContent) {
-    return <article className="social-content-card" key={item.id}><div className="social-card-platform"><PlatformMark platform={item.platform} small /><span>{platforms[item.platform].label}</span><span className="social-card-account">{dashboard.channels.find((channel) => channel.id === item.channelId)?.name ?? "채널 미지정"}</span></div><button className="social-card-edit" onClick={() => openContent(item)}><h3>{item.title}</h3><p>{item.body || "본문을 작성해 아이디어를 구체화하세요."}</p></button><div className="social-card-footer"><span>{item.status === "scheduled" ? <CalendarClock size={13} /> : <FileText size={13} />}{formatDate(item.status === "scheduled" ? item.scheduledAt : item.updatedAt, item.status === "scheduled")}</span>{safeUrl(item.url) ? <External url={safeUrl(item.url)} aria-label={`${item.title} 발행 링크 열기`}><ExternalLink size={14} /></External> : <button aria-label={`${item.title} 수정`} onClick={() => openContent(item)}><ArrowRight size={14} /></button>}</div></article>;
+    return <article className="social-content-card" key={item.id}><div className="social-card-platform"><PlatformMark platform={item.platform} small /><span>{platforms[item.platform].label}</span><span className="social-card-account">{dashboard.channels.find((channel) => channel.id === item.channelId)?.name ?? "채널 미지정"}</span></div><button className="social-card-edit" onClick={() => openContent(item)}><h3>{item.title}</h3><p>{plainPreview(item.body) || "본문을 작성해 아이디어를 구체화하세요."}</p></button><div className="social-card-footer"><span>{item.status === "scheduled" ? <CalendarClock size={13} /> : <FileText size={13} />}{formatDate(item.status === "scheduled" ? item.scheduledAt : item.updatedAt, item.status === "scheduled")}</span>{safeUrl(item.url) ? <External url={safeUrl(item.url)} aria-label={`${item.title} 발행 링크 열기`}><ExternalLink size={14} /></External> : <button aria-label={`${item.title} 수정`} onClick={() => openContent(item)}><ArrowRight size={14} /></button>}</div></article>;
   }
 
   function openContent(item?: SocialContent, seed?: Partial<ContentForm>) {
@@ -441,7 +443,7 @@ export function App() {
 
   function aiFromContent() {
     setAiTopic(contentForm.title); setAiContext(contentForm.body.slice(0, 6000)); setAiReferences([]); setContentOpen(false); setTab("ai");
-    setAiSelectionNotice("콘텐츠를 ChatGPT 작성 요청으로 가져왔습니다. 참고자료를 확인한 뒤 대화에 보내세요.");
+    setAiSelectionNotice("콘텐츠를 문구 작성 자료로 가져왔습니다. 참고자료를 확인한 뒤 AI로 작성을 누르세요.");
   }
 
   function patternReport() {
@@ -449,7 +451,7 @@ export function App() {
     const context = visibleTrends.map((trend, index) => `${index + 1}. 출처: ${sourceLabels[trend.source]}\n키워드: ${trend.keyword}\n제목: ${trend.title}\n원본 수치: ${trend.metric ?? "제공되지 않음"}\n조회수: ${trend.details?.viewCount ?? "제공되지 않음"}\n채널: ${trend.details?.channelTitle ?? "제공되지 않음"}\n구독자: ${trend.details?.subscriberCount ?? "제공되지 않음"}\n길이: ${trend.details?.durationSeconds ?? "제공되지 않음"}초\n링크: ${trend.url}\n수집: ${trend.fetchedAt}`).join("\n\n") +
       "\n\n위 제목과 출처 정보만 근거로 사용해줘. 원문을 읽었다고 주장하지 말고 사실과 추정을 구분해줘. 수치가 없는 검색 결과를 인기 순위로 해석하지 말아줘. 도입 훅, 주제, 표현 형식의 공통점을 분석하고 각 플랫폼 아이디어와 검증할 가설을 제안해줘.";
     setAiTopic(topic); setAiContext(context.slice(0, 6000)); setAiReferences([]); setAiOutput(""); setTab("ai");
-    setAiSelectionNotice("패턴 분석 자료를 준비했습니다. 연결된 ChatGPT 대화에 보내기를 눌러 요청하세요.");
+    setAiSelectionNotice("패턴 분석 자료를 준비했습니다. AI로 작성을 누르면 Agent 탭의 콘텐츠 작성 모델로 분석합니다.");
   }
 
   function useTrend(trend: SocialTrend, selectedPlatform?: SocialPlatform) {
@@ -458,6 +460,7 @@ export function App() {
   }
 
   const viewTitle = tabs.find(item => item.id === tab)?.label ?? "SNS 관리";
+  const sectionLabel = MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정";
   const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
 
   return (
@@ -465,19 +468,18 @@ export function App() {
       <a className="social-skip-link" href="#social-main">본문으로 이동</a>
       <aside className="social-sidebar" aria-label="워크스페이스 메뉴">
         <button type="button" onClick={() => setTab("sns")} className="social-brand" aria-label="Toris Studio SNS 관리"><span className="social-brand-mark"><img src="./brand/toris-logo.png" alt="" width={40} height={40} /></span><span><strong>Toris Studio</strong><small>Creator workspace</small></span></button>
-        <div className="social-workspace-label"><span className="social-workspace-dot" />내 작업실 <span>LOCAL</span></div>
         <nav className="social-nav" aria-label="주 메뉴">
           {MAIN_SECTIONS.map(item => { const Icon = sectionIcons[item.id]; return <button key={item.id} type="button" title={item.label} className={section === item.id ? "active" : ""} aria-current={section === item.id ? "page" : undefined} onClick={() => setTab(rememberedViews.current[item.id] ?? sectionItems(item.id)[0].id)}><Icon size={19}/><span>{item.label}</span></button>; })}
         </nav>
         <nav className="workspace-settings-nav social-nav" aria-label="앱 설정"><button className={section === "settings" ? "active" : ""} title="설정" onClick={() => setTab("settings")}><Settings2 size={19}/><span>설정</span></button></nav>
-        <div className="social-sidebar-bottom"><ShieldCheck size={18} /><strong>내 기기에 저장되는 작업</strong><p>콘텐츠는 로컬 DB에 저장됩니다.<br />AI 요청 시 입력한 내용은 선택한 모델 공급자에게 전달됩니다.</p></div>
+        <div className="social-sidebar-bottom" title="콘텐츠는 로컬 DB에 저장됩니다. AI 요청 시 입력한 내용은 선택한 모델 공급자에게 전달됩니다."><ShieldCheck size={16} /><strong>내 기기에 저장</strong><p>AI 요청 내용만 선택한 모델 공급자에게 전달됩니다.</p></div>
       </aside>
 
       <div className="social-shell">
-        <header className="social-topbar"><span className="social-breadcrumb"><button type="button" onClick={() => setTab("sns")}>내 작업실</button><ChevronRight size={14} /> <strong>{viewTitle}</strong></span><div className="social-topbar-context"><DesktopCommandMenu items={tabs} onNavigate={setTab} />{nativeActivity && <span className="desktop-native-activity" role="status"><LoaderCircle size={14} className="social-spin" aria-hidden="true" />{nativeActivityLabel}</span>}<span className="social-local-label">DESKTOP</span><div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div><OperationTray onNavigate={setTab}/></div></header>
+        <header className="social-topbar"><span className="social-breadcrumb">{sectionLabel !== viewTitle && <><button type="button" onClick={() => setTab(sectionItems(section)[0].id)}>{sectionLabel}</button><ChevronRight size={14} aria-hidden="true" /></>}<strong>{viewTitle}</strong></span><div className="social-topbar-context"><DesktopCommandMenu items={tabs} onNavigate={setTab} />{nativeActivity && <span className="desktop-native-activity" role="status"><LoaderCircle size={14} className="social-spin" aria-hidden="true" />{nativeActivityLabel}</span>}<div className={`social-db-state ${dashboard.database.connected ? "connected" : ""}`}><span className="social-db-dot" /><span>{loading ? "DB 확인 중" : dashboard.database.connected ? "로컬 DB 연결됨" : "DB 연결 필요"}</span></div><OperationTray onNavigate={(view, focus) => { if (focus === "queue") setAssetQueueRequest(n => n + 1); setTab(view); }}/></div></header>
         <main id="social-main" className="social-main" tabIndex={-1}>
-          {sectionItems(section).length > 1 && <nav className="workspace-subnav" aria-label={`${MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정"} 화면`}>{sectionItems(section).map(item => <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
           <div className="social-page-heading"><div><h1 tabIndex={-1}>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={loading} onClick={() => { setAssetRefreshKey(key => key + 1); void loadDashboard(); void checkAi(); }}><RefreshCw size={17} className={loading ? "social-spin" : ""}/></button>{tab === "content" && <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17}/>새 콘텐츠</button>}</div></div>
+          {sectionItems(section).length > 1 && <nav className="workspace-subnav" aria-label={`${MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정"} 화면`}>{sectionItems(section).map(item => <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
           {notice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={18} /> : <CircleAlert size={18} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></button></div>}
           {tab !== "assets" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
           {tab !== "assets" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
@@ -485,7 +487,7 @@ export function App() {
           <div hidden={tab !== "sns"}><SnsWorkspace active={tab === "sns"} dashboard={dashboard} refreshKey={assetRefreshKey} onAddChannel={openChannel} onCreate={(channel) => openContent(undefined, { platform: channel.platform, channelId: channel.id })} onNavigate={setTab} onChanged={() => void loadDashboard()}/></div>
 
           <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
-          <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} /></div>
+          <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} queueRequest={assetQueueRequest} /></div>
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} /></div>
           <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
           <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenPublications={() => setTab("publications")} /></div>

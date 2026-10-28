@@ -26,6 +26,7 @@ try {
     if (command === 'video_template_catalog') throw new Error('격리된 탐색 fixture의 템플릿 읽기 오류');
     if (command === 'media_status') return { ffmpegAvailable: false, ffprobeAvailable: false, fontAvailable: false };
     if (command === 'set_main_activity') return null;
+    if (command === 'asset_command' && args.action === 'snapshot') return { assets: [], jobs: [{ id: 'aaaaaaaa-1111-4111-8111-111111111111', batchId: 'b', index: 1, spec: { title: '오프닝 바다 배경', project: '씬포켓', width: 1920, height: 1080, format: 'png' }, outputRoot: '/fixture', status: 'queued', createdAt: '2026-10-28T03:00:00Z', updatedAt: '2026-10-28T03:00:00Z', assetId: null }], total: 0, libraryTotal: 0, offset: 0, limit: 48, jobTotal: 1, settings: { videoRoot: '/fixture/v', projectRoot: '/fixture/p' }, storePath: '/fixture' };
     const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
     errors.push(`Unexpected fixture IPC ${command}`);throw new Error(`Unexpected native operation in isolated UI test: ${command}`);
   });
@@ -68,6 +69,14 @@ try {
   const after = await page.evaluate(() => window.__qaResources());
   assert.equal(after.keyListeners, baseline.keyListeners, 'tab/menu cycles must not accumulate shortcut listeners');
   assert.equal(after.intervals, baseline.intervals, 'tab/menu cycles must not accumulate intervals (Vite may own a development heartbeat)');
+  // A queued image job in the work tray opens the asset queue, not the creation form.
+  await page.getByRole('button', { name: /작업함/ }).click();
+  const job = page.getByRole('button', { name: /오프닝 바다 배경/ });
+  await job.waitFor();
+  assert.match(await job.innerText(), /실제 파일 수신 대기 · 10\. 28\./, 'tray entries carry their request time');
+  await job.click();
+  await page.getByRole('button', { name: /작업 큐/, pressed: true }).waitFor();
+  await page.getByRole('region', { name: '이미지 및 3D 에셋 작업실' }).getByText('ID aaaaaaaa', { exact: true }).waitFor();
   await page.setViewportSize({ width: 820, height: 720 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'minimum desktop width must not overflow');
   await page.screenshot({ path: `${output}/desktop.png`, fullPage: false });

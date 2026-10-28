@@ -10,7 +10,7 @@
 .ops-products { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
 .ops-product-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .ops-product-head h2 { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.ops-kind { padding: 2px 8px; border-radius: 999px; background: #1d2b3c; color: #9fb4ca; font-size: 10px; }
+.ops-kind { padding: 2px 8px; border-radius: 999px; background: #1d2b3c; color: #9fb4ca; font-size: 11px; }
 .ops-statuses { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .ops-status { display: grid; grid-template-columns: 92px auto minmax(0, 1fr); align-items: center; gap: 4px 10px; padding: 9px 10px; border-left: 3px solid #3a4a5c; border-radius: 8px; background: #172433; animation: ops-in .25s ease both; }
 .ops-status[data-tone="good"] { border-left-color: #4fcf98; }
@@ -25,7 +25,7 @@
 .ops-status[data-tone="info"] .ops-state { background: #172a45; color: #a9c8ff; }
 .ops-summary { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .ops-summary a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.ops-status time { grid-column: 2 / 4; color: #8ea1b3; font-size: 10px; font-variant-numeric: tabular-nums; }
+.ops-status time { grid-column: 2 / 4; color: #8ea1b3; font-size: 11px; font-variant-numeric: tabular-nums; }
 .ops-status button { grid-column: 1 / -1; justify-self: start; }
 .ops-stale { color: #f2c46d; }
 .ops-empty { display: flex; align-items: center; gap: 8px; margin: 0; color: #8ea1b3; font-size: 12px; }
@@ -35,8 +35,8 @@
 .ops-secret-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 12px; }
 .ops-secret { display: grid; gap: 6px; padding: 12px; border-radius: 8px; background: #172433; }
 .ops-secret label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
-.ops-secret small { color: #8ea1b3; font-size: 10px; }
-.ops-saved, .ops-missing { padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 500; }
+.ops-secret small { color: #8ea1b3; font-size: 11px; }
+.ops-saved, .ops-missing { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 500; }
 .ops-saved { background: #143326; color: #8ae3bb; }
 .ops-missing { background: #22303f; color: #9fb4ca; }
 .ops-secret-actions { display: flex; gap: 8px; }

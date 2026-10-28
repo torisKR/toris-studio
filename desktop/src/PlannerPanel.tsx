@@ -82,7 +82,7 @@ export function PlannerPanel({ active, databaseConnected, onOpenPublications }: 
   return <section className="planner" aria-label="일정과 작업">
     <div className="planner-bar">
       <span className={`planner-calendar ${data?.calendar.linked ? "linked" : ""}`}><CalendarDays size={15} aria-hidden="true" />{data?.calendar.linked ? `Google Calendar 연결됨${data.calendar.lastSyncedAt ? ` · ${new Date(data.calendar.lastSyncedAt).toLocaleString("ko-KR")} 동기화` : ""}` : "Google Calendar 미연결"}</span>
-      {data?.calendar.lastError && <span className="planner-warn" role="status">{data.calendar.lastError}</span>}
+      {data?.calendar.linked && data.calendar.lastError && <span className="planner-warn" role="status">{data.calendar.lastError}</span>}
       {data && data.openConflicts > 0 && <span className="planner-warn" role="status">확인할 동기화 충돌 {data.openConflicts}건</span>}
       <div className="planner-actions">
         <button className="social-button compact" disabled={!!busy} onClick={() => void sync()}>{busy === "sync" ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}지금 동기화</button>
@@ -104,7 +104,7 @@ export function PlannerPanel({ active, databaseConnected, onOpenPublications }: 
       </section>
       <section className="planner-card" aria-label="작업">
         <h2>작업 {late.length > 0 && <span className="planner-late">마감 지남 {late.length}</span>}</h2>
-        <form className="planner-work-form" onSubmit={event => void addWork(event)}><label className="social-sr-only" htmlFor="planner-work-title">새 작업</label><input id="planner-work-title" value={workTitle} maxLength={300} placeholder="새 작업 (예: 스토어 스크린샷 교체)" onChange={event => setWorkTitle(event.target.value)} /><label className="social-sr-only" htmlFor="planner-work-due">마감</label><input id="planner-work-due" type="datetime-local" value={workDue} onChange={event => setWorkDue(event.target.value)} /><button className="social-button compact" disabled={!workTitle.trim() || busy === "work"}><Plus size={14} />추가</button></form>
+        <form className="planner-work-form" onSubmit={event => void addWork(event)}><label className="social-sr-only" htmlFor="planner-work-title">새 작업</label><input id="planner-work-title" value={workTitle} maxLength={300} placeholder="새 작업 (예: 스토어 스크린샷 교체)" onChange={event => setWorkTitle(event.target.value)} /><label className="social-sr-only" htmlFor="planner-work-due">마감</label><input id="planner-work-due" type="datetime-local" className={workDue ? "" : "is-empty"} title="마감 · 선택" value={workDue} onChange={event => setWorkDue(event.target.value)} /><button className="social-button compact" disabled={!workTitle.trim() || busy === "work"}><Plus size={14} />추가</button></form>
         <ul className="planner-work">{data?.work.map(item => <li key={item.id} data-late={late.includes(item) || undefined}>
           <span className="planner-title">{item.title}</span>{item.dueAt && <time>{new Date(item.dueAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>}
           {item.source !== "manual" && <small>{item.source === "ops" ? "운영 경고" : "에이전트"}</small>}

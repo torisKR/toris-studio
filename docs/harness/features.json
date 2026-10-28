@@ -145,7 +145,7 @@
    "paths": [
     "desktop/src/ContentBoard*",
     "desktop/src/Overview*",
-    "desktop/src/Keyword*",
+    "desktop/src/Keyword*", "desktop/src/content-preview.ts",
     "desktop/src/AiDiscovery*",
     "desktop/src/ai-*.ts",
     "desktop/src-tauri/src/social.rs",

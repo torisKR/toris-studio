@@ -10,3 +10,130 @@
 .workspace-operation-tray{position:relative}.workspace-operation-tray>button small{padding:1px 5px;border-radius:4px;background:#92b8ff22}.workspace-jobs{position:absolute;right:0;top:calc(100% + 12px);z-index:40;width:min(380px,calc(100vw - 100px));max-height:70vh;overflow:auto;background:var(--social-panel);border:1px solid var(--social-line);border-radius:8px;box-shadow:0 20px 60px #0008}.workspace-jobs header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--social-line)}.workspace-job{display:block;width:100%;background:transparent;border:0;border-bottom:1px solid var(--social-line);padding:14px 18px;color:var(--social-text);text-align:left}.workspace-job:hover{background:#92b8ff10}.workspace-job strong{display:block;font-size:12px;overflow-wrap:anywhere}.workspace-job span{display:block;font-size:11px;color:var(--social-muted);margin-top:5px}.workspace-jobs>p,.workspace-jobs footer{padding:14px 18px;font-size:11px;color:var(--social-muted);line-height:1.8}
 @media(max-width:1099px){.social-workspace{grid-template-columns:72px minmax(0,1fr)}.social-sidebar{padding:20px 10px}.social-brand>span:last-child,.social-workspace-label,.social-sidebar-bottom,.social-nav button>span{display:none}.social-brand{padding:0;justify-content:center}.social-nav{margin-top:24px}.social-nav button{justify-content:center;padding-inline:0}.social-main{padding:20px}.social-topbar{padding-inline:20px}.social-topbar .social-local-label,.social-topbar .social-db-state,.social-breadcrumb button{display:none}.social-topbar-context{gap:8px}.social-topbar .desktop-command-trigger{width:40px;padding:8px;justify-content:center}.desktop-command-trigger span,.desktop-command-trigger kbd{display:none}.sns-channel-layout{display:block}.sns-channel-layout.has-selection .sns-channel-list{display:none}.sns-channel-layout:not(.has-selection) .sns-channel-detail{margin-top:24px}.sns-back{display:inline-flex}.sns-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sns-performance-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.sns-chart-grid{grid-template-columns:1fr}.sns-operation-summary button{padding:14px;gap:10px}.sns-operation-summary strong{font-size:21px}.sns-workspace-filters{flex-wrap:wrap}.sns-mapping-row{grid-template-columns:1fr 1fr}.social-ai-workbench{grid-template-columns:1fr}.creation-inbox article{flex-wrap:wrap}.social-page-heading{gap:14px}.social-page-heading p{font-size:12px}.workspace-operation-tray>button>span{display:none}}
 @media(prefers-reduced-motion:reduce){.social-workspace *{scroll-behavior:auto!important;transition:none!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
+
+
+/* Shell refresh: one hierarchy for every screen (title, then section tabs, then content),
+   readable minimum text, and consistent motion feedback. Reduced motion is handled above. */
+.social-workspace .social-sidebar{padding:22px 12px 16px;gap:0}
+.social-workspace .social-brand{margin-bottom:22px}
+.social-workspace .social-nav{gap:4px}
+.social-workspace .social-nav button{position:relative;min-height:42px;padding:9px 12px;border-radius:8px;transition:color .18s ease,background-color .18s ease,border-color .18s ease}
+.social-workspace .social-nav button::before{content:"";position:absolute;left:-12px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--social-accent);transform:scaleY(0);transition:transform .22s cubic-bezier(.2,.8,.2,1)}
+.social-workspace .social-nav button.active::before{transform:scaleY(1)}
+.social-workspace .social-nav button>svg{transition:transform .18s ease}
+.social-workspace .social-nav button:hover>svg{transform:translateX(1px)}
+.social-sidebar-bottom{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;align-items:center;margin-top:14px;padding:12px 10px 0;border-top:1px solid var(--social-line)}
+.social-sidebar-bottom svg{margin:0!important}
+.social-sidebar-bottom p{grid-column:1/-1;margin-top:4px;line-height:1.6;font-size:11px}
+
+.social-breadcrumb strong{font-size:12px}
+.social-page-heading{margin-bottom:18px}
+.social-page-heading p{max-width:72ch;line-height:1.6}
+.social-workspace .workspace-subnav{display:inline-flex;flex-wrap:wrap;gap:2px;margin:0 0 22px;padding:3px;border:1px solid var(--social-line);border-radius:10px;background:var(--social-inset)}
+.social-workspace .workspace-subnav button{min-height:36px;padding:7px 14px;border:0;border-radius:7px;color:var(--social-muted);font-size:13px;transition:color .18s ease,background-color .18s ease,box-shadow .18s ease}
+.social-workspace .workspace-subnav button:hover{color:var(--social-text);background:#ffffff08}
+.social-workspace .workspace-subnav button.active{color:var(--social-text);background:#92b8ff1f;box-shadow:inset 0 0 0 1px #92b8ff40}
+.social-workspace .workspace-subnav button:focus-visible{outline:2px solid var(--social-accent);outline-offset:2px}
+.sns-toolbar{align-items:center}
+
+/* Screen change: the newly shown screen settles in instead of popping. */
+/* Transform only: WebKit pauses animations in a background window, and an opacity start would leave the screen blank. */
+@keyframes workspace-enter{from{transform:translateY(6px)}to{transform:none}}
+.social-main>div:not([hidden]):not(.social-page-heading):not(.social-notice),.social-main>section{animation:workspace-enter .2s ease-out both}
+
+/* Cards and list rows respond to pointer and keyboard focus. */
+.social-content-card{transition:border-color .18s ease,transform .18s ease,box-shadow .18s ease}
+.social-content-card:hover,.social-content-card:focus-within{transform:translateY(-2px);border-color:#5b7396;box-shadow:0 10px 24px #0006}
+.ops-card,.planner-card{transition:border-color .18s ease,box-shadow .18s ease}
+.ops-card:hover,.planner-card:hover{border-color:#3b5068;box-shadow:0 8px 24px #0004}
+.social-stats>div,.sns-operation-summary button{transition:background-color .18s ease}
+.sns-operation-summary button:hover{background:#ffffff06}
+
+/* Kanban lanes fill the available width and only scroll when four lanes no longer fit. */
+.social-workspace .content-board>.content-board-scroll>.content-board-lane{flex:1 0 260px;width:auto;max-width:420px}
+
+/* Planner: the work input gets a full row, list actions stay light. */
+.planner-work-form{grid-template-columns:minmax(0,1fr) auto}
+.planner-work-form>input:first-of-type{grid-column:1/-1}
+.planner-day li .social-button.compact,.planner-work select{min-height:34px}
+.planner-day li .social-button.compact{padding:5px 10px}
+.planner-pending,.planner-work small,.planner-late,.ops-kind,.ops-status time,.ops-secret small,.ops-saved,.ops-missing{font-size:11px}
+
+/* Video mode switch uses the same segmented control as the section tabs. */
+.social-workspace .video-mode-tabs{display:inline-flex;gap:2px;margin:0 0 18px;padding:3px;border:1px solid var(--social-line);border-radius:10px;background:var(--social-inset)}
+.social-workspace .video-mode-tabs button{min-height:36px;padding:7px 14px;border:0;border-radius:7px;background:transparent;color:var(--social-muted);transition:color .18s ease,background-color .18s ease}
+.social-workspace .video-mode-tabs button:hover{color:var(--social-text)}
+.social-workspace .video-mode-tabs button[aria-pressed=true]{background:#92b8ff1f;color:var(--social-text);box-shadow:inset 0 0 0 1px #92b8ff40}
+
+/* Narrow window: the rail keeps a short label under each icon so sections stay recognizable. */
+@media(max-width:1099px){
+.social-workspace{grid-template-columns:78px minmax(0,1fr)}
+.social-workspace .social-sidebar{padding:18px 8px 14px}
+.social-workspace .social-brand{margin-bottom:18px}
+.social-workspace .social-nav button{flex-direction:column;gap:4px;min-height:56px;padding:8px 2px}
+.social-workspace .social-nav button>span{display:block;font-size:11px;line-height:1.2;text-align:center;word-break:keep-all}
+.social-workspace .social-nav button::before{left:-8px}
+.social-workspace .social-nav button:hover>svg{transform:none}
+.social-workspace .social-sidebar-bottom,.social-breadcrumb>svg{display:none}
+}
+@media(max-width:620px){.social-workspace .workspace-subnav{display:flex}.social-workspace .workspace-subnav button{flex:1 1 auto}}
+@media(prefers-reduced-motion:reduce){.social-main>*{animation:none!important}.social-content-card:hover,.social-content-card:focus-within{transform:none}}
+
+
+
+/* SNS overview: metrics first, filters in one compact row, rarely used range controls folded. */
+.sns-performance-filters{grid-template-columns:repeat(3,minmax(0,1fr)) auto;align-items:end;margin:16px 0 8px}
+.sns-range-details{grid-column:1/-1;font-size:12px;color:var(--social-muted)}
+.sns-range-details>summary{display:inline-flex;align-items:center;gap:6px;min-height:32px;cursor:pointer;color:var(--social-muted);transition:color .18s ease}
+.sns-range-details>summary:hover{color:var(--social-text)}
+.sns-range-fields{display:grid;grid-template-columns:repeat(2,minmax(0,200px)) auto;gap:10px;align-items:end;margin-top:6px;animation:workspace-enter .18s ease-out both}
+.sns-range-fields .workspace-checkbox{margin:0 0 10px}
+.sns-workspace-filters{margin:16px 0 0}
+.sns-setup-banner{display:flex;align-items:center;gap:12px;margin:16px 0;padding:12px 16px;border:1px solid #3b5068;border-radius:8px;background:#14202e}
+.sns-setup-banner>svg{flex-shrink:0;color:var(--social-accent)}
+.sns-setup-banner>div{flex:1;min-width:0}
+.sns-setup-banner strong{font-size:13px}
+.sns-setup-banner p{margin-top:2px!important;font-size:12px;color:var(--social-muted)}
+.sns-setup-banner .social-button{flex-shrink:0}
+.sns-data-note{font-size:11px!important}
+
+/* Video: environment, steps and refresh share one strip. */
+.desktop-video .desktop-video-engine{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:10px 12px;border-color:var(--social-line);background:var(--social-panel)}
+.desktop-video .desktop-video-engine>.desktop-video-status{margin:0;flex:0 1 auto}
+.desktop-video .desktop-video-engine>.desktop-video-flow{flex:1 1 360px;margin:0;border:0;background:transparent}
+.desktop-video .desktop-video-engine>.desktop-video-flow li{padding:6px 12px;border-right:0;border-radius:6px}
+.desktop-video .desktop-video-engine>.social-button{margin-left:auto}
+.desktop-video .desktop-video-status span{font-size:11px;padding:4px 8px}
+.creation-inbox.is-empty{padding:10px 16px;margin:14px 0}
+.creation-inbox.is-empty .workspace-inline-heading{margin:0}
+.creation-inbox.is-empty h2{font-size:14px}
+.creation-inbox h2 small{font-weight:400;font-size:12px;color:var(--social-muted)}
+
+/* Publication: the batch tool sits next to approval, with one short line of guidance. */
+.publication-batch{margin:20px 0}
+.publication-batch>header{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-bottom:6px}
+.publication-batch>header .publication-field-support{margin:0}
+.publication-studio .publication-scheduler-note{margin:10px 0 18px}
+
+@media(max-width:1099px){.sns-performance-filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.sns-performance-filters,.sns-range-fields{grid-template-columns:minmax(0,1fr)}.desktop-video .desktop-video-engine>.social-button{margin-left:0}}
+
+.creation-inbox h2 small{display:inline;margin:0}
+.sns-workspace-filters label{max-width:280px}
+
+/* Found in the packaged app (WebKit) */
+.social-page-heading h1:focus{outline:none}
+.social-workspace .desktop-command-search input{border:0;background:transparent;padding:0;min-height:0;box-shadow:none}
+.asset-job-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:6px;color:var(--social-muted);font-size:12px}
+.asset-job-info .asset-job-meta code{display:inline;margin:0;font-size:11px}
+.planner-work-form input.is-empty::-webkit-datetime-edit{opacity:.5}
+.social-workspace .desktop-command-search{display:flex;flex-direction:row;align-items:center;margin:18px 0 12px;font-weight:400}
+.social-workspace .desktop-command-search input{flex:1;width:auto}
+
+/* WebKit ignores padding on native selects, so every dropdown rendered as a thin bar next to 44px fields.
+   Draw the control ourselves (same approach as the Agent cards) so heights and arrows match across engines. */
+.social-workspace select:not([multiple]),.social-dialog select:not([multiple]){-webkit-appearance:none;appearance:none;min-height:42px;padding-right:34px!important;background-image:linear-gradient(45deg,transparent 50%,var(--social-muted,#a4b2c4) 50%),linear-gradient(135deg,var(--social-muted,#a4b2c4) 50%,transparent 50%)!important;background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%!important;background-size:5px 5px!important;background-repeat:no-repeat!important;cursor:pointer}
+.social-workspace .planner-work select,.social-workspace .social-button select{min-height:34px}
+
+.social-workspace .agent-card select:not([multiple]){min-height:0;height:38px}
+.social-workspace select:not([multiple]){text-overflow:ellipsis;white-space:nowrap;overflow:hidden}

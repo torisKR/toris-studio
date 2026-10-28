@@ -85,6 +85,11 @@ export function scheduleInput(value?: string | null): string {
   return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 16);
 }
 /** Edits a draft only; persistence, preflight and explicit approval stay separate. */
+/** The next whole hour in KST as a datetime-local value, so the batch form never starts in the past. */
+export function nextKstHour(now = Date.now()): string {
+  const kst = new Date(Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000 + 9 * 3_600_000);
+  return kst.toISOString().slice(0, 16);
+}
 export function batchSchedule(publication: Publication, targetIds: string[], firstKst: string, spacingMinutes: number, now = Date.now()): Publication {
   const selected = new Set(targetIds);
   if (!selected.size || selected.size !== targetIds.length || publication.targets.length > 20 || new Set(publication.targets.map(target => target.id)).size !== publication.targets.length || targetIds.some(id => !publication.targets.some(target => target.id === id))) throw new Error("예약할 대상을 중복 없이 선택하세요.");
