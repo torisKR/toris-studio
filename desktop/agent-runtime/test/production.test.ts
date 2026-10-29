@@ -9,7 +9,7 @@ import type { ChatModel } from "../src/llm/types.js";
 
 const ROLES: Array<[string, string]> = [["storyboard", "영상 스토리보드 작가"]];
 const SOURCE = { template: false, provider: "ollama", model: "scripted" };
-const input: ProductionInput = { topic: "아침 루틴으로 집중력 높이기", durationSec: 15, aspect: "9:16", style: "cinematic", narration: true, language: "ko" };
+const input: ProductionInput = { topic: "아침 루틴으로 집중력 높이기", durationSec: 15, aspect: "9:16", style: "cinematic", narration: true, language: "ko", visual: "ai" };
 const CONSISTENCY = "same young woman in a grey hoodie, warm morning light";
 
 type Draft = { title: string; story: string; style: Record<string, string>; scenes: Array<Record<string, unknown>>; [key: string]: unknown };
@@ -46,7 +46,8 @@ test("host input is validated and extra keys are dropped", () => {
   for (const bad of [{ durationSec: 9 }, { durationSec: 121 }, { durationSec: 15.5 }, { aspect: "4:3" }, { style: "anime" }, { narration: "yes" }, { language: "en" }, { topic: "" }, { topic: "가".repeat(301) }, { topic: "주제\u0007" }]) {
     assert.equal(productionInput({ ...input, ...bad }).input, null, JSON.stringify(bad));
   }
-  assert.deepEqual([10, 11, 15, 30, 60, 120].map(sceneCount), [2, 3, 3, 6, 12, 12]);
+  assert.deepEqual([10, 11, 15, 30, 60, 120].map(d => sceneCount(d)), [2, 3, 3, 6, 12, 12]);
+  assert.deepEqual([10, 15, 30, 60].map(d => sceneCount(d, "stock")), [3, 5, 9, 12], "stock cuts follow production.rs scene_count");
 });
 
 test("a valid storyboard is accepted and the shared style phrase reaches every prompt", () => {
@@ -204,3 +205,58 @@ test("the workflow is registered without a project", () => {
   assert.equal(info?.needsProject, false);
 });
 
+
+const stockInput: ProductionInput = { ...input, topic: "법의 허점을 노린 천재 건축가의 아파트 Vancouver House", durationSec: 15, style: "documentary", visual: "stock" };
+function stockDraft(): Draft {
+  return {
+    title: "법의 허점을 노린 천재 건축가의 아파트",
+    headline: { top: "법의 허점(?)을 노린", bottom: "천재 건축가의 아파트" },
+    story: "다리 옆 땅의 규제를 피해 위로 갈수록 넓어지는 건물.",
+    style: { look: "documentary photo", palette: "natural", consistency: "real photos" },
+    scenes: [0, 1, 2, 3, 4].map(i => ({
+      id: "s" + (i + 1), order: i + 1, durationSec: 3, script: "장면", narration: "다리에서 30m 떨어져야 했어요.", caption: "최소 30m 떨어져야",
+      prompt: "", transition: "cut", search: i === 0 ? "Vancouver House tower!" : "granville bridge vancouver", emphasis: i === 1 ? ["30m", "없는단어"] : [],
+      camera: "pan-up", stat: i === 1 ? { value: "30m", label: "다리와의 최소 거리" } : null,
+    })),
+  };
+}
+
+test("stock shorts: search words, headline, highlighted words and number cards pass the gate", () => {
+  const { storyboard, problems, notes } = checkStoryboard(stockDraft(), stockInput, SOURCE);
+  assert.deepEqual(problems, []);
+  assert.ok(storyboard);
+  assert.deepEqual(storyboard.headline, { top: "법의 허점(?)을 노린", bottom: "천재 건축가의 아파트" });
+  assert.equal(storyboard.scenes[0].search, "vancouver house tower", "search words are cleaned the way the host cleans them");
+  assert.deepEqual(storyboard.scenes[1].emphasis, ["30m"], "a highlighted word must appear in the caption or narration");
+  assert.match(notes.join(), /강조 단어/);
+  assert.deepEqual(storyboard.scenes[1].stat, { value: "30m", label: "다리와의 최소 거리" });
+  assert.equal(storyboard.scenes[0].prompt, "", "stock scenes need no AI prompt");
+  const missing = stockDraft();
+  missing.scenes[2].search = "서울";
+  assert.match(checkStoryboard(missing, stockInput, SOURCE).problems.join(), /search: 영어로 써야/);
+  missing.scenes[2].search = "!!";
+  assert.match(checkStoryboard(missing, stockInput, SOURCE).problems.join(), /search에 사진 검색용 영어 단어/);
+  const camera = stockDraft();
+  camera.scenes[0].camera = "spin";
+  assert.ok(checkStoryboard(camera, stockInput, SOURCE).problems.length, "camera is a closed list");
+  const aiBoard = stockDraft();
+  assert.ok(checkStoryboard(aiBoard, { ...stockInput, visual: "ai", durationSec: 15 }, SOURCE).problems.length, "AI scenes still need prompts");
+});
+
+test("stock template: Latin topic words become search words and the template stays labelled", () => {
+  const board = templateStoryboard(stockInput);
+  assert.equal(board.template, true);
+  assert.equal(board.scenes.length, sceneCount(15, "stock"));
+  assert.ok(board.scenes.every(scene => scene.search === "vancouver house" && scene.prompt === ""));
+  assert.equal(board.headline?.top, "[템플릿]");
+  const { template: _t, provider: _p, model: _m, ...body } = board;
+  assert.deepEqual(checkStoryboard(body, stockInput, SOURCE).problems, [], "stock template passes the same gate");
+});
+
+test("workflow: stock shorts use the shorts writer prompt", async () => {
+  const model = new RoleModel({ storyboard: [json(stockDraft())] }, [["storyboard", "정보형 한국어 쇼츠의 작가"]]);
+  const { view, result } = await runWorkflow(model, stockInput);
+  assert.equal(view.phase, "done");
+  assert.equal(result.storyboard?.scenes.length, 5);
+  assert.match(model.calls[0].input.messages[0].content, /사진 장면이니 3~4초/);
+});

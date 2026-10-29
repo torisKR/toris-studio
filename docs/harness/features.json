@@ -63,7 +63,9 @@
     "desktop/src-tauri/examples/production_probe.rs",
     "runtime/wan_t2v_worker.py",
     "runtime/wan_t2v_download.py",
-    "runtime/wan_t5_convert.py"
+    "runtime/wan_t5_convert.py",
+    "desktop/src-tauri/src/stock_media.rs",
+    "desktop/src-tauri/examples/stock_probe.rs"
    ],
    "verify": [
     "node --import tsx --test tests/video-*.test.ts tests/editing.test.ts tests/update-scene.test.ts",
@@ -71,7 +73,8 @@
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_ai::",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib production::",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib video_runtime",
-    "node scripts/verify-production-ui.mjs"
+    "node scripts/verify-production-ui.mjs",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib stock_media"
    ],
    "mutants": [
     "desktop/src-tauri/tests/mutants.json",

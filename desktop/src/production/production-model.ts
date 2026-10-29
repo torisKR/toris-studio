@@ -9,6 +9,9 @@ export const STYLES = { realistic: "실사", cinematic: "시네마틱", animatio
 export const QUALITIES: Record<ProductionQuality, string> = { preview: "미리보기", standard: "표준", high: "고화질" };
 export const SUBTITLES = { "shorts-bold": "쇼츠 굵은 자막", "clean-bottom": "하단 깔끔한 자막", none: "자막 없음" } as const;
 export const BGMS = { none: "없음", ambient: "잔잔한 앰비언트", pulse: "리듬감 있는 펄스" } as const;
+export const VISUALS = { stock: "실제 사진 + 모션 그래픽", ai: "AI 장면 생성 (Wan2.1)" } as const;
+export const LAYOUTS = { card: "쇼츠 카드 (위 제목 고정)", full: "전체 화면" } as const;
+export const CAMERA_LABELS = { "zoom-in": "천천히 확대", "zoom-out": "천천히 축소", "pan-left": "왼쪽으로 이동", "pan-right": "오른쪽으로 이동", "pan-up": "위로 이동" } as const;
 const QUALITY_SPEC: Record<ProductionQuality, { frames: number; steps: number; long: number; short: number }> = {
   preview: { frames: 33, steps: 20, long: 640, short: 368 },
   standard: { frames: 49, steps: 30, long: 832, short: 480 },
@@ -25,16 +28,18 @@ export function outputSize(aspect: ProductionAspect): Size {
   return aspect === "16:9" ? { width: 1920, height: 1080 } : aspect === "1:1" ? { width: 1080, height: 1080 } : { width: 1080, height: 1920 };
 }
 export const sizeText = (size: Size) => size.width + "×" + size.height;
-export const sceneCount = (durationSec: number) => Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
+/** Same rule as production.rs scene_count: photo cuts about 3.5 s, AI clips about 5 s. */
+export const sceneCount = (durationSec: number, visual: "stock" | "ai" = "ai") =>
+  visual === "stock" ? Math.min(12, Math.max(3, Math.ceil(durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
 
 export type ComposerState = {
   topic: string; duration: DurationChoice; customSec: string; aspect: ProductionAspect; style: ProductionInput["style"];
   narration: boolean; speaker: string; subtitleStyle: ProductionInput["subtitleStyle"]; bgm: ProductionInput["bgm"];
-  quality: ProductionQuality; engine: string;
+  quality: ProductionQuality; engine: string; visual: "stock" | "ai"; layout: "card" | "full";
 };
 export const initialComposer: ComposerState = {
-  topic: "", duration: 30, customSec: "45", aspect: "9:16", style: "cinematic", narration: true, speaker: "Sohee",
-  subtitleStyle: "shorts-bold", bgm: "none", quality: "preview", engine: ""
+  topic: "", duration: 30, customSec: "45", aspect: "9:16", style: "documentary", narration: true, speaker: "Sohee",
+  subtitleStyle: "shorts-bold", bgm: "pulse", quality: "preview", engine: "", visual: "stock", layout: "card"
 };
 
 export function durationOf(state: ComposerState): number | null {
@@ -49,6 +54,10 @@ export function usableEngine(engine: EngineInfo | undefined) { return !!engine &
 export function composerProblem(state: ComposerState, status: EngineStatus | null): string | null {
   if (!state.topic.trim()) return "영상 주제를 입력하세요.";
   if (durationOf(state) === null) return "직접 길이는 " + CUSTOM_MIN + "~" + CUSTOM_MAX + "초 사이의 정수로 정하세요.";
+  if (state.visual === "stock") {
+    if (status?.ffmpegReady === false) return "FFmpeg가 없어 편집 단계를 실행할 수 없습니다. 설정에서 미디어 런타임을 확인하세요.";
+    return null;
+  }
   if (!status) return "영상 엔진 상태를 확인하는 중입니다.";
   const engine = status.engines.find(item => item.id === state.engine);
   if (!engine) return "사용할 수 있는 영상 엔진이 없습니다.";
@@ -63,7 +72,8 @@ export function composerInput(state: ComposerState): ProductionInput {
   if (durationSec === null) throw new Error("영상 길이를 확인하세요.");
   return {
     topic: state.topic.trim(), durationSec, aspect: state.aspect, style: state.style, narration: state.narration,
-    subtitleStyle: state.subtitleStyle, bgm: state.bgm, quality: state.quality, engine: state.engine,
+    subtitleStyle: state.subtitleStyle, bgm: state.bgm, quality: state.quality, engine: state.visual === "stock" ? "" : state.engine,
+    visual: state.visual, layout: state.layout,
     ...(state.narration ? { speaker: state.speaker } : {})
   };
 }
@@ -73,7 +83,8 @@ export function storyboardProblem(storyboard: Storyboard): string | null {
   if (!storyboard.title.trim()) return "영상 제목을 입력하세요.";
   for (const scene of storyboard.scenes) {
     if (!Number.isFinite(scene.durationSec) || scene.durationSec < 2 || scene.durationSec > 12) return "장면 " + scene.order + "의 길이는 2~12초입니다.";
-    if (!scene.prompt.trim()) return "장면 " + scene.order + "의 영상 프롬프트를 입력하세요.";
+    if (scene.search === undefined && !scene.prompt.trim()) return "장면 " + scene.order + "의 영상 프롬프트를 입력하세요.";
+    if (scene.search !== undefined && scene.search.replace(/[^a-z0-9-]+/gi, "").length < 2 && !scene.imageId) return "장면 " + scene.order + "의 사진 검색어를 영어로 입력하세요.";
     if (scene.prompt.length > PROMPT_MAX) return "장면 " + scene.order + "의 영상 프롬프트는 " + PROMPT_MAX + "자 이하로 줄이세요.";
   }
   return null;

@@ -18,6 +18,15 @@
 
 Wan2.1 모델 카드 "License Agreement"(리비전 `37ec512` README) 요지: 모델은 Apache-2.0이며 Wan 측은 생성 결과물에 권리를 주장하지 않습니다. 다만 사용자는 사용에 전적으로 책임을 지며, 법 위반 콘텐츠 공유, 개인·집단에 대한 위해, 위해 목적의 개인정보 유포, 허위정보 확산, 취약 계층 겨냥에 쓰면 안 됩니다. 앱은 이를 이용 조건으로 안내하고 스토리보드 승인 단계에서 사용자가 프롬프트를 검토합니다.
 
+## 1-1. 장면 사진 (0.6.0 기본 장면 소스)
+
+| 출처 | 검색 방식 | 허용하는 라이선스 | 거르는 것 | 표시 | 검증일 |
+|---|---|---|---|---|---|
+| Openverse API (`api.openverse.org/v1/images/`, 키 없음) | Flickr·StockSnap·Wikimedia Commons·Rawpixel·NASA 소스, `license=cc0,pdm,by`, `mature=false`. 키 없이 분당 20회·하루 200회(응답 헤더 `x-ratelimit-limit-anon_*`) | CC0 1.0, Public Domain Mark, CC BY | CC BY-SA·NC·ND, 짧은 변 480px 미만, 허용 호스트(live.staticflickr.com, upload.wikimedia.org, cdn.stocksnap.io, images.rawpixel.com, images.nasa.gov) 밖 주소 | CC BY는 영상 하단 출처와 게시글 "사진 출처"에 작성자·출처·라이선스·원본 주소 | 2026-10-29 |
+| Wikimedia Commons API (`generator=search`, `imageinfo.extmetadata`) | Openverse 결과가 모자랄 때 | `LicenseShortName`이 CC0, Public domain, CC BY n.n | -SA·NC·ND·GFDL·Fair use, `Restrictions`(초상권·상표 등)가 적힌 파일, 원본이 작은데 확대된 썸네일 | 위와 같음 | 2026-10-29 |
+
+공영방송·뉴스 화면은 라이선스 표기와 관계없이 제목·작성자·태그·출처 주소에 방송사·통신사 이름(KBS·MBC·SBS·EBS·JTBC·YTN·연합뉴스·Reuters·AFP·Getty·BBC·CNN·NHK 등)이나 "뉴스·방송·screenshot·editorial"이 있으면 후보에서 뺍니다. 사진마다 provenance.json에 작성자·출처 페이지·라이선스·파일 SHA-256을 남기고, 라이선스 코드가 다시 검사를 통과하지 못하면 영상의 상업적 이용 표시를 끕니다. 사진에 찍힌 인물·상표·건축물·예술품의 권리는 라이선스와 별개이므로 게시 전에 확인해야 합니다. CC BY-SA는 결과 영상에도 같은 라이선스를 요구할 수 있어 기본값에서 뺐습니다.
+
 ## 2. 나레이션(TTS)
 
 | 이름 | 버전/리비전 | 공식 출처 | 라이선스 | 상업적 이용 | 표시·재배포 조건 | 사용 제한 | 앱 상태 | 검증일 |

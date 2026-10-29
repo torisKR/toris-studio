@@ -32,21 +32,26 @@ let failVoiceOnce = true, nextId = 1;
 const stage = (job, id) => job.stages.find(s => s.id === id);
 function newJob(input) {
   const id = 'job-' + nextId++, now = new Date().toISOString();
-  const count = Math.min(12, Math.max(2, Math.ceil(input.durationSec / 5)));
+  const count = input.visual === 'stock' ? Math.min(12, Math.max(3, Math.ceil(input.durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(input.durationSec / 5)));
   return { id, createdAt: now, updatedAt: now, status: 'planning', settings: clone(input),
     stages: STAGE_IDS.map(s => ({ id: s, status: s === 'plan' ? 'running' : 'pending', done: 0, total: s === 'scenes' || s === 'voice' ? count : 0 })),
     storyboard: null, scenes: [], generation: { width: 368, height: 640, frames: 33, steps: 20 }, output: { width: 1080, height: 1920 },
-    final: null, qa: [], provenance: null, error: null, sceneCount: count };
+    final: null, qa: [], provenance: null, error: null, sceneCount: count, candidates: {} };
 }
 function storyboardOf(job) {
+  if (job.settings.visual === 'stock') return { title: '법의 허점을 노린 천재 건축가의 아파트', headline: { top: '법의 허점(?)을 노린', bottom: '천재 건축가의 아파트' }, story: '다리 옆 규제를 피한 건물', style: { look: 'documentary photo', palette: 'natural', consistency: 'real photos' }, template: false,
+    scenes: Array.from({ length: job.sceneCount }, (_, i) => ({ id: 's' + (i + 1), order: i + 1, durationSec: 3, script: '장면 ' + (i + 1), narration: '다리에서 30m 떨어져야 했어요.', caption: '최소 30m 떨어져야', prompt: '', transition: 'cut',
+      search: 'vancouver house tower', emphasis: ['30m'], camera: 'pan-up', stat: i === 1 ? { value: '30m', label: '다리와의 거리' } : null, imageId: 'ov-a' })) };
   return { title: '2050 서울 시네마틱', story: '미래 서울의 하루를 따라갑니다.', style: { look: 'cinematic', palette: 'neon teal', consistency: 'same skyline' }, template: true,
     scenes: Array.from({ length: job.sceneCount }, (_, i) => ({ id: 's' + (i + 1), order: i + 1, durationSec: 5, script: '장면 ' + (i + 1), narration: '서울의 미래 ' + (i + 1), caption: '미래 서울 ' + (i + 1), prompt: 'futuristic seoul skyline shot ' + (i + 1), transition: 'cut' })) };
 }
+const photo = (job, scene, id, license) => ({ id, title: 'Vancouver House ' + id, creator: 'Haatu', source: 'flickr', license, attributionRequired: license.startsWith('CC BY'), page: 'https://www.flickr.com/photos/x/' + id, preview: '/fixture/public/productions/' + job.id + '/candidates/' + scene + '/' + id + '.jpg', width: 1024, height: 1365 });
+const photos = (job, scene, prefix) => [photo(job, scene, prefix + '-a', 'CC BY 2.0'), photo(job, scene, prefix + '-b', 'CC0 1.0'), photo(job, scene, prefix + '-c', 'Public Domain')];
 const scenePath = (job, s, kind) => '/fixture/public/productions/' + job.id + '/' + kind + '/' + s.id + '/key-' + s.id + (kind === 'scenes' ? '.mp4' : '.wav');
 function stepAssets(job, stageId, kind) {
   const st = stage(job, stageId); st.status = 'running';
   const running = job.scenes.find(s => s[kind].status === 'running');
-  if (running) { running[kind] = { status: 'done', path: scenePath(job, running, kind === 'video' ? 'scenes' : 'voice') }; }
+  if (running) { running[kind] = { status: 'done', path: job.settings.visual === 'stock' && kind === 'video' ? '/fixture/public/productions/' + job.id + '/scenes/' + running.id + '/p.jpg' : scenePath(job, running, kind === 'video' ? 'scenes' : 'voice'), ...(job.settings.visual === 'stock' && kind === 'video' ? { kind: 'stock' } : {}) }; }
   else { const next = job.scenes.find(s => s[kind].status !== 'done'); if (next) next[kind] = { status: 'running' }; }
   st.done = job.scenes.filter(s => s[kind].status === 'done').length;
   if (st.done === job.scenes.length) { st.status = 'done'; return true; }
@@ -56,6 +61,7 @@ function tick(job) {
   if (job.status === 'planning') {
     Object.assign(stage(job, 'plan'), { status: 'done' }); Object.assign(stage(job, 'storyboard'), { status: 'awaiting_approval' });
     job.storyboard = storyboardOf(job); job.status = 'awaiting_approval';
+    if (job.settings.visual === 'stock') job.candidates = Object.fromEntries(job.storyboard.scenes.map(s => [s.id, photos(job, s.id, 'ov')]));
     job.scenes = job.storyboard.scenes.map(s => ({ id: s.id, order: s.order, video: { status: 'pending' }, voice: { status: 'pending' } }));
     return;
   }
@@ -70,7 +76,7 @@ function tick(job) {
   job.final = { path: '/fixture/public/productions/' + job.id + '/final.mp4', durationSec: 15.2, width: 1080, height: 1920, sizeBytes: 9 * 1024 ** 2 };
   job.editProject = { id: job.id, title: job.storyboard?.title ?? 'AI 영상', format: 'shorts', template: 'adaptive-promo', language: 'ko', scenes: job.scenes.map(sc => ({ id: sc.id, headline: '', body: '', narration: '', durationSec: 5, mediaType: 'video', mediaUrl: '/productions/' + job.id + '/scenes/' + sc.id + '/k.mp4', layout: 'media-focus' })), production: { jobId: job.id, aspect: '9:16' } };
   job.qa = [{ id: 'duration', label: '길이 15초 ±1초', passed: true }, { id: 'audio', label: '오디오 -14 LUFS', passed: true }, { id: 'black', label: '검은 화면 없음', passed: true }];
-  job.provenance = { commercialUse: true, narrationRights: 'conditional', engine: 'wan2.1-t2v-1.3b', revision: '37ec512', licenses: [{ name: 'Wan2.1-T2V-1.3B', license: 'Apache-2.0' }, { name: 'mlx-examples', license: 'MIT' }, { name: 'Qwen3-TTS', license: 'Apache-2.0' }], notes: ['스토리보드는 템플릿으로 만들었습니다.'] };
+  job.provenance = { commercialUse: true, narrationRights: 'conditional', credits: job.settings.visual === 'stock' ? ['"Vancouver House ov-a" by Haatu (Flickr), CC BY 2.0 · https://www.flickr.com/photos/x/ov-a'] : [], engine: 'wan2.1-t2v-1.3b', revision: '37ec512', licenses: [{ name: 'Wan2.1-T2V-1.3B', license: 'Apache-2.0' }, { name: 'mlx-examples', license: 'MIT' }, { name: 'Qwen3-TTS', license: 'Apache-2.0' }], notes: ['스토리보드는 템플릿으로 만들었습니다.'] };
 }
 const previews = [];
 const touched = job => { job.updatedAt = new Date().toISOString(); return clone(job); };
@@ -80,7 +86,7 @@ function production(command, args) {
   switch (command) {
     case 'production_engine_status': return engineStatus();
     case 'production_engine_install': assert.equal(args.engine, 'wan2.1-t2v-1.3b'); installPolls = 0; return null;
-    case 'production_create': { assert.ok(engineInstalled, 'create only after the engine is installed'); const created = newJob(args); jobs.set(created.id, created); return clone(created); }
+    case 'production_create': { if (args.visual === 'ai') assert.ok(engineInstalled, 'AI create only after the engine is installed'); const created = newJob(args); jobs.set(created.id, created); return clone(created); }
     case 'production_list': return [...jobs.values()].reverse().map(j => ({ id: j.id, title: j.storyboard?.title ?? j.settings.topic, topic: j.settings.topic, status: j.status, updatedAt: j.updatedAt, durationSec: j.settings.durationSec, aspect: j.settings.aspect }));
     case 'production_get': tick(job); return touched(job);
     case 'production_approve': {
@@ -102,6 +108,7 @@ function production(command, args) {
     case 'production_open_final': assert.equal(job.status, 'done'); return { path: job.final.path };
     case 'production_save_video': assert.equal(job.status, 'done'); return { saved: '/Users/qa/Movies/2050 서울.mp4' };
     case 'production_publication_draft': assert.equal(job.status, 'done'); return { publicationId: 'pub-1', status: 'draft' };
+    case 'production_find_images': assert.equal(job.status, 'awaiting_approval'); assert.ok(job.candidates[args.sceneId], 'search names a real scene'); job.candidates[args.sceneId] = photos(job, args.sceneId, 'new'); return touched(job);
   }
   return unhandled;
 }
@@ -176,6 +183,16 @@ try {
   assert.equal(calls.some(c => /^video_|^media_status$|^motion_(preview|draft)/.test(c.command)), false, 'the legacy editor and motion studio stay unmounted until opened');
   report.checks.push('영상·모션 opens on the topic → AI video composer; legacy editors are not mounted by default');
 
+  // Default source is licence-cleared photos; no engine needed. The AI path is checked first, then the stock path at the end.
+  assert.equal(await studio.getByLabel('실제 사진 + 모션 그래픽', { exact: true }).isChecked(), true, 'stock photos are the default scene source');
+  assert.equal(await studio.getByLabel('쇼츠 카드 (위 제목 고정)', { exact: true }).isChecked(), true);
+  assert.equal(await studio.getByRole('group', { name: '영상 엔진 설치 필요' }).count(), 0, 'no engine card for stock photos');
+  await studio.getByText('AI 장면 생성 (Wan2.1)', { exact: true }).click();
+  await studio.getByText('전체 화면', { exact: true }).click();
+  await studio.getByText('시네마틱', { exact: true }).click();
+  await studio.getByLabel('배경 음악', { exact: true }).selectOption('none');
+  report.checks.push('Composer defaults to stock photos + shorts card layout and hides the AI engine; switching to AI shows it');
+
   // Engine missing: inline card, disabled create with reason, install progress.
   const card = studio.getByRole('group', { name: '영상 엔진 설치 필요' });
   await card.getByText('내려받기 약 17.4GB', { exact: false }).waitFor();
@@ -223,7 +240,7 @@ try {
   // Create → storyboard review.
   await create.click();
   const sent = last('production_create').args;
-  assert.deepEqual(sent, { topic: '2050년 미래 서울을 보여주는 15초 시네마틱 쇼츠', durationSec: 15, aspect: '9:16', style: 'realistic', narration: true, subtitleStyle: 'shorts-bold', bgm: 'ambient', quality: 'preview', engine: 'wan2.1-t2v-1.3b', speaker: 'Ryan' });
+  assert.deepEqual(sent, { topic: '2050년 미래 서울을 보여주는 15초 시네마틱 쇼츠', durationSec: 15, aspect: '9:16', style: 'realistic', narration: true, subtitleStyle: 'shorts-bold', bgm: 'ambient', quality: 'preview', engine: 'wan2.1-t2v-1.3b', visual: 'ai', layout: 'full', speaker: 'Ryan' });
   const review = page.getByRole('region', { name: '스토리보드 확인' });
   await review.waitFor({ timeout: 10000 });
   await review.getByText('템플릿 초안 · AI 미사용', { exact: true }).waitFor();
@@ -359,6 +376,53 @@ try {
   await page.getByText('이 작업은 취소되었습니다.', { exact: false }).waitFor();
   report.checks.push('취소 asks for confirmation and calls production_cancel for the open job');
 
+
+  // Stock-photo shorts: photo candidates per scene, picking, re-search, headline, credits.
+  await page.getByRole('button', { name: '새 영상', exact: true }).click();
+  await page.getByText('실제 사진 + 모션 그래픽', { exact: true }).click();
+  await page.getByText('쇼츠 카드 (위 제목 고정)', { exact: true }).click();
+  await page.locator('#production-topic').fill('법의 허점을 노린 천재 건축가의 아파트 Vancouver House');
+  await page.getByText('15초', { exact: true }).click();
+  await page.getByRole('button', { name: '영상 생성', exact: true }).click();
+  const stockSent = last('production_create').args;
+  assert.equal(stockSent.visual, 'stock'); assert.equal(stockSent.layout, 'card'); assert.equal(stockSent.engine, '', 'stock jobs send no engine');
+  const stockReview = page.getByRole('region', { name: '스토리보드 확인' });
+  await stockReview.waitFor({ timeout: 10000 });
+  assert.equal(await stockReview.getByLabel('상단 제목 2줄 (노란색)', { exact: true }).inputValue(), '천재 건축가의 아파트');
+  const s2 = stockReview.getByRole('group', { name: '장면 2 편집' });
+  const grid = s2.getByRole('radiogroup', { name: '장면 2 사진' });
+  assert.equal(await grid.getByRole('radio').count(), 3);
+  assert.equal(await grid.getByRole('radio', { checked: true }).getAttribute('aria-label'), 'Vancouver House ov-a · Haatu · CC BY 2.0', 'the first photo is pre-selected');
+  assert.equal(await grid.locator('img').first().getAttribute('src'), 'http://asset.localhost/' + encodeURIComponent('/fixture/public/productions/job-3/candidates/s2/ov-a.jpg'));
+  await grid.getByRole('radio', { name: /ov-b/ }).click();
+  await s2.getByText('Haatu · Flickr · CC0 1.0', { exact: true }).waitFor();
+  await s2.getByLabel(/^사진 검색어/).fill('granville bridge');
+  await s2.getByRole('button', { name: '다시 찾기 · 장면 2', exact: true }).click();
+  assert.deepEqual(last('production_find_images').args, { jobId: 'job-3', sceneId: 's2', query: 'granville bridge' });
+  await grid.getByRole('radio', { name: /new-a/, checked: true }).waitFor();
+  assert.equal(await s2.getByLabel(/^숫자 카드/).inputValue(), '30m');
+  await s2.getByLabel('사진 움직임', { exact: true }).selectOption('zoom-out');
+  assert.equal(await s2.getByLabel(/^영상 프롬프트/).count(), 0, 'stock scenes have no AI prompt field');
+  await page.setViewportSize({ width: 820, height: 1000 });
+  assert.equal(await overflow(), false, 'photo picker has no horizontal overflow at 820px');
+  await page.screenshot({ path: resolve(out, 'stock-review-820.png'), fullPage: true });
+  await page.setViewportSize({ width: 1380, height: 1000 });
+  await page.screenshot({ path: resolve(out, 'stock-review-1380.png'), fullPage: true });
+  await stockReview.getByRole('button', { name: '이대로 생성', exact: true }).click();
+  const stockBoard = last('production_approve').args.storyboard;
+  assert.deepEqual(stockBoard.headline, { top: '법의 허점(?)을 노린', bottom: '천재 건축가의 아파트' });
+  assert.deepEqual({ ...stockBoard.scenes[1], script: undefined, narration: undefined }, { id: 's2', order: 2, durationSec: 3, script: undefined, narration: undefined, caption: '최소 30m 떨어져야', prompt: '', transition: 'cut', search: 'granville bridge', emphasis: ['30m'], camera: 'zoom-out', stat: { value: '30m', label: '다리와의 거리' }, imageId: 'new-a' });
+  report.checks.push('Stock review: headline fields, 3 photo candidates per scene with licences, picking, re-search via production_find_images, camera/number card edits, and approval sends imageId/search/camera/stat');
+  const stockResult = page.getByRole('region', { name: '완성 영상' });
+  await stockResult.waitFor({ timeout: 40000 });
+  await stockResult.getByText('사진 출처 1건 · 게시글 설명에 자동으로 들어갑니다', { exact: true }).click();
+  await stockResult.getByText('"Vancouver House ov-a" by Haatu (Flickr), CC BY 2.0', { exact: false }).waitFor();
+  assert.equal(await stockResult.getByText('생성 해상도', { exact: true }).count(), 0, 'no AI generation size for photo shorts');
+  const stockScenes = page.getByRole('region', { name: '장면' });
+  assert.equal(await stockScenes.getByRole('img', { name: '장면 1 사진' }).getAttribute('class'), 'production-kenburns cam-pan-up');
+  await stockScenes.getByRole('button', { name: '다른 사진으로 · 장면 1', exact: true }).click();
+  assert.deepEqual(last('production_retry').args, { jobId: 'job-3', sceneId: 's1', stage: 'scenes' });
+  report.checks.push('Stock result: photo scenes preview with their camera move, credits listed, 다른 사진으로 retries that scene');
   // Reduced motion: entrance animation only when motion is allowed.
   assert.equal(await page.locator('.production-progress').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -373,7 +437,7 @@ try {
   await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '모션 그래픽', exact: true }).click();
   await page.getByRole('group', { name: '모션 그래픽 제작' }).waitFor();
   await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '주제 → AI 영상', exact: true }).click();
-  await page.getByRole('region', { name: '취소할 영상' }).waitFor();
+  await page.getByRole('region', { name: '법의 허점을 노린 천재 건축가의 아파트' }).waitFor();
   report.checks.push('직접 편집 and 모션 그래픽 remain reachable behind the secondary control and return to the production view');
 
   // Keyboard focus is visible on the primary control.

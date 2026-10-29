@@ -17,10 +17,16 @@ export type StageId = "plan" | "storyboard" | "scenes" | "voice" | "subtitles" |
 /** "waiting" = the storyboard stage is waiting for the user's approval. */
 export type StageStatus = AssetStatus | "waiting";
 export type Transition = "cut" | "fade" | "dip";
+/** stock = licence-cleared photos + motion graphics; ai = local Wan2.1 clips. */
+export type VisualSource = "stock" | "ai";
+/** card = fixed two-line title, media in the middle, captions and credit (shorts); full = media fills the frame. */
+export type FrameLayout = "card" | "full";
+export type Camera = "zoom-in" | "zoom-out" | "pan-left" | "pan-right" | "pan-up";
+export const CAMERAS: readonly Camera[] = ["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up"];
 
 export type ProductionInput = {
   topic: string; durationSec: number; aspect: ProductionAspect; style: ProductionStyle; narration: boolean;
-  subtitleStyle: SubtitleStyle; bgm: BgmKind; quality: ProductionQuality; engine: string;
+  subtitleStyle: SubtitleStyle; bgm: BgmKind; quality: ProductionQuality; engine: string; visual: VisualSource; layout: FrameLayout;
   /** Narration speaker (lib/video/voice-options VOICE_SPEAKERS key). Sent only when narration is on. */
   speaker?: string;
 };
@@ -28,18 +34,22 @@ export type StageState = { id: StageId; status: StageStatus; done: number; total
 export type StoryboardScene = {
   id: string; order: number; durationSec: number; script: string; narration: string; caption: string;
   prompt: string; negativePrompt?: string; transition: Transition;
+  /** Stock shorts: English photo search words, highlighted caption words, camera move, number card, picked photo. */
+  search?: string; emphasis?: string[]; camera?: Camera; stat?: { value: string; label: string } | null; imageId?: string;
 };
 export type Storyboard = {
-  title: string; story: string; style: { look: string; palette: string; consistency: string };
+  title: string; headline?: { top: string; bottom: string }; story: string; style: { look: string; palette: string; consistency: string };
   scenes: StoryboardScene[];
   /** true when the plan came from the deterministic template (no AI model). */
   template?: boolean;
 };
-export type SceneAsset = { status: AssetStatus; path?: string; error?: string };
+export type SceneAsset = { status: AssetStatus; path?: string; error?: string; kind?: "ai" | "stock" | "graphic"; credit?: string };
+/** A licence-cleared photo found for a scene. preview is a local file the window can show. */
+export type ImageCandidate = { id: string; title: string; creator: string; source: string; license: string; attributionRequired: boolean; page: string; preview: string; width: number; height: number };
 export type ProductionScene = { id: string; order: number; video: SceneAsset; voice: SceneAsset };
 export type QaCheck = { id: string; label: string; passed: boolean; detail?: string };
 export type ProvenanceLicense = { name: string; license: string; url?: string };
-export type Provenance = { commercialUse: boolean; narrationRights?: "conditional" | "none"; engine?: string; revision?: string; licenses: ProvenanceLicense[]; planner?: string; notes: string[] };
+export type Provenance = { commercialUse: boolean; narrationRights?: "conditional" | "none"; engine?: string; revision?: string; licenses: ProvenanceLicense[]; planner?: string; notes: string[]; credits: string[] };
 export type Size = { width: number; height: number };
 export type FinalVideo = { path: string; durationSec: number; width?: number; height?: number; sizeBytes?: number };
 export type ProductionJob = {
@@ -47,6 +57,8 @@ export type ProductionJob = {
   stages: StageState[]; storyboard: Storyboard | null; scenes: ProductionScene[];
   generation?: Size & { frames?: number; steps?: number }; output?: Size;
   final: FinalVideo | null; qa: QaCheck[]; provenance: Provenance | null;
+  /** Photo candidates per scene id (stock jobs). */
+  candidates: Record<string, ImageCandidate[]>;
   error: { stage?: StageId; message: string } | null;
   /** Validated VideoProject the existing editor can open (done jobs only). */
   editProject?: Record<string, unknown> | null;
@@ -85,8 +97,17 @@ function stageStatus(value: unknown): StageStatus {
 }
 function asset(value: unknown): SceneAsset {
   const r = rec(value);
-  return { status: assetStatus(r.status), path: opt(r.path) ?? opt(r.file), error: errorText(r.error) };
+  const kind = r.kind === "stock" || r.kind === "graphic" ? r.kind : r.kind === undefined ? undefined : "ai";
+  return { status: assetStatus(r.status), path: opt(r.path) ?? opt(r.file), error: errorText(r.error), ...(kind ? { kind } : {}) };
 }
+function candidate(value: unknown): ImageCandidate | null {
+  const r = rec(value);
+  const id = str(r.id);
+  if (!id || !opt(r.preview)) return null;
+  return { id, title: str(r.title), creator: str(r.creator, "작성자 미상"), source: str(r.source), license: str(r.license), attributionRequired: r.attributionRequired === true,
+    page: str(r.page), preview: str(r.preview), width: num(r.width), height: num(r.height) };
+}
+const CAMERA_SET = new Set<string>(CAMERAS);
 function size(value: unknown): Size | undefined {
   const r = rec(value);
   return optNum(r.width) && optNum(r.height) ? { width: num(r.width), height: num(r.height) } : undefined;
@@ -105,9 +126,15 @@ function normalizeStoryboard(value: unknown): Storyboard | null {
         id: str(s.id, "scene-" + (index + 1)), order: num(s.order, index + 1), durationSec: num(s.durationSec, 5),
         script: str(s.script), narration: str(s.narration), caption: str(s.caption), prompt: str(s.prompt),
         ...(typeof s.negativePrompt === "string" ? { negativePrompt: s.negativePrompt } : {}),
-        transition: s.transition === "fade" || s.transition === "dip" ? s.transition : "cut"
+        transition: s.transition === "fade" || s.transition === "dip" ? s.transition : "cut",
+        ...(typeof s.search === "string" ? { search: s.search } : {}),
+        ...(Array.isArray(s.emphasis) ? { emphasis: s.emphasis.filter((w): w is string => typeof w === "string") } : {}),
+        ...(typeof s.camera === "string" && CAMERA_SET.has(s.camera) ? { camera: s.camera as Camera } : {}),
+        ...(s.stat && typeof s.stat === "object" ? { stat: { value: str(rec(s.stat).value), label: str(rec(s.stat).label) } } : s.stat === null ? { stat: null } : {}),
+        ...(typeof s.imageId === "string" && s.imageId ? { imageId: s.imageId } : {})
       } as StoryboardScene;
     }),
+    ...(r.headline && typeof r.headline === "object" ? { headline: { top: str(rec(r.headline).top), bottom: str(rec(r.headline).bottom) } } : {}),
     ...(r.template === true ? { template: true } : {})
   };
 }
@@ -115,11 +142,14 @@ function normalizeStoryboard(value: unknown): Storyboard | null {
 /** Exactly the contract's storyboard fields: the validator rejects unknown keys such as the UI-only template flag. */
 export function storyboardForApproval(board: Storyboard): Omit<Storyboard, "template"> {
   return {
-    title: board.title.trim(), story: board.story,
+    title: board.title.trim(), ...(board.headline ? { headline: { top: board.headline.top.trim(), bottom: board.headline.bottom.trim() } } : {}), story: board.story,
     style: { look: board.style.look, palette: board.style.palette, consistency: board.style.consistency },
     scenes: board.scenes.map(scene => ({
       id: scene.id, order: scene.order, durationSec: scene.durationSec, script: scene.script, narration: scene.narration,
-      caption: scene.caption, prompt: scene.prompt, ...(scene.negativePrompt !== undefined ? { negativePrompt: scene.negativePrompt } : {}), transition: scene.transition
+      caption: scene.caption, prompt: scene.prompt, ...(scene.negativePrompt !== undefined ? { negativePrompt: scene.negativePrompt } : {}), transition: scene.transition,
+      ...(scene.search !== undefined ? { search: scene.search } : {}), ...(scene.emphasis ? { emphasis: scene.emphasis } : {}),
+      ...(scene.camera ? { camera: scene.camera } : {}), ...(scene.stat !== undefined ? { stat: scene.stat && scene.stat.value.trim() ? { value: scene.stat.value.trim(), label: scene.stat.label.trim() } : null } : {}),
+      ...(scene.imageId ? { imageId: scene.imageId } : {})
     }))
   };
 }
@@ -149,8 +179,10 @@ export function normalizeJob(value: unknown): ProductionJob {
     settings: {
       topic: str(s.topic) || str(r.topic), durationSec: num(s.durationSec, 30), aspect: (["9:16", "16:9", "1:1"].includes(s.aspect as string) ? s.aspect : "9:16") as ProductionAspect,
       style: (str(s.style) || "cinematic") as ProductionStyle, narration: s.narration !== false, subtitleStyle: (str(s.subtitleStyle) || "shorts-bold") as SubtitleStyle,
-      bgm: (str(s.bgm) || "none") as BgmKind, quality: (str(s.quality) || "preview") as ProductionQuality, engine: str(s.engine), speaker: opt(s.speaker)
+      bgm: (str(s.bgm) || "none") as BgmKind, quality: (str(s.quality) || "preview") as ProductionQuality, engine: str(s.engine), speaker: opt(s.speaker),
+      visual: s.visual === "stock" ? "stock" : "ai", layout: s.layout === "card" ? "card" : "full"
     },
+    candidates: Object.fromEntries(Object.entries(rec(r.candidates)).map(([scene, items]) => [scene, list(items).map(candidate).filter((c): c is ImageCandidate => !!c)])),
     stages, storyboard: normalizeStoryboard(r.storyboard),
     scenes: list(r.scenes).map((raw, index) => { const scene = rec(raw); return { id: str(scene.id, "scene-" + (index + 1)), order: num(scene.order, index + 1), video: asset(scene.video), voice: asset(scene.voice) }; }),
     generation: gen ? { ...gen, frames: optNum(rec(r.generation).frames), steps: optNum(rec(r.generation).steps) } : undefined,
@@ -160,7 +192,8 @@ export function normalizeJob(value: unknown): ProductionJob {
     provenance: provenanceRaw ? {
       commercialUse: provenanceRaw.commercialUse === true, narrationRights: provenanceRaw.narrationRights === "conditional" ? "conditional" : provenanceRaw.narrationRights === "none" ? "none" : undefined, engine: opt(provenanceRaw.engine), revision: opt(provenanceRaw.revision),
       licenses: list(provenanceRaw.licenses).map(raw => { const l = rec(raw); return { name: str(l.name), license: str(l.license), url: opt(l.url) }; }).filter(l => l.name),
-      planner: opt(provenanceRaw.planner) ?? opt(rec(provenanceRaw.ai).model), notes: list(provenanceRaw.notes).filter((n): n is string => typeof n === "string")
+      planner: opt(provenanceRaw.planner) ?? opt(rec(provenanceRaw.ai).model), notes: list(provenanceRaw.notes).filter((n): n is string => typeof n === "string"),
+      credits: list(provenanceRaw.credits).filter((n): n is string => typeof n === "string")
     } : null,
     error: error ? { message: error, stage: (opt(rec(errorRaw).stage) as StageId | undefined) } : null,
     editProject: r.editProject && typeof r.editProject === "object" && !Array.isArray(r.editProject) ? r.editProject as Record<string, unknown> : null
@@ -243,7 +276,8 @@ export const productionApi = {
     return opened;
   },
   saveVideo: (jobId: string) => invoke<{ saved: string | null }>("production_save_video", { input: { jobId } }),
-  publicationDraft: (jobId: string) => invoke<unknown>("production_publication_draft", { input: { jobId } })
+  publicationDraft: (jobId: string) => invoke<unknown>("production_publication_draft", { input: { jobId } }),
+  findImages: async (jobId: string, sceneId: string, query: string) => normalizeJob(await invoke("production_find_images", { input: { jobId, sceneId, query } }))
 };
 
 /** Local media URL for a job-owned file, using the same asset protocol as other panels. */

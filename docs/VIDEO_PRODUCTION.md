@@ -68,6 +68,17 @@ narration: boolean, subtitleStyle: "shorts-bold" | "clean-bottom" | "none", bgm:
 { title, story, style:{look, palette, consistency}, scenes:[{ id, order, durationSec(2~12), script, narration, caption, prompt(영문 ≤600), negativePrompt?, transition:"cut"|"fade"|"dip" }] }
 장면 수 = ceil(durationSec / 5) 범위 2~12. 알 수 없는 필드·URL·경로·코드 블록 거부.
 
+## 장면 소스 (0.6.0)
+
+visual: "stock"(기본) | "ai". layout: "card"(기본, 쇼츠 카드) | "full".
+
+- stock: 기획 모델이 장면마다 영어 사진 검색어(search), 노란 강조 단어(emphasis, 자막에 실제로 있는 단어만), 카메라 움직임(camera: zoom-in·zoom-out·pan-left·pan-right·pan-up), 숫자 카드(stat {value≤12자, label≤24자})와 상단 두 줄 제목(headline top·bottom ≤18자)을 데이터로 냅니다. Rust가 장면마다 Openverse → Commons 순으로 검색하고(전체 검색어 → 앞 두 단어 → 뒤 두 단어), 라이선스·호스트·크기·방송사 검사를 통과한 사진 3장을 미리 내려받아 후보로 보여 줍니다. 승인할 때 고른 사진(imageId)을 쓰고, 내려받기에 실패하면 다음 후보, 그래도 없으면 자막을 크게 넣은 그래픽 장면으로 바꾸고 작업 기록에 남깁니다.
+- 장면 수: stock은 약 3.5초 컷(ceil(길이/3.5), 3~12개), ai는 약 5초(2~12개).
+- 쇼츠 카드 구성(9:16 기준 1080×1920): 위 150~440px 두 줄 제목(흰색·노란색), 470~1530px 사진(카메라 움직임), 사진 아래쪽 강조 자막(검은 상자, 노란 강조 단어, 팝인), 가운데 숫자 카드(페이드·상승), 1556px 출처 줄, 1522px 진행 막대. 16:9·1:1은 같은 순서로 비율에 맞춥니다. 모든 글자는 앱이 PNG로 그리고 FFmpeg 필터에는 숫자와 닫힌 값만 들어갑니다.
+- 결과: provenance.json의 credits와 SNS 게시 초안 설명의 "사진 출처" 목록, 결과 화면의 사진 출처 펼침.
+
+IPC 추가: production_find_images({jobId, sceneId, query}) → 스토리보드 확인 중 한 장면의 사진 후보를 다시 찾습니다. 장면 재생성은 stock 장면에서 "다른 사진으로"(다음 후보)입니다.
+
 ## 영상 엔진
 
 기본: wan2.1-t2v-1.3b (mlx-examples 796f5b5 MIT, Wan-AI/Wan2.1-T2V-1.3B 37ec512 Apache-2.0). 메모리 상한 18GB. 실행 전 TTS 서버가 앱 소유면 멈추고 끝나면 다시 켬, 앱 외부 서버면 장면 단계에 경고를 표시하고 메모리 상한을 16GB로 낮춤(사용자 프로세스 종료 금지). 장면 생성은 편집기 MP4 출력과 같은 영상 잠금을 써서 동시에 돌지 않음.

@@ -61,6 +61,7 @@ pub mod scheduler;
 pub mod social;
 #[cfg(any(feature = "desktop", test))]
 mod startup_smoke;
+pub mod stock_media;
 #[cfg(feature = "desktop")]
 mod tray;
 pub mod trends;

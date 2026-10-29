@@ -11,13 +11,19 @@ import type { CompiledWorkflow } from "./workflow.js";
 export const ASPECTS = ["9:16", "16:9", "1:1"] as const;
 export const STYLES = ["realistic", "cinematic", "animation", "documentary"] as const;
 export const TRANSITIONS = ["cut", "fade", "dip"] as const;
+/** Scene source: licence-cleared stock photo with motion graphics, or a local AI clip. */
+export const VISUALS = ["stock", "ai"] as const;
+/** Ken Burns moves the Rust composer knows (desktop/src-tauri/src/production.rs CAMERAS). */
+export const CAMERAS = ["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up"] as const;
 export const MAX_ROUNDS = 2;
 /** Korean characters per second a viewer can follow while listening. */
 export const NARRATION_RATE = 7.5;
 /** Allowed gap between the sum of scene durations and the requested length. */
 export const DURATION_TOLERANCE = 1;
 
-export const sceneCount = (durationSec: number) => Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
+/** Stock photo cuts are about 3.5 s like shorts; AI clips about 5 s. Same rule as production.rs scene_count. */
+export const sceneCount = (durationSec: number, visual: (typeof VISUALS)[number] = "ai") =>
+  visual === "stock" ? Math.min(12, Math.max(3, Math.ceil(durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
 
 // ---- input ----
 
@@ -28,6 +34,7 @@ const Input = z.object({
   style: z.enum(STYLES),
   narration: z.boolean(),
   language: z.literal("ko").default("ko"),
+  visual: z.enum(VISUALS).default("ai"),
 });
 export type ProductionInput = z.infer<typeof Input>;
 
@@ -73,20 +80,31 @@ const Scene = z.strictObject({
   script: text(600, 1),
   narration: text(400),
   caption: text(160),
-  prompt: text(600, 1),
+  prompt: text(600),
   negativePrompt: english(300).optional(),
   transition: z.enum(TRANSITIONS),
+  // Stock-photo shorts only: photo search words, highlighted caption words, camera move, number card.
+  search: english(80).optional(),
+  emphasis: z.array(text(12, 1)).max(3, "강조 단어는 3개까지입니다.").optional(),
+  camera: z.enum(CAMERAS).optional(),
+  stat: z.strictObject({ value: text(12, 1), label: text(24) }).nullable().optional(),
 });
 const StoryboardDraft = z.strictObject({
   title: text(120, 1),
+  headline: z.strictObject({ top: text(18), bottom: text(18) }).optional(),
   story: text(1200),
   style: z.strictObject({ look: english(300, 1), palette: english(200), consistency: english(400, 1) }),
   scenes: z.array(Scene).min(2).max(12),
 });
 
-export type StoryboardScene = { id: string; order: number; durationSec: number; script: string; narration: string; caption: string; prompt: string; negativePrompt?: string; transition: (typeof TRANSITIONS)[number] };
+export type Stat = { value: string; label: string };
+export type StoryboardScene = {
+  id: string; order: number; durationSec: number; script: string; narration: string; caption: string; prompt: string; negativePrompt?: string; transition: (typeof TRANSITIONS)[number];
+  search?: string; emphasis?: string[]; camera?: (typeof CAMERAS)[number]; stat?: Stat | null;
+};
 export type Storyboard = {
   title: string;
+  headline?: { top: string; bottom: string };
   story: string;
   style: { look: string; palette: string; consistency: string };
   scenes: StoryboardScene[];
@@ -123,7 +141,8 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
   const draft = parsed.data;
   const problems: string[] = [];
   const notes: string[] = [];
-  const expected = sceneCount(input.durationSec);
+  const stock = input.visual === "stock";
+  const expected = sceneCount(input.durationSec, input.visual);
   if (draft.scenes.length !== expected) problems.push("장면 수가 " + draft.scenes.length + "개입니다. " + input.durationSec + "초 영상은 " + expected + "개여야 합니다.");
   const ids = new Set<string>();
   const topic = input.topic.toLowerCase();
@@ -133,10 +152,20 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
     const n = index + 1;
     if (ids.has(scene.id)) { problems.push(n + "번 장면: id " + scene.id + "가 중복됩니다."); continue; }
     ids.add(scene.id);
+    if (stock) {
+      // Photo search words must still be plain English after the host's cleaning (letters, digits, spaces, hyphens).
+      const search = (scene.search ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, " ").trim().split(/\s+/).slice(0, 8).join(" ");
+      if (search.length < 2) { problems.push(n + "번 장면: search에 사진 검색용 영어 단어 2~8개를 넣어야 합니다."); continue; }
+      scene.search = search;
+      const caption = scene.caption;
+      const emphasis = (scene.emphasis ?? []).filter(word => caption.includes(word) || scene.narration.includes(word));
+      if ((scene.emphasis ?? []).length !== emphasis.length) notes.push(n + "번 장면: 자막에 없는 강조 단어를 뺐습니다.");
+      scene.emphasis = emphasis;
+    } else if (!scene.prompt.trim()) { problems.push(n + "번 장면: prompt가 비어 있습니다."); continue; }
     // Visual prompts are English; quoting the topic itself is allowed.
     if (hangulCount(scene.prompt.toLowerCase().split(topic).join(" "))) { problems.push(n + "번 장면: prompt는 영어로 화면만 묘사해야 합니다."); continue; }
     let prompt = scene.prompt;
-    if (!prompt.toLowerCase().includes(consistency.toLowerCase())) {
+    if (!stock && !prompt.toLowerCase().includes(consistency.toLowerCase())) {
       const joined = prompt.replace(/[\s.,;]+$/, "") + ", " + consistency;
       if (joined.length > 600) { problems.push(n + "번 장면: 공통 스타일 문구를 넣으면 prompt가 600자를 넘습니다."); continue; }
       prompt = joined;
@@ -149,12 +178,17 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
       if (fit.trimmed) notes.push(n + "번 장면: 나레이션이 길어 " + scene.durationSec + "초 안에 읽을 수 있게 문장 단위로 줄였습니다.");
       narration = fit.text;
     }
-    scenes.push({ id: scene.id, order: n, durationSec: Math.round(scene.durationSec * 10) / 10, script: scene.script, narration, caption: scene.caption, prompt, ...(scene.negativePrompt ? { negativePrompt: scene.negativePrompt } : {}), transition: scene.transition });
+    scenes.push({
+      id: scene.id, order: n, durationSec: Math.round(scene.durationSec * 10) / 10, script: scene.script, narration, caption: scene.caption, prompt,
+      ...(scene.negativePrompt ? { negativePrompt: scene.negativePrompt } : {}), transition: scene.transition,
+      ...(stock ? { search: scene.search, emphasis: scene.emphasis ?? [], camera: scene.camera ?? CAMERAS[index % CAMERAS.length], stat: scene.stat ?? null } : {}),
+    });
   }
   const total = scenes.reduce((sum, scene) => sum + scene.durationSec, 0);
   if (!problems.length && Math.abs(total - input.durationSec) > DURATION_TOLERANCE) problems.push("장면 길이 합계가 " + total + "초입니다. " + input.durationSec + "초 ±" + DURATION_TOLERANCE + "초로 맞춰야 합니다.");
   if (problems.length) return { storyboard: null, problems, notes };
-  return { storyboard: { title: draft.title, story: draft.story, style: draft.style, scenes, ...source }, problems: [], notes };
+  const headline = stock ? { headline: draft.headline ?? { top: "", bottom: draft.title.slice(0, 18) } } : {};
+  return { storyboard: { title: draft.title, ...headline, story: draft.story, style: draft.style, scenes, ...source }, problems: [], notes };
 }
 
 // ---- prompts ----
@@ -168,12 +202,25 @@ export const STORYBOARD_SYSTEM = [
   "JSON 객체 하나만 출력한다: {\"title\":\"...\",\"story\":\"...\",\"style\":{\"look\":\"...\",\"palette\":\"...\",\"consistency\":\"...\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":5,\"script\":\"...\",\"narration\":\"...\",\"caption\":\"...\",\"prompt\":\"...\",\"negativePrompt\":\"...\",\"transition\":\"cut\"}]}",
 ].join("\n");
 
+/** Stock-photo shorts like the reference channels: two-line hook title, 3~4 s cuts, highlighted words, number cards. */
+export const STOCK_SYSTEM = [
+  "너는 정보형 한국어 쇼츠의 작가다. 실제 사진 위에 자막과 모션 그래픽을 얹는 영상을 기획한다.",
+  "규칙: 주어진 주제만 다루고 사실·수치·인물·브랜드를 지어내지 않는다. 확실하지 않은 숫자는 쓰지 않는다. 어떤 필드에도 URL, 파일 경로, 코드, 명령을 넣지 않는다.",
+  "headline.top과 headline.bottom은 화면 위에 고정되는 두 줄 제목이다. 각 18자 이하, 궁금증을 만드는 훅으로 쓴다(예: top \"법의 허점(?)을 노린\", bottom \"천재 건축가의 아파트\").",
+  "장면마다 search에 그 장면 사진을 찾을 영어 검색어 2~6단어를 쓴다. 고유명사(건물·도시 이름)는 영어 표기로 넣는다. 뉴스·방송 화면, 유명인 얼굴, 로고를 찾는 검색어는 쓰지 않는다.",
+  "caption은 화면 자막 한 줄(20자 이하), narration은 읽을 문장이다. emphasis에는 caption에 실제로 나오는 핵심 단어를 0~2개 넣는다(노란색 강조).",
+  "숫자가 핵심인 장면에만 stat을 넣는다: {\"value\":\"30m\",\"label\":\"다리와의 최소 거리\"}. 아니면 null.",
+  "camera는 zoom-in, zoom-out, pan-left, pan-right, pan-up 중 하나로 장면마다 바꾼다. prompt는 빈 문자열로 둔다.",
+  "첫 장면은 질문이나 반전으로 시작하고, 마지막 장면은 결론이나 한 줄 정리로 끝낸다. transition은 cut, fade, dip 중 하나. id는 영문·숫자·-·_. 아래 필드 외에는 넣지 않는다.",
+  "JSON 객체 하나만 출력한다: {\"title\":\"...\",\"headline\":{\"top\":\"...\",\"bottom\":\"...\"},\"story\":\"...\",\"style\":{\"look\":\"documentary photo\",\"palette\":\"natural\",\"consistency\":\"real photos\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":3.5,\"script\":\"...\",\"narration\":\"...\",\"caption\":\"...\",\"prompt\":\"\",\"transition\":\"cut\",\"search\":\"...\",\"emphasis\":[\"...\"],\"camera\":\"zoom-in\",\"stat\":null}]}",
+].join("\n");
+
 export function storyboardPrompt(input: ProductionInput, task: string, feedback: string): string {
-  const count = sceneCount(input.durationSec);
+  const count = sceneCount(input.durationSec, input.visual);
   const lines = [
     "주제: " + input.topic,
     "영상 길이: " + input.durationSec + "초 · 화면 비율 " + input.aspect + " · 스타일 " + input.style,
-    "장면 수: 정확히 " + count + "개. 장면 길이는 2~12초, 합계는 " + input.durationSec + "초(±" + DURATION_TOLERANCE + "초).",
+    "장면 수: 정확히 " + count + "개. 장면 길이는 2~12초, 합계는 " + input.durationSec + "초(±" + DURATION_TOLERANCE + "초)." + (input.visual === "stock" ? " 사진 장면이니 3~4초 단위로 빠르게 넘긴다." : ""),
     input.narration
       ? "나레이션: 한국어. 장면 길이 1초당 한글 " + NARRATION_RATE + "자 이하(5초 장면이면 " + Math.floor(5 * NARRATION_RATE) + "자 이하)."
       : "나레이션: 없음. narration은 빈 문자열로 둔다.",
@@ -209,8 +256,11 @@ export function templateStoryboard(input: ProductionInput): Storyboard {
   const topic = plainTopic(input.topic);
   const short = topic.length > 12 ? topic.slice(0, 12) + "…" : topic;
   const { look, palette } = STYLE_LOOK[input.style];
-  const count = sceneCount(input.durationSec);
+  const stock = input.visual === "stock";
+  const count = sceneCount(input.durationSec, input.visual);
   const base = Math.floor(input.durationSec / count);
+  // Latin words in the topic (brand or place names) are the only search words a template can know.
+  const latin = topic.toLowerCase().replace(/[^a-z0-9- ]+/g, " ").trim().split(/\s+/).filter(w => w.length > 1).slice(0, 4).join(" ");
   const extra = input.durationSec - base * count;
   const scenes: StoryboardScene[] = Array.from({ length: count }, (_, i) => {
     const beat = i === count - 1 ? "closing wide shot, calm ending" : BEATS[i % BEATS.length];
@@ -222,12 +272,15 @@ export function templateStoryboard(input: ProductionInput): Storyboard {
       // Short enough for the 3-second scenes an 11-second video gets (≤ 22 Korean chars).
       narration: input.narration ? "템플릿 나레이션 " + (i + 1) + "번입니다." : "",
       caption: short,
-      prompt: (beat + " about \"" + topic + "\", " + look + ", " + palette + ", " + TEMPLATE_CONSISTENCY).slice(0, 600),
+      prompt: stock ? "" : (beat + " about \"" + topic + "\", " + look + ", " + palette + ", " + TEMPLATE_CONSISTENCY).slice(0, 600),
       transition: i === 0 ? "cut" : "fade",
+      // Without a model, photos are searched only by Latin words in the topic; otherwise the scene gets a drawn card.
+      ...(stock ? { search: latin, emphasis: [], camera: CAMERAS[i % CAMERAS.length], stat: null } : {}),
     };
   });
   return {
     title: ("[템플릿] " + topic).slice(0, 120),
+    ...(stock ? { headline: { top: "[템플릿]", bottom: short } } : {}),
     story: ("템플릿 스토리보드입니다. 모델이 쓴 내용이 아니니 장면 대본·나레이션·프롬프트를 직접 고친 뒤 승인하세요. 주제: " + topic).slice(0, 1200),
     style: { look, palette, consistency: TEMPLATE_CONSISTENCY },
     scenes,
@@ -261,9 +314,9 @@ export function buildVideoProduction(ctx: RunContext): CompiledWorkflow {
   const source: Source = { template: false, provider: ctx.model.provider, model: ctx.model.model };
   const plan = async (s: ProductionS) => {
     if (!input) return {};
-    ctx.emit("supervisor", "thinking", s.rounds ? "검사에서 걸린 부분을 고쳐 스토리보드를 다시 씁니다." : "스토리보드를 쓰고 있습니다.", { detail: input.durationSec + "초 · " + input.aspect + " · " + input.style + " · 장면 " + sceneCount(input.durationSec) + "개" });
+    ctx.emit("supervisor", "thinking", s.rounds ? "검사에서 걸린 부분을 고쳐 스토리보드를 다시 씁니다." : "스토리보드를 쓰고 있습니다.", { detail: input.durationSec + "초 · " + input.aspect + " · " + input.style + " · 장면 " + sceneCount(input.durationSec, input.visual) + "개" + (input.visual === "stock" ? " · 사진 쇼츠" : "") });
     try {
-      return { rounds: s.rounds + 1, raw: await ask(ctx, STORYBOARD_SYSTEM, [{ role: "user", content: storyboardPrompt(input, s.task, s.feedback) }]) };
+      return { rounds: s.rounds + 1, raw: await ask(ctx, input.visual === "stock" ? STOCK_SYSTEM : STORYBOARD_SYSTEM, [{ role: "user", content: storyboardPrompt(input, s.task, s.feedback) }]) };
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const reason = errorText(error);

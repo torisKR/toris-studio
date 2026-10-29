@@ -122,6 +122,7 @@ macro_rules! app_command_registry {
             [crate::production_native] production_open_final,
             [crate::production_native] production_save_video,
             [crate::production_native] production_publication_draft,
+            [crate::production_native] production_find_images,
             [crate::desktop] youtube_lookup_channel,
             [crate::desktop] youtube_channel_videos,
             [crate::desktop] prepare_youtube_embed,

@@ -748,5 +748,19 @@
   "find": "    template: true,\n    provider: \"\",",
   "replace": "    template: false,\n    provider: \"\",",
   "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.stock-emphasis-unchecked",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "const emphasis = (scene.emphasis ?? []).filter(word => caption.includes(word) || scene.narration.includes(word));",
+  "replace": "const emphasis = scene.emphasis ?? [];",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "prod.stock-search-unchecked",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "if (search.length < 2) { problems.push",
+  "replace": "if (search.length < 0) { problems.push",
+  "test": "desktop/agent-runtime/test/production.test.ts"
  }
 ]

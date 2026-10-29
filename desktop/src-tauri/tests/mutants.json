@@ -633,8 +633,8 @@
  {
   "id": "rs.prod-commercial-always",
   "file": "desktop/src-tauri/src/production.rs",
-  "find": "    let video_commercial = engine.blocked.is_none()\n        && engine.weights_license == \"Apache-2.0\"",
-  "replace": "    let video_commercial = true\n        || engine.weights_license == \"Apache-2.0\"",
+  "find": "    let engine_commercial = engine.blocked.is_none()\n        && engine.weights_license == \"Apache-2.0\"",
+  "replace": "    let engine_commercial = true\n        || engine.weights_license == \"Apache-2.0\"",
   "cmd": [
    "cargo",
    "test",
@@ -712,6 +712,108 @@
    "--lib",
    "--",
    "production"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.stock-share-alike-allowed",
+  "file": "desktop/src-tauri/src/stock_media.rs",
+  "find": "    if version.is_empty() || version.chars().next().is_some_and(|c| c.is_ascii_digit()) {",
+  "replace": "    if true {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "stock_media"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.stock-broadcaster-allowed",
+  "file": "desktop/src-tauri/src/stock_media.rs",
+  "find": "    if item[\"mature\"] == true\n        || blocked_source(&[",
+  "replace": "    if item[\"mature\"] == true\n        || false && blocked_source(&[",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "stock_media"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.stock-any-host",
+  "file": "desktop/src-tauri/src/stock_media.rs",
+  "find": "        && IMAGE_HOSTS.contains(&host.as_str()))",
+  "replace": "        && !host.is_empty())",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "stock_media"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.stock-upscaled-thumb",
+  "file": "desktop/src-tauri/src/stock_media.rs",
+  "find": "        info[thumb].as_u64().map_or(original, |t| t.min(original)) as u32",
+  "replace": "        info[thumb].as_u64().unwrap_or(original) as u32",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "stock_media"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-photo-licence-unchecked",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "    let photos_cleared = photos.iter().all(|c| crate::stock_media::cleared(c));",
+  "replace": "    let photos_cleared = true;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.prod-stock-retry-same-photo",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "                    .map(|at| list[(at + 1) % list.len()].clone())",
+  "replace": "                    .map(|at| list[at].clone())",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
   ],
   "timeoutMs": 900000
  }

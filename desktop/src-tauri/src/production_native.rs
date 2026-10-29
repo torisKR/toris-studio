@@ -96,13 +96,43 @@ pub async fn production_create(
     let plan_id = id.clone();
     tauri::async_runtime::spawn(async move {
         let planned = plan(&agent, &settings).await;
+        // Stock jobs fetch photo candidates for every scene before the user reviews the storyboard.
+        let candidates = match (&planned, settings.visual.as_str()) {
+            (Ok(storyboard), "stock") => {
+                let _ = jobs
+                    .update(&plan_id, |job| {
+                        job["stages"]["plan"]["message"] =
+                            json!("장면마다 상업적 이용 가능한 사진을 찾고 있습니다.");
+                        Ok(())
+                    })
+                    .await;
+                Some(scene_candidates(&plan_id, storyboard, &settings.aspect).await)
+            }
+            _ => None,
+        };
         let _ = jobs.update(&plan_id, |job| {
             match planned {
-                Ok(storyboard) => {
+                Ok(mut storyboard) => {
+                    if let Some((found, notes)) = candidates {
+                        // Pre-select the first photo of each scene; the user can change it in review.
+                        for scene in storyboard["scenes"].as_array_mut().into_iter().flatten() {
+                            let id = scene["id"].as_str().unwrap_or("").to_owned();
+                            if let Some(first) = found.get(&id).and_then(|l| l.as_array()).and_then(|l| l.first()) {
+                                scene["imageId"] = first["id"].clone();
+                            }
+                        }
+                        job["candidates"] = Value::Object(found);
+                        for note in notes {
+                            if let Some(list) = job["errors"].as_array_mut() {
+                                list.push(json!({"at": chrono::Utc::now().to_rfc3339(), "stage": "plan", "message": note, "kind": "log"}));
+                            }
+                        }
+                    }
                     job["draft"] = storyboard;
                     job["status"] = json!("awaiting_approval");
                     job["stage"] = json!("storyboard");
                     job["stages"]["plan"]["status"] = json!("done");
+                    job["stages"]["plan"]["message"] = Value::Null;
                     job["stages"]["storyboard"]["status"] = json!("running");
                 }
                 Err(error) => {
@@ -117,12 +147,103 @@ pub async fn production_create(
     Ok(shown)
 }
 
+/// Photo candidates for each scene, searched one scene at a time (Openverse allows 20 searches a
+/// minute without a key). A scene with no result keeps going and gets a drawn graphic.
+async fn scene_candidates(
+    job_id: &str,
+    storyboard: &Value,
+    aspect: &str,
+) -> (serde_json::Map<String, Value>, Vec<String>) {
+    let mut found = serde_json::Map::new();
+    let mut notes = Vec::new();
+    // Each scene's first photo is kept out of later scenes so one photo does not repeat.
+    let mut taken = std::collections::HashSet::new();
+    for scene in storyboard["scenes"].as_array().into_iter().flatten() {
+        let id = scene["id"].as_str().unwrap_or("");
+        let query = scene["search"].as_str().unwrap_or("");
+        if query.is_empty() {
+            continue;
+        }
+        match crate::production::find_candidates(job_id, id, query, aspect, &taken).await {
+            Ok(list) => {
+                if let Some(first) = list.first().and_then(|c| c["url"].as_str()) {
+                    taken.insert(first.to_owned());
+                }
+                found.insert(id.to_owned(), json!(list));
+            }
+            Err(error) => notes.push(format!("{id} 사진 검색: {error}")),
+        }
+    }
+    (found, notes)
+}
+
+/// Searches new photo candidates for one scene during storyboard review.
+#[tauri::command]
+pub async fn production_find_images(
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    let id = job_id(&input)?;
+    let scene = input["sceneId"]
+        .as_str()
+        .ok_or("장면을 지정하세요.")?
+        .to_owned();
+    let query = input["query"]
+        .as_str()
+        .ok_or("검색어를 입력하세요.")?
+        .to_owned();
+    let job = crate::production::read_job(&crate::production::root()?, &id)?;
+    if job["status"] != "awaiting_approval" {
+        return Err("스토리보드를 확인하는 동안에만 사진을 다시 찾을 수 있습니다.".into());
+    }
+    let known = job["draft"]["scenes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|s| s["id"] == scene.as_str());
+    if !known {
+        return Err("장면을 찾을 수 없습니다.".into());
+    }
+    let aspect = job["settings"]["aspect"]
+        .as_str()
+        .unwrap_or("9:16")
+        .to_owned();
+    // Photos picked for the other scenes are skipped so a re-search brings something new.
+    let picked: std::collections::HashSet<String> = job["draft"]["scenes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| s["id"] != scene.as_str())
+        .filter_map(|s| {
+            let list = job["candidates"][s["id"].as_str()?].as_array()?;
+            let chosen = list
+                .iter()
+                .find(|c| c["id"] == s["imageId"])
+                .or(list.first())?;
+            chosen["url"].as_str().map(str::to_owned)
+        })
+        .collect();
+    let list = crate::production::find_candidates(&id, &scene, &query, &aspect, &picked).await?;
+    let job = jobs
+        .update(&id, |job| {
+            if !job["candidates"].is_object() {
+                job["candidates"] = json!({});
+            }
+            job["candidates"][scene.as_str()] = json!(list);
+            Ok(())
+        })
+        .await?;
+    Ok(view(&app, &jobs, &job))
+}
+
 async fn plan(
     agent: &Arc<crate::agent_runtime::AgentRuntime>,
     settings: &crate::production::Settings,
 ) -> Result<Value, String> {
     let run = agent.call("run.start", json!({"project": "", "task": settings.topic, "workflow": "video-production", "host": true,
-        "input": {"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko"}})).await?;
+        "input": {"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko",
+            "visual": settings.visual}})).await?;
     let run_id = run["runId"]
         .as_str()
         .ok_or("기획 작업을 시작하지 못했습니다.")?
@@ -165,11 +286,11 @@ pub async fn production_approve(
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let id = job_id(&input)?;
-    video.ready(
-        &crate::production::read_job(&crate::production::root()?, &id)?["settings"]["engine"]
-            .as_str()
-            .unwrap_or(""),
-    )?;
+    let settings =
+        crate::production::read_job(&crate::production::root()?, &id)?["settings"].clone();
+    if settings["visual"] != "stock" {
+        video.ready(settings["engine"].as_str().unwrap_or(""))?;
+    }
     let job = jobs
         .update(&id, |job| {
             if job["status"] != "awaiting_approval" && job["storyboard"].is_null() {
@@ -230,7 +351,9 @@ pub async fn production_resume(
     if job["status"] == "done" {
         return Err("이미 완료된 영상입니다. 장면을 다시 만들려면 장면 재생성을 누르세요.".into());
     }
-    video.ready(job["settings"]["engine"].as_str().unwrap_or(""))?;
+    if job["settings"]["visual"] != "stock" {
+        video.ready(job["settings"]["engine"].as_str().unwrap_or(""))?;
+    }
     jobs.inner()
         .spawn(id.clone(), video.inner().clone(), tts.inner().clone())?;
     production_get(app, jobs, json!({"jobId": id})).await

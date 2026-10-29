@@ -555,6 +555,54 @@ impl Canvas {
             pixels: vec![0; (width * height * 4) as usize],
         }
     }
+    pub(crate) fn width(&self) -> u32 {
+        self.width
+    }
+    /// Solid rectangle clipped to the canvas.
+    pub(crate) fn fill_rect(&mut self, x: u32, y: u32, w: u32, h: u32, color: [u8; 3], alpha: u32) {
+        for py in y..(y + h).min(self.height) {
+            for px in x..(x + w).min(self.width) {
+                self.blend(px, py, color, alpha);
+            }
+        }
+    }
+    /// Opaque top-to-bottom gradient over the whole canvas.
+    pub(crate) fn vertical_gradient(&mut self, top: [u8; 3], bottom: [u8; 3]) {
+        for y in 0..self.height {
+            let mix = y as f64 / self.height.max(1) as f64;
+            let color: Vec<u8> = (0..3)
+                .map(|i| (top[i] as f64 * (1.0 - mix) + bottom[i] as f64 * mix) as u8)
+                .collect();
+            for x in 0..self.width {
+                let offset = ((y * self.width + x) * 4) as usize;
+                self.pixels[offset..offset + 3].copy_from_slice(&color);
+                self.pixels[offset + 3] = 255;
+            }
+        }
+    }
+    /// One line made of differently coloured runs. `bold` overprints with a 2px offset
+    /// (the bundled CJK font has a single weight).
+    pub(crate) fn text_runs(
+        &mut self,
+        font: &Font,
+        runs: &[(String, [u8; 3])],
+        size: f32,
+        x: f32,
+        y: f32,
+        bold: bool,
+    ) {
+        let offsets: &[f32] = if bold { &[0.0, 1.0, 2.0] } else { &[0.0] };
+        for offset in offsets {
+            let mut pen = x + offset;
+            for (text, color) in runs {
+                self.text(font, &[text.clone()], size, pen, y, *color);
+                pen += text
+                    .chars()
+                    .map(|c| font.metrics(c, size).advance_width)
+                    .sum::<f32>();
+            }
+        }
+    }
     fn blend(&mut self, x: u32, y: u32, color: [u8; 3], alpha: u32) {
         let offset = ((y * self.width + x) * 4) as usize;
         let previous_alpha = self.pixels[offset + 3] as u32;
