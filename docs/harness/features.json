@@ -35,6 +35,23 @@
    ]
   },
   {
+   "id": "factory",
+   "label": "AI 앱·게임 팩토리",
+   "paths": [
+    "desktop/src/factory/**",
+    "desktop/src-tauri/src/factory.rs",
+    "desktop/src-tauri/src/factory_native.rs"
+   ],
+   "verify": [
+    "pnpm agent:test",
+    "node --import tsx --test tests/factory-ui.test.ts tests/workspace-navigation.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib factory::"
+   ],
+   "mutants": [
+    "desktop/agent-runtime/test/mutants.json"
+   ]
+  },
+  {
    "id": "video",
    "label": "영상 제작·모션·렌더",
    "paths": [

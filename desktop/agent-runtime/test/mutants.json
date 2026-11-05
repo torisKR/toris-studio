@@ -762,5 +762,40 @@
   "find": "if (search.length < 2) { problems.push",
   "replace": "if (search.length < 0) { problems.push",
   "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "factory.cost-cap-off",
+  "file": "desktop/agent-runtime/src/factory/policies.ts",
+  "find": "  if (spec.limits.maxApiCostUsd <= API_COST_CAP_USD) return { spec, note: null };",
+  "replace": "  if (true) return { spec, note: null };",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "factory.paid-retry",
+  "file": "desktop/agent-runtime/src/factory/jobs.ts",
+  "find": "    if (job.paid) {\n      next.status = \"waiting_approval\";",
+  "replace": "    if (false) {\n      next.status = \"waiting_approval\";",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "factory.missing-tool-passes",
+  "file": "desktop/agent-runtime/src/factory/adapters.ts",
+  "find": "  return { status: \"blocked\", message: `${TOOL_MISSING}: ${tool}`, hashes: [] };",
+  "replace": "  return { status: \"passed\", message: `${TOOL_MISSING}: ${tool}`, hashes: [] };",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "factory.slug-escape",
+  "file": "desktop/agent-runtime/src/factory/scaffold.ts",
+  "find": "export function createProjectDir(projectsRoot: string, slug: string): string {\n  if (!SLUG.test(slug)) throw new UserError(\"프로젝트 이름을 확인하세요.\");",
+  "replace": "export function createProjectDir(projectsRoot: string, slug: string): string {\n  if (false) throw new UserError(\"프로젝트 이름을 확인하세요.\");",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "factory.permissions-ignored",
+  "file": "desktop/agent-runtime/src/factory/validators.ts",
+  "find": "  return found.filter(name => name.startsWith(\"android.permission.\"));",
+  "replace": "  return found.filter(() => false);",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
  }
 ]

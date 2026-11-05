@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SettingsPanel } from "./SettingsPanel";
@@ -34,6 +35,7 @@ import {
   Search, Send, Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Video as Youtube
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+const FactoryHome = lazy(() => import("./factory/FactoryHome").then(module => ({ default: module.FactoryHome })));
 import type { FormEvent } from "react";
 import { CONTENT_STATUSES, SOCIAL_PLATFORMS } from "./types";
 import type {
@@ -461,7 +463,7 @@ export function App() {
 
   const viewTitle = tabs.find(item => item.id === tab)?.label ?? "SNS 관리";
   const sectionLabel = MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정";
-  const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
+  const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", factory: "한 줄 요청으로 Android 게임·앱 명세를 검사하고 프로젝트를 만든 뒤, 있는 도구만 실행합니다. 서명과 스토어 제출은 승인 전에도 실행하지 않습니다.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
 
   return (
     <div className="social-workspace">
@@ -490,6 +492,7 @@ export function App() {
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} queueRequest={assetQueueRequest} /></div>
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} /></div>
           <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
+          <div hidden={tab !== "factory"}><Suspense fallback={<p role="status">앱·게임 팩토리를 불러오는 중입니다.</p>}><FactoryHome active={tab === "factory"} onOpenAgent={() => setTab("agent")} /></Suspense></div>
           <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenPublications={() => setTab("publications")} /></div>
           <div hidden={tab !== "ops"}><OpsPanel active={tab === "ops"} databaseConnected={dashboard.database.connected} onOpenPlanner={() => setTab("planner")} /></div>
           <div hidden={tab !== "keywords"}><KeywordPanel active={tab === "keywords"} databaseConnected={dashboard.database.connected} onOpenSettings={() => setTab("settings")} onChanged={() => void loadDashboard()} onUseInAi={(material) => useAiMaterial(material)} /></div>

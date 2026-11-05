@@ -153,6 +153,12 @@ macro_rules! app_command_registry {
             [crate::ops_native] ops_save_secret,
             [crate::hub_native] hub_start,
             [crate::hub_native] hub_decide,
+            [crate::factory_native] factory_preview,
+            [crate::factory_native] factory_start,
+            [crate::factory_native] factory_status,
+            [crate::factory_native] factory_decide,
+            [crate::factory_native] factory_cancel,
+            [crate::factory_native] factory_jobs,
         }
     };
 }

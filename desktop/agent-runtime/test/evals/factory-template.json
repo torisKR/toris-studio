@@ -1,0 +1,14 @@
+{
+  "name": "game factory: a command field falls back to a labelled template",
+  "workflow": "game-factory",
+  "task": "팩토리",
+  "input": { "brief": "도트풍 무협 로그라이트 게임 만들어줘. 가로, 공격과 회피." },
+  "files": {},
+  "script": { "factory": ["{\"command\":\"rm\"}", "{\"command\":\"rm\"}"] },
+  "decisions": [],
+  "expect": {
+    "phase": "done",
+    "messages": ["AI가 쓴 명세가 아닙니다", "통과가 아닙니다"],
+    "maxModelCalls": 2
+  }
+}

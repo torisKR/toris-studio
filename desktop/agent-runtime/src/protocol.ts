@@ -45,13 +45,16 @@ export type PendingAction =
   | { kind: "write_file"; id: string; agent: AgentRole; path: string; diff: string; content: string; baseHash: string | null; reason: string }
   | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string }
   /** A draft the host saves to its database when the user approves; the runtime never writes it. */
-  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; payload: Record<string, unknown>; template: boolean; reason: string };
+  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; payload: Record<string, unknown>; template: boolean; reason: string }
+  /** Paid API, device install, or release. The runtime keeps the real argv; this card is not a shell command. */
+  | { kind: "factory_gate"; id: string; agent: AgentRole; gate: "paid_api" | "device" | "release"; title: string; preview: string; reason: string };
 
 /** What the UI sees of an approval: the diff, never the full file body. */
 export type ApprovalView =
   | Omit<Extract<PendingAction, { kind: "write_file" }>, "content" | "baseHash">
   | Extract<PendingAction, { kind: "run_command" }>
-  | Extract<PendingAction, { kind: "save_draft" }>;
+  | Extract<PendingAction, { kind: "save_draft" }>
+  | Extract<PendingAction, { kind: "factory_gate" }>;
 
 export function approvalView(action: PendingAction): ApprovalView {
   if (action.kind !== "write_file") return action;

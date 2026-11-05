@@ -38,7 +38,18 @@ function kindOf(from: AgentRole, to: AgentRole): HandoffKind {
 }
 
 const short = (value: string) => (value.length > 60 ? `${value.slice(0, 59)}…` : value);
-const subjectOf = (action: PendingAction) => (action.kind === "write_file" ? action.path : action.kind === "save_draft" ? action.title : action.command.join(" "));
+function subjectOf(action: PendingAction): string {
+  switch (action.kind) {
+    case "write_file": return action.path;
+    case "save_draft": return action.title;
+    case "run_command": return action.command.join(" ");
+    case "factory_gate": return action.title;
+    default: {
+      const neverAction: never = action;
+      return neverAction;
+    }
+  }
+}
 const approvalSubject = (event: RunEvent) => (event.approval ? subjectOf(event.approval) : "");
 
 /** Paper moves when the stage changes: from everyone in the stage that ended to each agent starting the next. */

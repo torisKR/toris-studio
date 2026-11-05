@@ -5,7 +5,8 @@ export type Phase = "queued" | "thinking" | "reading" | "coding" | "testing" | "
 export type PendingAction =
   | { kind: "write_file"; id: string; agent: AgentRole; path: string; diff: string; reason: string }
   | { kind: "run_command"; id: string; agent: AgentRole; command: string[]; cwd: string; reason: string }
-  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; template: boolean; reason: string };
+  | { kind: "save_draft"; id: string; agent: AgentRole; target: "social_content" | "ops_task"; title: string; preview: string; template: boolean; reason: string }
+  | { kind: "factory_gate"; id: string; agent: AgentRole; gate: "paid_api" | "device" | "release"; title: string; preview: string; reason: string };
 export type RunEvent = { event: "run"; runId: string; seq: number; at: string; agent: AgentRole; phase: Phase; message: string; detail?: string; approval?: PendingAction; resolved?: string; changes?: string[] };
 export type IndexEvent = { event: "index"; project: string; phase: "scanning" | "embedding" | "done" | "failed"; done: number; total: number; message: string };
 /** approvals: every request waiting now. Frontend and Backend work at once, so there can be more than one. */
@@ -16,18 +17,23 @@ export const HUB_WORKFLOWS = [
   { id: "weekly-content", label: "주간 콘텐츠 초안", text: "채널·트렌드·이번 주 일정으로 SNS 초안을 만들고, 승인한 초안만 콘텐츠 플래너에 저장합니다. 모델이 없으면 [템플릿] 초안을 만듭니다." },
   { id: "ops-triage", label: "운영 점검", text: "운영 상태의 실패·이상 항목을 우선순위대로 정리하고, 승인한 항목만 일정·작업에 엽니다." },
 ] as const;
+export const FACTORY_WORKFLOWS = [
+  { id: "game-factory", label: "게임 팩토리" },
+  { id: "app-factory", label: "앱 팩토리" },
+] as const;
 export type HubWorkflow = (typeof HUB_WORKFLOWS)[number]["id"];
 export const isHubRun = (run: Pick<RunSummary, "workflow">) => HUB_WORKFLOWS.some(w => w.id === run.workflow);
-export const runTitle = (run: Pick<RunSummary, "workflow" | "project">) => HUB_WORKFLOWS.find(w => w.id === run.workflow)?.label ?? run.project;
+export const isFactoryRun = (run: Pick<RunSummary, "workflow">) => FACTORY_WORKFLOWS.some(w => w.id === run.workflow);
+export const runTitle = (run: Pick<RunSummary, "workflow" | "project">) => HUB_WORKFLOWS.find(w => w.id === run.workflow)?.label ?? FACTORY_WORKFLOWS.find(w => w.id === run.workflow)?.label ?? run.project;
 
 export function startHub(workflow: HubWorkflow, task: string, call: BridgeInvoke = nativeInvoke): Promise<RunSummary> {
   return call("hub_start", { workflow, task }) as Promise<RunSummary>;
 }
 /** Hub approvals go to the host, which saves the approved draft before the run continues. */
 export function decide(run: Pick<RunSummary, "runId" | "workflow">, actionId: string, decision: "approve" | "reject", feedback: string, call: BridgeInvoke = nativeInvoke): Promise<RunSummary> {
-  return isHubRun(run)
-    ? call("hub_decide", { runId: run.runId, actionId, decision, feedback }) as Promise<RunSummary>
-    : agentCall<RunSummary>("run.resume", { runId: run.runId, actionId, decision, feedback }, call);
+  if (isHubRun(run)) return call("hub_decide", { runId: run.runId, actionId, decision, feedback }) as Promise<RunSummary>;
+  if (isFactoryRun(run)) return call("factory_decide", { runId: run.runId, actionId, decision, feedback }) as Promise<RunSummary>;
+  return agentCall<RunSummary>("run.resume", { runId: run.runId, actionId, decision, feedback }, call);
 }
 export type ProjectInfo = { name: string; path: string; stacks: string[]; scripts: Record<string, string>; git: boolean };
 export type IndexStatus = { indexed: boolean; chunks: number; stale: boolean; embedder: string; chroma: boolean };
