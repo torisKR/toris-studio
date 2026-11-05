@@ -105,7 +105,7 @@ export class RunManager {
       },
     };
     const ctx: RunContext = {
-      model: traced, projectRoot: root, info, input, searchPath: settings.searchPath, secrets, signal: controller.signal,
+      model: traced, projectRoot: root, projectsRoot: settings.projectsRoot, info, input, searchPath: settings.searchPath, secrets, signal: controller.signal,
       emit: (agent, phase, message, extra = {}) => this.emit(run, agent, phase, message, extra),
       approve: (action, message) => this.wait(run, action, message),
       search: async query => {

@@ -6,6 +6,7 @@ import { RunManager } from "./graph/runs.js";
 import { checkProvider, createModel, isProvider, listModels, providerStatus } from "./llm/index.js";
 import { defaultSearchPath } from "./llm/cli.js";
 import { generateImage } from "./llm/image.js";
+import { listFactoryJobs, previewFactory } from "./factory/pipeline.js";
 import { listProjects } from "./projects.js";
 import type { ModelChoice, OutboundEvent, Request, Response, RuntimeSettings } from "./protocol.js";
 import { ChromaClient } from "./rag/chroma.js";
@@ -94,6 +95,11 @@ export class Runtime {
       case "index.cancel": this.indexing.get(text(p.project, "프로젝트", 200))?.abort(); return { ok: true };
       case "search": return { hits: await new ProjectIndex(this.settings).search(text(p.project, "프로젝트", 200), text(p.query, "검색어", 2000), Number(p.k) || 8) };
       case "workflow.list": return { workflows: this.runs.workflows.list() };
+      case "factory.preview": {
+        const kind = p.kind === "app" ? "app" : "game";
+        return previewFactory(params, kind);
+      }
+      case "factory.jobs": return { jobs: listFactoryJobs(this.settings.projectsRoot) };
       case "run.start": {
         const workflow = text(p.workflow, "워크플로", 60, { optional: true }) || "coding";
         if (!this.hostOnly(workflow, p)) throw new UserError("이 워크플로는 Studio 화면에서만 시작할 수 있습니다.");

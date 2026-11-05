@@ -1,0 +1,16 @@
+.factory-layout { display: grid; gap: 16px; }
+.factory-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr); gap: 16px; align-items: start; }
+.factory-card { display: grid; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--line, #ddd); border-radius: 16px; background: var(--panel, #fff); }
+.factory-card p, .factory-list li { overflow-wrap: anywhere; }
+.factory-card h2 { margin: 0; font-size: 1.05rem; }
+.factory-card label { display: grid; gap: 6px; font-size: 0.92rem; }
+.factory-card textarea, .factory-card select { width: 100%; }
+.factory-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.factory-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.factory-list li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--line, #ddd) 35%, transparent); }
+.factory-list small { color: var(--muted, #666); }
+.factory-status { font-weight: 650; }
+.factory-status.passed { color: #0b7a45; }
+.factory-status.failed { color: #a12622; }
+.factory-status.blocked, .factory-status.not_run, .factory-status.incomplete { color: #8a5a00; }
+@media (max-width: 900px) { .factory-grid { grid-template-columns: 1fr; } }

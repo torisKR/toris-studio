@@ -41,6 +41,9 @@ pub mod shared_binary;
 pub mod workspace_export;
 #[cfg(feature = "desktop")]
 static PUBLICATION_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+pub mod factory;
+#[cfg(feature = "desktop")]
+mod factory_native;
 pub mod hub;
 #[cfg(feature = "desktop")]
 mod hub_native;

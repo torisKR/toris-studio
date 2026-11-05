@@ -25,7 +25,7 @@ pub const CHROMA_URL: &str = "http://127.0.0.1:18765";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Methods the UI may call. Anything else (e.g. `configure`) is host-only.
-pub const UI_METHODS: [&str; 17] = [
+pub const UI_METHODS: [&str; 19] = [
     "status",
     "models.list",
     "models.check",
@@ -41,6 +41,8 @@ pub const UI_METHODS: [&str; 17] = [
     "run.get",
     "run.trace",
     "workflow.list",
+    "factory.preview",
+    "factory.jobs",
     "complete",
     "image",
 ];

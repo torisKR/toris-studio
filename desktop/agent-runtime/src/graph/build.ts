@@ -30,6 +30,8 @@ export type EmitExtra = { detail?: string; approval?: PendingAction; changes?: s
 export interface RunContext {
   model: ChatModel;
   projectRoot: string;
+  /** Projects root owned by the host settings, including workflows that create a project. */
+  projectsRoot: string;
   info: ProjectInfo;
   /** Data the host passed with run.start (workflows without a project read only this). */
   input: Record<string, unknown>;

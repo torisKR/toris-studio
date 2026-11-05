@@ -8,24 +8,52 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString("ko-KR", { hour: 
 
 export type Decide = (action: PendingAction, decision: "approve" | "reject", feedback: string) => void;
 
+function approvalTitle(action: PendingAction): string {
+  switch (action.kind) {
+    case "write_file": return "파일 변경 승인";
+    case "save_draft": return action.target === "ops_task" ? "작업 열기 승인" : "초안 저장 승인";
+    case "run_command": return "명령 실행 승인";
+    case "factory_gate": return action.gate === "release" ? "릴리스 승인" : action.gate === "paid_api" ? "유료 API 승인" : "기기 설치 승인";
+    default: {
+      const neverAction: never = action;
+      return neverAction;
+    }
+  }
+}
+
+function approvalHint(action: PendingAction): string {
+  switch (action.kind) {
+    case "save_draft": return "승인 전에는 저장하지 않습니다. 초안은 초안 상태로만 저장되고 자동으로 게시하지 않습니다.";
+    case "factory_gate": return "승인해도 스토어에 제출하거나 서명하지 않습니다.";
+    case "write_file":
+    case "run_command": return "승인 전에는 파일을 쓰거나 명령을 실행하지 않습니다. 승인 뒤 파일이 바뀌어 있으면 적용하지 않습니다.";
+    default: {
+      const neverAction: never = action;
+      return neverAction;
+    }
+  }
+}
+
 function Approval({ action, busy, onDecide }: { action: PendingAction; busy: boolean; onDecide: Decide }) {
   const [feedback, setFeedback] = useState("");
   const who = AGENTS.find(a => a.id === action.agent)?.name;
   return <section className="agent-approval" aria-label={`승인 요청 · ${who}`} data-agent={action.agent}>
-    <header><CircleAlert size={18} /><strong>{action.kind === "write_file" ? "파일 변경 승인" : action.kind === "save_draft" ? (action.target === "ops_task" ? "작업 열기 승인" : "초안 저장 승인") : "명령 실행 승인"}</strong><small>{who} 요청</small>{action.kind === "save_draft" && action.template && <span className="agent-template">템플릿 · AI 아님</span>}</header>
+    <header><CircleAlert size={18} /><strong>{approvalTitle(action)}</strong><small>{who} 요청</small>{action.kind === "save_draft" && action.template && <span className="agent-template">템플릿 · AI 아님</span>}</header>
     {action.reason && <p className="agent-reason">{action.reason}</p>}
     {action.kind === "write_file"
       ? <><p className="agent-path"><FileCode2 size={14} />{action.path}</p>
         <pre className="agent-diff" aria-label="변경 내용 diff">{diffLines(action.diff).map((line, i) => <span key={i} className={`diff-line diff-${line.kind}`}>{line.text || " "}</span>)}</pre></>
       : action.kind === "save_draft"
         ? <><p className="agent-path"><FileCode2 size={14} />{action.title}</p><pre className="agent-draft" aria-label="저장할 내용">{action.preview}</pre></>
-        : <pre className="agent-command" aria-label="실행할 명령"><Terminal size={14} /> {action.cwd}$ {action.command.join(" ")}</pre>}
+        : action.kind === "factory_gate"
+          ? <pre className="agent-draft" aria-label="승인 내용">{action.preview}</pre>
+          : <pre className="agent-command" aria-label="실행할 명령"><Terminal size={14} /> {action.cwd}$ {action.command.join(" ")}</pre>}
     <textarea rows={2} maxLength={2000} placeholder="거절하거나 수정 방향을 줄 때 의견 (선택)" value={feedback} onChange={e => setFeedback(e.target.value)} aria-label="승인 의견" />
     <div className="agent-actions">
-      <button className="social-button primary" disabled={busy} onClick={() => onDecide(action, "approve", feedback)}><Check size={15} />{action.kind === "save_draft" ? "승인하고 저장" : "승인하고 실행"}</button>
+      <button className="social-button primary" disabled={busy} onClick={() => onDecide(action, "approve", feedback)}><Check size={15} />{action.kind === "save_draft" ? "승인하고 저장" : action.kind === "factory_gate" ? "승인" : "승인하고 실행"}</button>
       <button className="social-button" disabled={busy} onClick={() => onDecide(action, "reject", feedback)}><X size={15} />거절</button>
     </div>
-    <p className="agent-hint">{action.kind === "save_draft" ? "승인 전에는 저장하지 않습니다. 초안은 초안 상태로만 저장되고 자동으로 게시하지 않습니다." : "승인 전에는 파일을 쓰거나 명령을 실행하지 않습니다. 승인 뒤 파일이 바뀌어 있으면 적용하지 않습니다."}</p>
+    <p className="agent-hint">{approvalHint(action)}</p>
   </section>;
 }
 

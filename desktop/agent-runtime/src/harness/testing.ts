@@ -15,6 +15,7 @@ export const CODING_ROLES: RoleMatcher = [
   ["qaReview", "QA/Reviewer"],
   ["content", "주간 콘텐츠 기획자"],
   ["triage", "운영 점검 담당자"],
+  ["factory", "게임·앱 팩토리 디렉터"],
 ];
 
 /** Replays outputs per role, because parallel lanes call the model in no fixed order. */
