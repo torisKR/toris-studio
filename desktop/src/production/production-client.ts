@@ -29,7 +29,11 @@ export type ProductionInput = {
   subtitleStyle: SubtitleStyle; bgm: BgmKind; quality: ProductionQuality; engine: string; visual: VisualSource; layout: FrameLayout;
   /** Narration speaker (lib/video/voice-options VOICE_SPEAKERS key). Sent only when narration is on. */
   speaker?: string;
+  /** Present only when the user wrote an opinion. applyOpinion false keeps it out of the planner. */
+  opinion?: string;
+  applyOpinion?: boolean;
 };
+export type ProductionOpinion = { text: string; apply: boolean; at: string };
 export type StageState = { id: StageId; status: StageStatus; done: number; total: number; message?: string; error?: string };
 export type StoryboardScene = {
   id: string; order: number; durationSec: number; script: string; narration: string; caption: string;
@@ -56,7 +60,7 @@ export type ProductionJob = {
   id: string; createdAt: string; updatedAt: string; status: JobStatus; settings: ProductionInput;
   stages: StageState[]; storyboard: Storyboard | null; scenes: ProductionScene[];
   generation?: Size & { frames?: number; steps?: number }; output?: Size;
-  final: FinalVideo | null; qa: QaCheck[]; provenance: Provenance | null;
+  final: FinalVideo | null; qa: QaCheck[]; provenance: Provenance | null; opinions: ProductionOpinion[];
   /** Photo candidates per scene id (stock jobs). */
   candidates: Record<string, ImageCandidate[]>;
   error: { stage?: StageId; message: string } | null;
@@ -180,7 +184,8 @@ export function normalizeJob(value: unknown): ProductionJob {
       topic: str(s.topic) || str(r.topic), durationSec: num(s.durationSec, 30), aspect: (["9:16", "16:9", "1:1"].includes(s.aspect as string) ? s.aspect : "9:16") as ProductionAspect,
       style: (str(s.style) || "cinematic") as ProductionStyle, narration: s.narration !== false, subtitleStyle: (str(s.subtitleStyle) || "shorts-bold") as SubtitleStyle,
       bgm: (str(s.bgm) || "none") as BgmKind, quality: (str(s.quality) || "preview") as ProductionQuality, engine: str(s.engine), speaker: opt(s.speaker),
-      visual: s.visual === "stock" ? "stock" : "ai", layout: s.layout === "card" ? "card" : "full"
+      visual: s.visual === "stock" ? "stock" : "ai", layout: s.layout === "card" ? "card" : "full",
+      ...(opt(s.opinion) ? { opinion: str(s.opinion), applyOpinion: s.applyOpinion === true } : {})
     },
     candidates: Object.fromEntries(Object.entries(rec(r.candidates)).map(([scene, items]) => [scene, list(items).map(candidate).filter((c): c is ImageCandidate => !!c)])),
     stages, storyboard: normalizeStoryboard(r.storyboard),
@@ -195,6 +200,7 @@ export function normalizeJob(value: unknown): ProductionJob {
       planner: opt(provenanceRaw.planner) ?? opt(rec(provenanceRaw.ai).model), notes: list(provenanceRaw.notes).filter((n): n is string => typeof n === "string"),
       credits: list(provenanceRaw.credits).filter((n): n is string => typeof n === "string")
     } : null,
+    opinions: list(r.opinions).flatMap(raw => { const item = rec(raw); const text = str(item.text); return text ? [{ text, apply: item.apply === true, at: str(item.at) }] : []; }),
     error: error ? { message: error, stage: (opt(rec(errorRaw).stage) as StageId | undefined) } : null,
     editProject: r.editProject && typeof r.editProject === "object" && !Array.isArray(r.editProject) ? r.editProject as Record<string, unknown> : null
   };
@@ -277,7 +283,8 @@ export const productionApi = {
   },
   saveVideo: (jobId: string) => invoke<{ saved: string | null }>("production_save_video", { input: { jobId } }),
   publicationDraft: (jobId: string) => invoke<unknown>("production_publication_draft", { input: { jobId } }),
-  findImages: async (jobId: string, sceneId: string, query: string) => normalizeJob(await invoke("production_find_images", { input: { jobId, sceneId, query } }))
+  findImages: async (jobId: string, sceneId: string, query: string) => normalizeJob(await invoke("production_find_images", { input: { jobId, sceneId, query } })),
+  feedback: async (jobId: string, opinion: string, apply: boolean) => maybeJob(await invoke("production_feedback", { input: { jobId, opinion, apply } }))
 };
 
 /** Local media URL for a job-owned file, using the same asset protocol as other panels. */

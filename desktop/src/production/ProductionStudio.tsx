@@ -117,6 +117,13 @@ function Composer({ state, setState, engines, engineError, busy, onCreate, onIns
             {state.narration && engines.ttsInstalled === false && <p className="production-muted">로컬 음성 엔진이 설치되지 않았습니다. 나레이션 단계에서 설치가 필요합니다.{onOpenSettings && <button type="button" className="production-link" onClick={onOpenSettings}>설정에서 설치</button>}</p>}
           </>}
       </fieldset>}
+      <fieldset className="production-opinion">
+        <legend>만드는 과정에 대한 의견</legend>
+        <textarea rows={3} maxLength={500} value={state.opinion} aria-label="영상 제작 의견" placeholder="예: 자막은 짧게, 장면은 실내 위주로" onChange={event => patch({ opinion: event.target.value })} />
+        <label><input type="radio" name="production-create-opinion" checked={!state.applyOpinion} onChange={() => patch({ applyOpinion: false })} />기록만 하기</label>
+        <label><input type="radio" name="production-create-opinion" checked={state.applyOpinion} onChange={() => patch({ applyOpinion: true })} />기획에 반영</label>
+        <p className="production-muted">{state.applyOpinion ? "스토리보드를 쓸 때 이 의견이 들어갑니다. 모델이 없으면 템플릿 스토리보드는 바꾸지 않습니다." : "의견은 작업 기록에만 남고, 기획 프롬프트에는 들어가지 않습니다."}</p>
+      </fieldset>
     </div>
     {state.visual === "stock" && state.narration && engines?.ttsInstalled === false && <p className="production-muted">로컬 음성 엔진이 설치되지 않았습니다. 나레이션 단계에서 설치가 필요합니다.{onOpenSettings && <button type="button" className="production-link" onClick={onOpenSettings}>설정에서 설치</button>}</p>}
     {state.visual === "ai" && engine && usableEngine(engine) && !engine.installed && <EngineCard engine={engine} busy={busy === "install"} onInstall={() => onInstall(engine.id)} />}
@@ -127,6 +134,21 @@ function Composer({ state, setState, engines, engineError, busy, onCreate, onIns
       <p id="production-create-reason" className={problem ? "production-muted" : "production-ready"}>{problem ?? (state.visual === "stock" ? "스토리보드와 장면별 사진 후보를 먼저 보여 드립니다. 확인한 뒤 영상을 만듭니다." : "스토리보드를 먼저 만들고, 확인한 뒤 장면 생성을 시작합니다.")}</p>
     </div>
   </form>;
+}
+
+function OpinionPanel({ job, busy, onSend }: { job: ProductionJob; busy: boolean; onSend: (opinion: string, apply: boolean) => void }) {
+  const [text, setText] = useState("");
+  const [apply, setApply] = useState(false);
+  const canApply = job.status === "awaiting_approval";
+  return <section className="production-opinion" aria-label="만드는 과정에 대한 의견">
+    <h3>만드는 과정에 대한 의견</h3>
+    {job.opinions.length > 0 && <ul>{job.opinions.map((item, index) => <li key={item.at + ":" + index}>{item.apply ? "기획에 반영" : "기록만"} · {item.text}</li>)}</ul>}
+    <textarea rows={3} maxLength={500} value={text} aria-label="영상 제작 의견" placeholder="예: 첫 장면은 더 천천히" onChange={event => setText(event.target.value)} />
+    <label><input type="radio" name="production-job-opinion" checked={!apply} onChange={() => setApply(false)} />기록만 하기</label>
+    <label><input type="radio" name="production-job-opinion" checked={apply && canApply} disabled={!canApply} onChange={() => setApply(true)} />기획에 반영</label>
+    {!canApply && <p className="production-muted">스토리보드를 확인하는 동안에만 기획에 반영할 수 있습니다. 그 외에는 기록만 남습니다.</p>}
+    <button type="button" className="social-button compact" disabled={busy || !text.trim()} onClick={() => { onSend(text.trim(), apply && canApply); setText(""); setApply(false); }}>의견 보내기</button>
+  </section>;
 }
 
 function Stepper({ job, busy, onRetry }: { job: ProductionJob; busy: boolean; onRetry: (stage: StageId) => void }) {
@@ -454,6 +476,7 @@ export function ProductionStudio({ active, onOpenSettings, onEditInEditor }: Pro
         {!job && <Composer state={composer} setState={setComposer} engines={engines} engineError={engineError} busy={busy} onCreate={create} onInstall={install} onRetryEngines={() => void refreshEngines()} onOpenSettings={onOpenSettings} />}
         {job && <>
           <Stepper job={job} busy={!!busy} onRetry={stage => retry(stage)} />
+          <OpinionPanel job={job} busy={!!busy} onSend={(opinion, applyOpinion) => void run("opinion", () => apply(job.id, productionApi.feedback(job.id, opinion, applyOpinion)))} />
           {job.status === "cancelled" && <p className="production-notice info" role="status">이 작업은 취소되었습니다. 새 영상으로 다시 시작할 수 있습니다.</p>}
           {job.status === "paused" && <p className="production-notice info" role="status">일시정지했습니다. 계속을 누르면 멈춘 단계부터 이어서 진행합니다.</p>}
           {job.status === "planning" && <p className="production-muted production-planning" role="status"><LoaderCircle size={15} className="social-spin" />주제를 바탕으로 기획과 스토리보드를 만들고 있습니다.</p>}

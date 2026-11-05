@@ -91,9 +91,23 @@ pub async fn production_create(
     let root = crate::production::root()?;
     crate::production::write_json(&root.join(&id).join("job.json"), &job)?;
     let shown = view(&app, &jobs, &job);
-    let jobs = jobs.inner().clone();
-    let agent = agent.inner().clone();
-    let plan_id = id.clone();
+    schedule_plan(
+        jobs.inner().clone(),
+        agent.inner().clone(),
+        settings,
+        id,
+        false,
+    );
+    Ok(shown)
+}
+
+fn schedule_plan(
+    jobs: Arc<crate::production::Productions>,
+    agent: Arc<crate::agent_runtime::AgentRuntime>,
+    settings: crate::production::Settings,
+    plan_id: String,
+    keep_draft_on_error: bool,
+) {
     tauri::async_runtime::spawn(async move {
         let planned = plan(&agent, &settings).await;
         // Stock jobs fetch photo candidates for every scene before the user reviews the storyboard.
@@ -136,15 +150,24 @@ pub async fn production_create(
                     job["stages"]["storyboard"]["status"] = json!("running");
                 }
                 Err(error) => {
-                    job["status"] = json!("failed");
-                    job["stages"]["plan"]["status"] = json!("failed");
-                    job["errors"] = json!([{"at": chrono::Utc::now().to_rfc3339(), "stage": "plan", "message": error, "kind": "error"}]);
+                    if keep_draft_on_error && !job["draft"].is_null() {
+                        job["status"] = json!("awaiting_approval");
+                        job["stage"] = json!("storyboard");
+                        job["stages"]["plan"]["status"] = json!("done");
+                        job["stages"]["plan"]["message"] = Value::Null;
+                        if let Some(list) = job["errors"].as_array_mut() {
+                            list.push(json!({"at": chrono::Utc::now().to_rfc3339(), "stage": "plan", "message": error, "kind": "error"}));
+                        }
+                    } else {
+                        job["status"] = json!("failed");
+                        job["stages"]["plan"]["status"] = json!("failed");
+                        job["errors"] = json!([{"at": chrono::Utc::now().to_rfc3339(), "stage": "plan", "message": error, "kind": "error"}]);
+                    }
                 }
             }
             Ok(())
         }).await;
     });
-    Ok(shown)
 }
 
 /// Photo candidates for each scene, searched one scene at a time (Openverse allows 20 searches a
@@ -237,13 +260,71 @@ pub async fn production_find_images(
     Ok(view(&app, &jobs, &job))
 }
 
+/// Records a note during production. Applying it replans the storyboard only while the user is still reviewing it.
+#[tauri::command]
+pub async fn production_feedback(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    jobs: Jobs<'_>,
+    agent: Agent<'_>,
+    input: Value,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let id = job_id(&input)?;
+    let text = crate::production::accept_opinion(input["opinion"].as_str().unwrap_or(""))?;
+    let apply = input["apply"].as_bool() == Some(true);
+    let current = crate::production::read_job(&crate::production::root()?, &id)?;
+    let status = current["status"].as_str().unwrap_or("");
+    if current["stages"]["plan"]["status"] == "running" {
+        return Err("기획이 진행 중입니다. 끝난 뒤에 의견을 보내세요.".into());
+    }
+    if apply && status != "awaiting_approval" {
+        return Err("스토리보드를 확인하는 동안에만 의견을 기획에 반영할 수 있습니다. 그 외에는 기록만 남길 수 있습니다.".into());
+    }
+    let settings = if apply {
+        let mut value = current["settings"].clone();
+        value["opinion"] = json!(text.as_str());
+        value["applyOpinion"] = json!(true);
+        Some(crate::production::parse_settings(&value)?)
+    } else {
+        None
+    };
+    let job = jobs
+        .update(&id, |job| {
+            crate::production::record_opinion(job, &text, apply);
+            if apply {
+                job["settings"]["opinion"] = json!(text.as_str());
+                job["settings"]["applyOpinion"] = json!(true);
+                job["status"] = json!("planning");
+                job["stage"] = json!("plan");
+                job["stages"]["plan"]["status"] = json!("running");
+                job["stages"]["plan"]["message"] = json!("의견을 반영해 스토리보드를 다시 씁니다.");
+            }
+            Ok(())
+        })
+        .await?;
+    if let Some(settings) = settings {
+        schedule_plan(
+            jobs.inner().clone(),
+            agent.inner().clone(),
+            settings,
+            id,
+            true,
+        );
+    }
+    Ok(view(&app, &jobs, &job))
+}
+
 async fn plan(
     agent: &Arc<crate::agent_runtime::AgentRuntime>,
     settings: &crate::production::Settings,
 ) -> Result<Value, String> {
-    let run = agent.call("run.start", json!({"project": "", "task": settings.topic, "workflow": "video-production", "host": true,
-        "input": {"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko",
-            "visual": settings.visual}})).await?;
+    let run = agent
+        .call(
+            "run.start",
+            json!({"project": "", "task": settings.topic, "workflow": "video-production", "host": true, "input": crate::production::plan_input(settings)}),
+        )
+        .await?;
     let run_id = run["runId"]
         .as_str()
         .ok_or("기획 작업을 시작하지 못했습니다.")?

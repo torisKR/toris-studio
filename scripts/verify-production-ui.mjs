@@ -87,6 +87,12 @@ function production(command, args) {
     case 'production_engine_status': return engineStatus();
     case 'production_engine_install': assert.equal(args.engine, 'wan2.1-t2v-1.3b'); installPolls = 0; return null;
     case 'production_create': { if (args.visual === 'ai') assert.ok(engineInstalled, 'AI create only after the engine is installed'); const created = newJob(args); jobs.set(created.id, created); return clone(created); }
+    case 'production_feedback': {
+      if (!Array.isArray(job.opinions)) job.opinions = [];
+      if (args.apply === true && job.status !== 'awaiting_approval') throw new Error('스토리보드를 확인하는 동안에만 의견을 기획에 반영할 수 있습니다. 그 외에는 기록만 남길 수 있습니다.');
+      job.opinions.push({ text: args.opinion, apply: args.apply === true, at: new Date().toISOString() });
+      return touched(job);
+    }
     case 'production_list': return [...jobs.values()].reverse().map(j => ({ id: j.id, title: j.storyboard?.title ?? j.settings.topic, topic: j.settings.topic, status: j.status, updatedAt: j.updatedAt, durationSec: j.settings.durationSec, aspect: j.settings.aspect }));
     case 'production_get': tick(job); return touched(job);
     case 'production_approve': {
@@ -244,6 +250,27 @@ try {
   const review = page.getByRole('region', { name: '스토리보드 확인' });
   await review.waitFor({ timeout: 10000 });
   await review.getByText('템플릿 초안 · AI 미사용', { exact: true }).waitFor();
+  const opinion = page.getByRole('region', { name: '만드는 과정에 대한 의견' });
+  await opinion.getByRole('textbox', { name: '영상 제작 의견', exact: true }).fill('자막은 더 짧게');
+  await opinion.getByText('기록만 하기', { exact: true }).click();
+  await opinion.getByRole('button', { name: '의견 보내기', exact: true }).click();
+  await opinion.getByText('기록만 · 자막은 더 짧게', { exact: true }).waitFor();
+  assert.deepEqual(last('production_feedback').args, { jobId: 'job-1', opinion: '자막은 더 짧게', apply: false });
+  await opinion.getByRole('textbox', { name: '영상 제작 의견', exact: true }).fill('첫 장면은 더 천천히');
+  await opinion.getByText('기획에 반영', { exact: true }).click();
+  await opinion.getByRole('button', { name: '의견 보내기', exact: true }).click();
+  await opinion.getByText('기획에 반영 · 첫 장면은 더 천천히', { exact: true }).waitFor();
+  assert.deepEqual(last('production_feedback').args, { jobId: 'job-1', opinion: '첫 장면은 더 천천히', apply: true });
+  const radio = await opinion.getByRole('radio', { name: '기록만 하기' }).evaluate(node => {
+    const text = [...node.parentElement.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const textBox = range.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    return { width: box.width, height: box.height, gap: textBox.x - box.right };
+  });
+  assert.ok(radio.width <= 20 && radio.height <= 20 && radio.gap >= 0 && radio.gap < 24, 'the record-only choice sits beside its radio');
+  report.checks.push('during storyboard review the user can record an opinion or ask to apply it');
   const stepper = page.getByRole('region', { name: '제작 단계' });
   assert.match(await stepper.locator('li[aria-current=step]').innerText(), /스토리보드 확인[\s\S]*확인 대기/);
   await review.getByLabel('영상 제목', { exact: true }).fill('수정한 미래 서울');

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RunManager } from "../src/graph/runs.js";
-import { checkStoryboard, fitNarration, productionInput, sceneCount, templateStoryboard, unsafeText, type ProductionInput, type ProductionResult } from "../src/harness/production.js";
+import { checkStoryboard, fitNarration, productionInput, sceneCount, storyboardPrompt, templateStoryboard, unsafeText, type ProductionInput, type ProductionResult } from "../src/harness/production.js";
 import { defaultWorkflows } from "../src/harness/registry.js";
 import { RoleModel } from "../src/harness/testing.js";
 import { parseSettings } from "../src/runtime.js";
@@ -48,6 +48,13 @@ test("host input is validated and extra keys are dropped", () => {
   }
   assert.deepEqual([10, 11, 15, 30, 60, 120].map(d => sceneCount(d)), [2, 3, 3, 6, 12, 12]);
   assert.deepEqual([10, 15, 30, 60].map(d => sceneCount(d, "stock")), [3, 5, 9, 12], "stock cuts follow production.rs scene_count");
+  const recorded = productionInput({ ...input, opinion: "자막을 더 짧게", applyOpinion: false });
+  assert.equal(recorded.input?.applyOpinion, false);
+  assert.equal(storyboardPrompt(recorded.input!, "", "").includes("자막을 더 짧게"), false);
+  const applied = productionInput({ ...input, opinion: "자막을 더 짧게", applyOpinion: true });
+  assert.equal(applied.input?.applyOpinion, true);
+  assert.ok(storyboardPrompt(applied.input!, "", "").includes("사용자 의견 (기획에 반영): 자막을 더 짧게"));
+  assert.equal(productionInput({ ...input, opinion: "하지 마 $(rm)" }).input, null);
 });
 
 test("a valid storyboard is accepted and the shared style phrase reaches every prompt", () => {

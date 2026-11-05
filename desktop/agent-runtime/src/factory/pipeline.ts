@@ -8,7 +8,7 @@ import { fingerprint, fingerprintMatches } from "./artifacts.js";
 import { missingTool, TOOL_MISSING, toolFor, toolInvocation, VFX_IDS, type TaskOutcome, type ToolId, type ToolResult, type ToolRunner, type VfxId } from "./adapters.js";
 import { factoryStoreDir, JobStore, newJob, reconcileJobs, type FactoryJob } from "./jobs.js";
 import { blockedReason, declaredDeps, nextBatch, planTasks, type TaskId } from "./planner.js";
-import { FACTORY_SYSTEM, factoryPrompt } from "./prompts.js";
+import { FACTORY_SYSTEM, factoryPrompt, opinionChoice, opinionNote } from "./prompts.js";
 import { BLENDER_EXPORT_PY, createProjectDir, existingProjectDir, writeTemplate } from "./scaffold.js";
 import { acceptModelSpec, factoryInput, templateSpec, type FactoryKind, type FactorySpec } from "./spec.js";
 import { pngAlphaProblem, readProjectText, scriptUnsafe, unexpectedPermissions, verdictOf, type FactoryGate } from "./validators.js";
@@ -55,8 +55,8 @@ function report(partial: Partial<FactoryReport> & Pick<FactoryReport, "problems"
   };
 }
 
-async function draftSpec(model: ChatModel, brief: string, kind: FactoryKind, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const prompt = factoryPrompt(brief, kind);
+async function draftSpec(model: ChatModel, brief: string, kind: FactoryKind, signal: AbortSignal, opinion: string): Promise<Record<string, unknown>> {
+  const prompt = factoryPrompt(brief, kind, opinion);
   let last = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     last = await model.complete({
@@ -101,16 +101,19 @@ export async function produceFactory(options: ProduceOptions): Promise<FactoryRe
     } catch (error) { return report({ problems: [errorText(error)], notes }); }
     return runProject(options, spec, projectDir, template, provider, modelName, problems, notes, true);
   }
+  const choice = opinionChoice(parsed.input.opinion, parsed.input.applyOpinion);
+  let reflected = false;
   if (options.model && brief) {
     for (let round = 0; round < 2 && !spec; round++) {
       try {
-        const raw = await draftSpec(options.model, brief, options.kind, options.signal);
+        const raw = await draftSpec(options.model, brief, options.kind, options.signal, choice.steer);
         const accepted = acceptModelSpec(raw, options.kind);
         if (accepted.spec) {
           spec = accepted.spec;
           template = false;
           provider = options.model.provider;
           modelName = options.model.model;
+          reflected = true;
           notes.push(...accepted.notes);
         } else problems.push(...accepted.problems.map(problem => `${round + 1}차: ${problem}`));
       } catch (error) {
@@ -127,6 +130,8 @@ export async function produceFactory(options: ProduceOptions): Promise<FactoryRe
     template = true;
     notes.push(...made.notes);
   }
+  const opinion = opinionNote(choice, reflected ? "reflected" : "unapplied");
+  if (opinion) notes.push(opinion);
   let projectDir: string;
   try { projectDir = createProjectDir(options.projectsRoot, spec.slug); }
   catch (error) { return report({ spec, template, provider, model: modelName, problems: [...problems, errorText(error)], notes }); }
@@ -224,7 +229,9 @@ export function previewFactory(raw: unknown, kind: FactoryKind): FactoryReport {
   if (!parsed.input?.brief) return report({ problems: parsed.problems.length ? parsed.problems : ["요청을 입력하세요."], notes: parsed.notes });
   const made = templateSpec(parsed.input.brief, { kind, view: parsed.input.view, orientation: parsed.input.orientation }, kind);
   const jobs = planTasks(made.spec).map(task => ({ taskId: task.id, status: "queued" as const, message: task.deps.join(", "), approval: task.id === "release-review" || task.id === "adb-smoke-test" ? "explicit" as const : "automatic" as const, deps: [...task.deps] }));
-  return report({ template: true, spec: made.spec, project: made.spec.slug, jobs, problems: [], notes: [...parsed.notes, ...made.notes, "미리보기는 규칙으로 만든 명세입니다."] });
+  const choice = opinionChoice(parsed.input.opinion, parsed.input.applyOpinion);
+  const opinion = opinionNote(choice, "preview");
+  return report({ template: true, spec: made.spec, project: made.spec.slug, jobs, problems: [], notes: [...parsed.notes, ...made.notes, "미리보기는 규칙으로 만든 명세입니다.", ...(opinion ? [opinion] : [])] });
 }
 
 export function listFactoryJobs(projectsRoot: string): FactoryReport["jobs"] {

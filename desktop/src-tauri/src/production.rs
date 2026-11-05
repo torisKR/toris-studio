@@ -59,6 +59,11 @@ pub struct Settings {
     pub visual: String,
     #[serde(default = "default_layout")]
     pub layout: String,
+    /// Free-text note from the user. It enters the planner only when apply_opinion is true.
+    #[serde(default)]
+    pub opinion: String,
+    #[serde(default)]
+    pub apply_opinion: bool,
 }
 fn default_speaker() -> String {
     "Sohee".into()
@@ -105,11 +110,64 @@ pub fn parse_settings(input: &Value) -> Result<Settings, String> {
         settings.engine.clone()
     };
     crate::video_runtime::engine(&engine)?;
+    let opinion = if settings.opinion.trim().is_empty() {
+        String::new()
+    } else {
+        accept_opinion(settings.opinion.trim())?
+    };
     Ok(Settings {
         topic: topic.into(),
         engine,
+        opinion: opinion.clone(),
+        apply_opinion: settings.apply_opinion && !opinion.is_empty(),
         ..settings
     })
+}
+
+/// A user opinion is data. Commands, URLs and paths are refused.
+pub fn accept_opinion(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("의견을 입력하세요.".into());
+    }
+    if text.chars().count() > 500 {
+        return Err("의견은 500자 이하로 적어 주세요.".into());
+    }
+    if bad_text(text) {
+        return Err("의견에 명령, URL, 경로를 넣을 수 없습니다.".into());
+    }
+    Ok(text.to_owned())
+}
+
+/// Agent input for the storyboard. A recorded opinion is absent, so the model never sees it.
+pub fn plan_input(settings: &Settings) -> Value {
+    let mut input = json!({
+        "topic": settings.topic,
+        "durationSec": settings.duration_sec,
+        "aspect": settings.aspect,
+        "style": settings.style,
+        "narration": settings.narration,
+        "language": "ko",
+        "visual": settings.visual,
+    });
+    if settings.apply_opinion && !settings.opinion.is_empty() {
+        input["opinion"] = json!(settings.opinion);
+        input["applyOpinion"] = json!(true);
+    }
+    input
+}
+
+pub fn record_opinion(job: &mut Value, text: &str, apply: bool) {
+    if !job["opinions"].is_array() {
+        job["opinions"] = json!([]);
+    }
+    if let Some(list) = job["opinions"].as_array_mut() {
+        list.push(json!({"text": text, "apply": apply, "at": now()}));
+        if list.len() > 20 {
+            let drop_count = list.len() - 20;
+            list.drain(0..drop_count);
+        }
+    }
 }
 
 /// Final output size per aspect; generation size is lower and shown separately.
@@ -3136,6 +3194,23 @@ mod tests {
     fn board(n: usize, each: f64) -> Value {
         json!({"title": "2050 서울", "story": "미래 도시", "style": {"look": "neon", "palette": "teal and amber", "consistency": "same skyline"},
             "scenes": (0..n).map(|i| json!({"id": format!("s{}", i + 1), "order": i + 1, "durationSec": each, "script": "장면", "narration": "서울의 하늘을 나는 차들.", "caption": "하늘길", "prompt": "flying cars over Seoul at dusk", "transition": "fade"})).collect::<Vec<_>>()})
+    }
+
+    #[test]
+    fn recorded_opinion_stays_out_of_the_planner_input() {
+        let mut recorded = settings();
+        recorded.opinion = "자막을 더 짧게".into();
+        recorded.apply_opinion = false;
+        assert!(plan_input(&recorded).get("opinion").is_none());
+        recorded.apply_opinion = true;
+        assert_eq!(plan_input(&recorded)["opinion"], "자막을 더 짧게");
+        assert_eq!(plan_input(&recorded)["applyOpinion"], true);
+        assert!(accept_opinion("하지 마 $(rm)").is_err());
+        assert!(accept_opinion("https://example.com").is_err());
+        let mut job = new_job(&recorded);
+        record_opinion(&mut job, "기록만", false);
+        assert_eq!(job["opinions"][0]["apply"], false);
+        assert_eq!(job["opinions"][0]["text"], "기록만");
     }
 
     #[test]

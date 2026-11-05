@@ -792,6 +792,20 @@
   "test": "desktop/agent-runtime/test/factory.test.ts"
  },
  {
+  "id": "factory.opinion-recorded-still-steers",
+  "file": "desktop/agent-runtime/src/factory/prompts.ts",
+  "find": "  if (apply !== true) return { text, steer: \"\" };",
+  "replace": "  if (apply !== true) return { text, steer: text };",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "production.opinion-recorded-still-steers",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "  if (input.applyOpinion === true && input.opinion?.trim()) lines.push(\"사용자 의견 (기획에 반영): \" + input.opinion.trim().slice(0, 500));",
+  "replace": "  if (input.opinion?.trim()) lines.push(\"사용자 의견 (기획에 반영): \" + input.opinion.trim().slice(0, 500));",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
   "id": "factory.host-args",
   "file": "desktop/agent-runtime/src/factory/adapters.ts",
   "find": "      if (!canonical) return Promise.resolve({ exit: null, log: \"허용되지 않은 인자입니다.\" });",
