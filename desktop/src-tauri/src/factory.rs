@@ -16,15 +16,32 @@ pub fn parse_request(input: &Value) -> Result<Value, String> {
         return Err("종류를 확인하세요.".into());
     }
     let view = optional_enum(object.get("view"), &["2d", "3d", "ui"], "화면")?;
-    let orientation = optional_enum(object.get("orientation"), &["landscape", "portrait"], "방향")?;
-    let brief = object.get("brief").and_then(Value::as_str).unwrap_or("").trim();
+    let orientation = optional_enum(
+        object.get("orientation"),
+        &["landscape", "portrait"],
+        "방향",
+    )?;
+    let brief = object
+        .get("brief")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if brief.chars().count() > 2000 {
         return Err("요청이 너무 깁니다.".into());
     }
-    if brief.chars().any(|ch| ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t') || brief.contains("$(") || brief.contains("sk-ant-") || brief.contains("sk-or-") {
+    if brief
+        .chars()
+        .any(|ch| ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t')
+        || brief.contains("$(")
+        || brief.contains("sk-ant-")
+        || brief.contains("sk-or-")
+    {
         return Err("요청에 명령이나 비밀값을 넣을 수 없습니다.".into());
     }
-    let resume = object.get("resumeProject").and_then(Value::as_str).unwrap_or("");
+    let resume = object
+        .get("resumeProject")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if !resume.is_empty() && !is_slug(resume) {
         return Err("프로젝트 이름을 확인하세요.".into());
     }
@@ -51,9 +68,15 @@ pub fn parse_request(input: &Value) -> Result<Value, String> {
     }))
 }
 
-fn optional_enum(value: Option<&Value>, allowed: &[&str], label: &str) -> Result<Option<String>, String> {
+fn optional_enum(
+    value: Option<&Value>,
+    allowed: &[&str],
+    label: &str,
+) -> Result<Option<String>, String> {
     let Some(value) = value else { return Ok(None) };
-    let text = value.as_str().ok_or_else(|| format!("{label}을 확인하세요."))?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{label}을 확인하세요."))?;
     if !allowed.contains(&text) {
         return Err(format!("{label}을 확인하세요."));
     }
@@ -62,11 +85,15 @@ fn optional_enum(value: Option<&Value>, allowed: &[&str], label: &str) -> Result
 
 fn is_slug(value: &str) -> bool {
     let mut chars = value.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     first.is_ascii_lowercase()
         && value.len() >= 2
         && value.len() <= 40
-        && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 #[cfg(test)]
@@ -76,11 +103,16 @@ mod tests {
 
     #[test]
     fn requests_keep_only_closed_fields() {
-        let parsed = parse_request(&json!({"brief": "도트 게임", "kind": "game", "view": "2d", "command": "rm"})).unwrap_err();
+        let parsed = parse_request(
+            &json!({"brief": "도트 게임", "kind": "game", "view": "2d", "command": "rm"}),
+        )
+        .unwrap_err();
         assert!(parsed.contains("command"));
         assert!(parse_request(&json!({"brief": "게임 $(rm)"})).is_err());
         assert!(parse_request(&json!({"brief": "게임", "resumeProject": "../x"})).is_err());
-        let ok = parse_request(&json!({"brief": "할 일 앱", "kind": "app", "orientation": "portrait"})).unwrap();
+        let ok =
+            parse_request(&json!({"brief": "할 일 앱", "kind": "app", "orientation": "portrait"}))
+                .unwrap();
         assert_eq!(ok["workflow"], "app-factory");
         assert!(ok["input"].get("command").is_none());
         assert_eq!(ok["input"]["orientation"], "portrait");

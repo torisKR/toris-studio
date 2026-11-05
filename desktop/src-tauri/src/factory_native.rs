@@ -5,10 +5,16 @@ use std::sync::Arc;
 use tauri::State;
 
 fn workflow_of(run: &Value) -> bool {
-    matches!(run["workflow"].as_str(), Some("game-factory" | "app-factory"))
+    matches!(
+        run["workflow"].as_str(),
+        Some("game-factory" | "app-factory")
+    )
 }
 
-async fn factory_run(runtime: &Arc<crate::agent_runtime::AgentRuntime>, run_id: &str) -> Result<Value, String> {
+async fn factory_run(
+    runtime: &Arc<crate::agent_runtime::AgentRuntime>,
+    run_id: &str,
+) -> Result<Value, String> {
     let run = runtime.call("run.get", json!({ "runId": run_id })).await?;
     if !workflow_of(&run) {
         return Err("이 화면에서 다룰 수 있는 작업이 아닙니다.".into());
@@ -24,7 +30,9 @@ pub async fn factory_preview(
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let request = crate::factory::parse_request(&input)?;
-    runtime.call("factory.preview", request["input"].clone()).await
+    runtime
+        .call("factory.preview", request["input"].clone())
+        .await
 }
 
 #[tauri::command]
