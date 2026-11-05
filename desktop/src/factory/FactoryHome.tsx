@@ -15,6 +15,8 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
   const [kind, setKind] = useState<"game" | "app">("game");
   const [view, setView] = useState<"2d" | "3d" | "ui">("2d");
   const [orientation, setOrientation] = useState<"landscape" | "portrait">("landscape");
+  const [opinion, setOpinion] = useState("");
+  const [applyOpinion, setApplyOpinion] = useState(false);
   const [preview, setPreview] = useState<FactoryReport | null>(null);
   const [run, setRun] = useState<RunSummary | null>(null);
   const [jobs, setJobs] = useState<FactoryJobView[]>([]);
@@ -36,7 +38,7 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
   const report = parsed ?? preview;
   const board = report?.jobs.length ? report.jobs : jobs;
   const selectedJob = board.find(job => job.taskId === selected) ?? null;
-  const request = { brief, kind, view: kind === "app" ? "ui" as const : view, orientation };
+  const request = { brief, kind, view: kind === "app" ? "ui" as const : view, orientation, ...(opinion.trim() ? { opinion: opinion.trim(), applyOpinion } : {}) };
   const waiting = run?.approvals.find(action => action.kind === "factory_gate" && action.title === selected) ?? null;
 
   async function act(label: string, task: () => Promise<void>) {
@@ -54,6 +56,13 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
         <label>종류<select value={kind} onChange={event => setKind(event.target.value === "app" ? "app" : "game")} aria-label="제작 종류"><option value="game">Android 게임</option><option value="app">Android 앱</option></select></label>
         <label>화면<select value={kind === "app" ? "ui" : view} disabled={kind === "app"} onChange={event => setView(event.target.value === "3d" ? "3d" : "2d")} aria-label="화면 형식"><option value="2d">2D</option><option value="3d">3D</option><option value="ui">UI</option></select></label>
         <label>방향<select value={orientation} onChange={event => setOrientation(event.target.value === "portrait" ? "portrait" : "landscape")} aria-label="화면 방향"><option value="landscape">가로</option><option value="portrait">세로</option></select></label>
+        <fieldset className="factory-opinion">
+          <legend>만드는 과정에 대한 의견</legend>
+          <textarea rows={3} maxLength={500} value={opinion} onChange={event => setOpinion(event.target.value)} aria-label="앱 제작 의견" placeholder="예: 화면은 더 단순하게, 전투는 한 가지 공격만" />
+          <label><input type="radio" name="factory-opinion" checked={!applyOpinion} onChange={() => setApplyOpinion(false)} />기록만 하기</label>
+          <label><input type="radio" name="factory-opinion" checked={applyOpinion} onChange={() => setApplyOpinion(true)} />기획에 반영</label>
+          <p className="factory-note">{applyOpinion ? "시작 후 모델이 명세를 쓸 때 이 의견이 들어갑니다. 모델이 없으면 템플릿 명세는 바꾸지 않고 그 사실을 적습니다." : "의견은 결과 노트에만 남고, 명세와 모델 프롬프트에는 들어가지 않습니다."}</p>
+        </fieldset>
         <div className="factory-actions">
           <button type="button" className="social-button" disabled={Boolean(busy) || !brief.trim()} onClick={() => void act("preview", async () => setPreview(await factoryPreview(request)))}>{busy === "preview" ? <LoaderCircle size={15} className="social-spin" /> : <Sparkles size={15} />}명세 미리보기</button>
           <button type="submit" className="social-button primary" disabled={Boolean(busy) || !brief.trim()}>{busy === "start" ? <LoaderCircle size={15} className="social-spin" /> : <Play size={15} />}팩토리 시작</button>

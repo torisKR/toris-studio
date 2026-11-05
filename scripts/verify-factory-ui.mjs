@@ -39,10 +39,12 @@ const server = await createFixtureServer({ server: { port: 0, strictPort: false 
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 const report = { checks: [], errors: [] };
+const calls = [];
 try {
   const page = await browser.newPage({ viewport: { width: 1380, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', error => report.errors.push(error.message));
   await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
+    calls.push({ command, args });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: 'QA' } };
     if (command === 'factory_preview') return preview;
     if (command === 'factory_start') return { runId: 'run-1', workflow: 'game-factory', project: '', task: '팩토리', phase: 'done', agent: 'supervisor', summary: JSON.stringify(started), approvals: [], events: [], changes: [], createdAt: '', updatedAt: '' };
@@ -76,6 +78,26 @@ try {
   assert.equal(await factory.locator('.factory-gate[data-status="blocked"]', { hasText: 'Android' }).count(), 1);
   assert.equal(await factory.locator('.factory-gate.not_run.passed, .factory-gate.blocked.passed').count(), 0);
   report.checks.push('after start, a blocked Android gate is not a pass');
+  await factory.getByRole('textbox', { name: '앱 제작 의견', exact: true }).fill('화면은 더 단순하게');
+  await factory.getByText('기록만 하기', { exact: true }).click();
+  await factory.getByRole('button', { name: '명세 미리보기' }).click();
+  const recorded = calls.filter(call => call.command === 'factory_preview').at(-1);
+  assert.equal(recorded.args.input.opinion, '화면은 더 단순하게');
+  assert.equal(recorded.args.input.applyOpinion, false);
+  await factory.getByText('기획에 반영', { exact: true }).click();
+  await factory.getByRole('button', { name: '명세 미리보기' }).click();
+  const applied = calls.filter(call => call.command === 'factory_preview').at(-1);
+  assert.equal(applied.args.input.applyOpinion, true);
+  const radio = await factory.getByRole('radio', { name: '기록만 하기' }).evaluate(node => {
+    const text = [...node.parentElement.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const textBox = range.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    return { width: box.width, height: box.height, gap: textBox.x - box.right };
+  });
+  assert.ok(radio.width <= 20 && radio.height <= 20 && radio.gap >= 0 && radio.gap < 24, 'the record-only choice sits beside its radio');
+  report.checks.push('opinion can be recorded or applied, and the choice is sent with the preview');
   await page.screenshot({ path: resolve(out, 'factory-console.png'), fullPage: true });
   if (report.errors.length) throw new Error(report.errors.join('\n'));
   console.log(report.checks.join('\n'));

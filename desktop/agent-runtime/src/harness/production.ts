@@ -35,6 +35,8 @@ const Input = z.object({
   narration: z.boolean(),
   language: z.literal("ko").default("ko"),
   visual: z.enum(VISUALS).default("ai"),
+  opinion: z.string().trim().max(500).optional(),
+  applyOpinion: z.boolean().optional(),
 });
 export type ProductionInput = z.infer<typeof Input>;
 
@@ -44,7 +46,21 @@ export function productionInput(raw: unknown): { input: ProductionInput | null; 
   if (!parsed.success) return { input: null, problems: issues(parsed.error) };
   const topic = parsed.data.topic;
   if (CONTROL.test(topic)) return { input: null, problems: ["topic: 제어 문자가 들어 있습니다."] };
-  return { input: parsed.data, problems: [] };
+  const opinion = parsed.data.opinion?.trim() ?? "";
+  if (opinion) {
+    const reason = unsafeText(opinion);
+    if (reason) return { input: null, problems: ["opinion: " + reason] };
+  }
+  const applyOpinion = Boolean(opinion) && parsed.data.applyOpinion === true;
+  const next = { ...parsed.data };
+  if (opinion) {
+    next.opinion = opinion;
+    next.applyOpinion = applyOpinion;
+  } else {
+    delete next.opinion;
+    delete next.applyOpinion;
+  }
+  return { input: next, problems: [] };
 }
 
 // ---- text rules ----
@@ -226,6 +242,7 @@ export function storyboardPrompt(input: ProductionInput, task: string, feedback:
       : "나레이션: 없음. narration은 빈 문자열로 둔다.",
   ];
   if (task.trim()) lines.push("추가 요청: " + task.trim().slice(0, 500));
+  if (input.applyOpinion === true && input.opinion?.trim()) lines.push("사용자 의견 (기획에 반영): " + input.opinion.trim().slice(0, 500));
   if (feedback) lines.push("이전 스토리보드가 검사에서 걸렸습니다. 고쳐서 다시 쓰세요:\n" + feedback);
   return lines.join("\n");
 }

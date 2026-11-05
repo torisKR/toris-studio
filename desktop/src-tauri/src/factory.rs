@@ -2,7 +2,15 @@
 //! through to the agent runtime; only these fields are forwarded.
 use serde_json::{json, Value};
 
-const KEYS: &[&str] = &["brief", "kind", "view", "orientation", "resumeProject"];
+const KEYS: &[&str] = &[
+    "brief",
+    "kind",
+    "view",
+    "orientation",
+    "resumeProject",
+    "opinion",
+    "applyOpinion",
+];
 
 pub fn parse_request(input: &Value) -> Result<Value, String> {
     let object = input.as_object().ok_or("요청 형식을 확인하세요.")?;
@@ -48,6 +56,22 @@ pub fn parse_request(input: &Value) -> Result<Value, String> {
     if brief.is_empty() && resume.is_empty() {
         return Err("요청을 입력하세요.".into());
     }
+    let opinion = object
+        .get("opinion")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if opinion.chars().count() > 500 {
+        return Err("의견은 500자 이하로 적어 주세요.".into());
+    }
+    if opinion_unsafe(opinion) {
+        return Err("의견에 명령이나 비밀값을 넣을 수 없습니다.".into());
+    }
+    let apply = match object.get("applyOpinion") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err("의견 반영 여부를 확인하세요.".into()),
+    };
     let mut clean = json!({ "kind": kind });
     if !brief.is_empty() {
         clean["brief"] = json!(brief);
@@ -60,6 +84,10 @@ pub fn parse_request(input: &Value) -> Result<Value, String> {
     }
     if !resume.is_empty() {
         clean["resumeProject"] = json!(resume);
+    }
+    if !opinion.is_empty() {
+        clean["opinion"] = json!(opinion);
+        clean["applyOpinion"] = json!(apply);
     }
     Ok(json!({
         "workflow": if kind == "app" { "app-factory" } else { "game-factory" },
@@ -81,6 +109,17 @@ fn optional_enum(
         return Err(format!("{label}을 확인하세요."));
     }
     Ok(Some(text.to_owned()))
+}
+
+fn opinion_unsafe(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t')
+        || text.contains("$(")
+        || text.contains("sk-ant-")
+        || text.contains("sk-or-")
+        || text.contains("```")
+        || text.contains("http://")
+        || text.contains("https://")
 }
 
 fn is_slug(value: &str) -> bool {
@@ -116,5 +155,12 @@ mod tests {
         assert_eq!(ok["workflow"], "app-factory");
         assert!(ok["input"].get("command").is_none());
         assert_eq!(ok["input"]["orientation"], "portrait");
+        let recorded = parse_request(
+            &json!({"brief": "게임", "opinion": "더 단순하게", "applyOpinion": false}),
+        )
+        .unwrap();
+        assert_eq!(recorded["input"]["applyOpinion"], false);
+        assert_eq!(recorded["input"]["opinion"], "더 단순하게");
+        assert!(parse_request(&json!({"brief": "게임", "opinion": "하지 마 $(rm)"})).is_err());
     }
 }

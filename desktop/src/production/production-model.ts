@@ -36,10 +36,12 @@ export type ComposerState = {
   topic: string; duration: DurationChoice; customSec: string; aspect: ProductionAspect; style: ProductionInput["style"];
   narration: boolean; speaker: string; subtitleStyle: ProductionInput["subtitleStyle"]; bgm: ProductionInput["bgm"];
   quality: ProductionQuality; engine: string; visual: "stock" | "ai"; layout: "card" | "full";
+  opinion: string; applyOpinion: boolean;
 };
 export const initialComposer: ComposerState = {
   topic: "", duration: 30, customSec: "45", aspect: "9:16", style: "documentary", narration: true, speaker: "Sohee",
-  subtitleStyle: "shorts-bold", bgm: "pulse", quality: "preview", engine: "", visual: "stock", layout: "card"
+  subtitleStyle: "shorts-bold", bgm: "pulse", quality: "preview", engine: "", visual: "stock", layout: "card",
+  opinion: "", applyOpinion: false
 };
 
 export function durationOf(state: ComposerState): number | null {
@@ -74,7 +76,8 @@ export function composerInput(state: ComposerState): ProductionInput {
     topic: state.topic.trim(), durationSec, aspect: state.aspect, style: state.style, narration: state.narration,
     subtitleStyle: state.subtitleStyle, bgm: state.bgm, quality: state.quality, engine: state.visual === "stock" ? "" : state.engine,
     visual: state.visual, layout: state.layout,
-    ...(state.narration ? { speaker: state.speaker } : {})
+    ...(state.narration ? { speaker: state.speaker } : {}),
+    ...(state.opinion.trim() ? { opinion: state.opinion.trim(), applyOpinion: state.applyOpinion } : {})
   };
 }
 

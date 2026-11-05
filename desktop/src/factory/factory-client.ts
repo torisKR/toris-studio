@@ -30,7 +30,7 @@ export type FactoryReport = {
   notes: string[];
 };
 
-export type FactoryRequest = { brief?: string; kind?: "game" | "app"; view?: "2d" | "3d" | "ui"; orientation?: "landscape" | "portrait"; resumeProject?: string };
+export type FactoryRequest = { brief?: string; kind?: "game" | "app"; view?: "2d" | "3d" | "ui"; orientation?: "landscape" | "portrait"; resumeProject?: string; opinion?: string; applyOpinion?: boolean };
 
 const GATE_NAMES: FactoryGateName[] = ["plan", "code", "asset", "model3d", "gameplay", "android", "release"];
 const GATE_STATUS: FactoryGateStatus[] = ["passed", "failed", "blocked", "not_run"];

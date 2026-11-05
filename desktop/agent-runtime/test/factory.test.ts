@@ -9,6 +9,7 @@ import { factorySummary } from "../src/factory/graph.js";
 import { newJob, reconcileJobs } from "../src/factory/jobs.js";
 import { nextBatch, planTasks } from "../src/factory/planner.js";
 import { produceFactory, previewFactory } from "../src/factory/pipeline.js";
+import { factoryPrompt, opinionChoice } from "../src/factory/prompts.js";
 import { spriteProviderAllowed } from "../src/factory/policies.js";
 import { createProjectDir } from "../src/factory/scaffold.js";
 import { acceptModelSpec, templateSpec } from "../src/factory/spec.js";
@@ -39,6 +40,13 @@ test("the wuxia brief becomes a bounded 2D Godot spec and drops reference URLs",
   assert.equal(preview.verdict, "incomplete");
   assert.ok(preview.notes.some(note => note.includes("참조 URL")));
   assert.equal(JSON.stringify(preview).includes("https://"), false);
+  const recorded = previewFactory({ brief: BRIEF, kind: "game", opinion: "화면은 더 단순하게", applyOpinion: false }, "game");
+  assert.ok(recorded.notes.some(note => note.includes("기획에는 반영하지 않습니다")));
+  assert.equal(factoryPrompt(BRIEF, "game", opinionChoice("화면은 더 단순하게", false).steer).includes("더 단순하게"), false);
+  const applied = previewFactory({ brief: BRIEF, kind: "game", opinion: "화면은 더 단순하게", applyOpinion: true }, "game");
+  assert.ok(applied.notes.some(note => note.includes("미리보기 명세는 규칙으로 만든 것입니다")));
+  assert.equal(applied.spec?.title.includes("더 단순하게"), false);
+  assert.ok(factoryPrompt(BRIEF, "game", opinionChoice("화면은 더 단순하게", true).steer).includes("사용자 의견"));
 });
 
 test("a model spec with a command field, a shell title, or a raised budget is not a plan", () => {

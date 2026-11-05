@@ -69,6 +69,8 @@ const InputObject = z.object({
   view: z.enum(VIEWS).optional(),
   orientation: z.enum(ORIENTATIONS).optional(),
   resumeProject: z.string().regex(SLUG).optional(),
+  opinion: z.string().trim().max(500).optional(),
+  applyOpinion: z.boolean().optional(),
 }).strict();
 export type FactoryInput = z.infer<typeof InputObject>;
 
@@ -213,5 +215,15 @@ export function factoryInput(raw: unknown): { input: FactoryInput | null; proble
   if (!parsed.data.brief) return { input: parsed.data, problems: [], notes: [] };
   const cleaned = cleanBrief(parsed.data.brief);
   if (cleaned.problems.length) return { input: null, problems: cleaned.problems, notes: cleaned.notes };
-  return { input: { ...parsed.data, brief: cleaned.text }, problems: [], notes: cleaned.notes };
+  const opinion = parsed.data.opinion?.trim() ?? "";
+  if (opinion) {
+    const reason = unsafeSpecText(opinion);
+    if (reason) return { input: null, problems: ["의견: " + reason], notes: [] };
+  }
+  const applyOpinion = Boolean(opinion) && parsed.data.applyOpinion === true;
+  return {
+    input: { ...parsed.data, brief: cleaned.text, ...(opinion ? { opinion, applyOpinion } : { opinion: undefined, applyOpinion: undefined }) },
+    problems: [],
+    notes: cleaned.notes,
+  };
 }

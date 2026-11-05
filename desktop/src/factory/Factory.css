@@ -20,6 +20,11 @@
 .factory-card label { display: grid; gap: 6px; font-size: 0.82rem; }
 .factory-card textarea, .factory-card select { width: 100%; font: inherit; }
 .factory-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.factory-opinion { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.factory-opinion legend { font-size: 0.82rem; }
+.factory-opinion textarea { width: 100%; font: inherit; }
+.factory-opinion label { display: flex; align-items: center; justify-content: flex-start; gap: 8px; font-size: 0.82rem; }
+.factory-opinion input[type="radio"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 0; padding: 0; accent-color: var(--social-accent, #92b8ff); }
 .factory-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .factory-list li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--social-line, #2a3b4d) 45%, transparent); }
 .factory-list small, .factory-note { color: var(--social-muted, #8ea4b8); }
