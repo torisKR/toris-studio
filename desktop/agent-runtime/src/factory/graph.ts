@@ -4,7 +4,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { randomUUID } from "node:crypto";
 import type { RunContext } from "../graph/build.js";
 import type { CompiledWorkflow } from "../harness/workflow.js";
-import { envRunner } from "./adapters.js";
+import { hostRunner } from "./adapters.js";
 import { produceFactory, type FactoryReport } from "./pipeline.js";
 import type { FactoryKind } from "./spec.js";
 
@@ -29,7 +29,7 @@ export function buildFactory(ctx: RunContext, kind: FactoryKind): CompiledWorkfl
       input: ctx.input,
       projectsRoot: ctx.projectsRoot,
       model: ctx.model.model === "none" ? null : ctx.model,
-      runner: envRunner(),
+      runner: hostRunner(ctx.hostTool),
       signal: ctx.signal,
       emit: message => ctx.emit(kind === "app" ? "frontend" : "backend", "coding", message),
       approve: async job => {

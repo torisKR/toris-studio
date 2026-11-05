@@ -5,9 +5,9 @@ import path from "node:path";
 import type { ChatModel } from "../llm/types.js";
 import { errorText, parseJsonObject } from "../util.js";
 import { fingerprint, fingerprintMatches } from "./artifacts.js";
-import { missingTool, toolFor, toolInvocation, VFX_IDS, type TaskOutcome, type ToolId, type ToolRunner, type VfxId } from "./adapters.js";
+import { missingTool, TOOL_MISSING, toolFor, toolInvocation, VFX_IDS, type TaskOutcome, type ToolId, type ToolResult, type ToolRunner, type VfxId } from "./adapters.js";
 import { factoryStoreDir, JobStore, newJob, reconcileJobs, type FactoryJob } from "./jobs.js";
-import { blockedReason, nextBatch, planTasks, type TaskId } from "./planner.js";
+import { blockedReason, declaredDeps, nextBatch, planTasks, type TaskId } from "./planner.js";
 import { FACTORY_SYSTEM, factoryPrompt } from "./prompts.js";
 import { BLENDER_EXPORT_PY, createProjectDir, existingProjectDir, writeTemplate } from "./scaffold.js";
 import { acceptModelSpec, factoryInput, templateSpec, type FactoryKind, type FactorySpec } from "./spec.js";
@@ -19,7 +19,7 @@ export type FactoryReport = {
   model: string;
   spec: FactorySpec | null;
   project: string;
-  jobs: Array<Pick<FactoryJob, "taskId" | "status" | "message" | "approval">>;
+  jobs: Array<Pick<FactoryJob, "taskId" | "status" | "message" | "approval"> & { deps: string[] }>;
   gates: FactoryGate[];
   verdict: "pass" | "incomplete" | "fail";
   costUsd: number;
@@ -213,7 +213,8 @@ async function runProject(options: ProduceOptions, spec: FactorySpec, projectDir
   }
 
   const gates = buildGates(spec, jobs);
-  const finished = report({ template, provider, model: modelName, spec, project: spec.slug, jobs: jobs.map(viewJob), gates, problems, notes });
+  const planned = new Map(planTasks(spec).map(task => [task.id, task.deps]));
+  const finished = report({ template, provider, model: modelName, spec, project: spec.slug, jobs: jobs.map(job => viewJob(job, planned.get(job.taskId) ?? [])), gates, problems, notes });
   writeFileSync(path.join(projectDir, "factory-report.json"), JSON.stringify(finished, null, 2) + "\n");
   return finished;
 }
@@ -222,17 +223,20 @@ export function previewFactory(raw: unknown, kind: FactoryKind): FactoryReport {
   const parsed = factoryInput(raw);
   if (!parsed.input?.brief) return report({ problems: parsed.problems.length ? parsed.problems : ["요청을 입력하세요."], notes: parsed.notes });
   const made = templateSpec(parsed.input.brief, { kind, view: parsed.input.view, orientation: parsed.input.orientation }, kind);
-  const jobs = planTasks(made.spec).map(task => ({ taskId: task.id, status: "queued" as const, message: task.deps.join(", "), approval: task.id === "release-review" || task.id === "adb-smoke-test" ? "explicit" as const : "automatic" as const }));
+  const jobs = planTasks(made.spec).map(task => ({ taskId: task.id, status: "queued" as const, message: task.deps.join(", "), approval: task.id === "release-review" || task.id === "adb-smoke-test" ? "explicit" as const : "automatic" as const, deps: [...task.deps] }));
   return report({ template: true, spec: made.spec, project: made.spec.slug, jobs, problems: [], notes: [...parsed.notes, ...made.notes, "미리보기는 규칙으로 만든 명세입니다."] });
 }
 
 export function listFactoryJobs(projectsRoot: string): FactoryReport["jobs"] {
-  try { return new JobStore(factoryStoreDir(projectsRoot)).load().map(viewJob); }
-  catch { return []; }
+  try {
+    const jobs = new JobStore(factoryStoreDir(projectsRoot)).load();
+    const present = new Set(jobs.map(job => job.taskId));
+    return jobs.map(job => viewJob(job, declaredDeps(job.taskId).filter(dep => present.has(dep))));
+  } catch { return []; }
 }
 
-function viewJob(job: FactoryJob): FactoryReport["jobs"][number] {
-  return { taskId: job.taskId, status: job.status, message: job.message, approval: job.approval };
+function viewJob(job: FactoryJob, deps: readonly string[]): FactoryReport["jobs"][number] {
+  return { taskId: job.taskId, status: job.status, message: job.message, approval: job.approval, deps: [...deps] };
 }
 
 function staticCode(projectDir: string, spec: FactorySpec): TaskOutcome {
@@ -272,13 +276,14 @@ async function runTool(options: ProduceOptions, spec: FactorySpec, projectDir: s
     const effects = VFX_IDS.slice(0, spec.assets.vfx);
     for (const effect of effects) {
       const result = await options.runner.run(toolInvocation("pixelfx_render", effect as VfxId), projectDir, options.signal);
-      if (result.exit !== 0) return { status: "failed", message: result.exit === null ? missingTool(tool).message : "PixelFX 종료 코드 " + result.exit, hashes: [] };
+      if (result.exit === null) return { status: "blocked", message: blockedLog(tool, result), hashes: [] };
+      if (result.exit !== 0) return { status: "failed", message: "PixelFX 종료 코드 " + result.exit, hashes: [] };
     }
     return checkPng(projectDir, "assets/vfx/fireball.png", "VFX 시트를 확인했습니다.");
   }
   const cwd = projectDir;
   const result = await options.runner.run(toolInvocation(tool), cwd, options.signal);
-  if (result.exit === null) return missingTool(tool);
+  if (result.exit === null) return { status: "blocked", message: blockedLog(tool, result), hashes: [] };
   if (result.exit !== 0) return { status: "failed", message: `${tool} 종료 코드 ${result.exit}`, hashes: [] };
   if (task === "sprite-atlas") return checkPng(projectDir, "assets/sprites/atlas.png", "스프라이트 시트를 확인했습니다.");
   if (task === "headless-tests") return { status: "passed", message: "Godot headless 검사를 실행했습니다.", hashes: [] };
@@ -292,6 +297,10 @@ async function runTool(options: ProduceOptions, spec: FactorySpec, projectDir: s
   }
   if (task === "model-export") return { status: "blocked", message: "고정 스크립트는 실행됐지만 GLB가 없습니다.", hashes: [] };
   return { status: "blocked", message: "결과를 확인하지 못했습니다.", hashes: [] };
+}
+
+function blockedLog(tool: string, result: ToolResult): string {
+  return result.log.includes(TOOL_MISSING) ? result.log : missingTool(tool).message;
 }
 
 function storeApproval(job: FactoryJob): void {

@@ -1,10 +1,10 @@
-import { LoaderCircle, Play, Sparkles } from "lucide-react";
+import { LoaderCircle, Play, Sparkles, Square } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { RunSummary } from "../agent-client";
-import { AssetReview } from "./AssetReview";
 import { BuildReview } from "./BuildReview";
+import { FactoryDag } from "./FactoryDag";
 import { FactoryProject } from "./FactoryProject";
-import { FactoryRun } from "./FactoryRun";
+import { FactoryTaskDetail } from "./FactoryRun";
 import { factoryCancel, factoryDecide, factoryJobs, factoryPreview, factoryStart, factoryStatus, parseFactoryReport, type FactoryJobView, type FactoryReport } from "./factory-client";
 import "./Factory.css";
 
@@ -18,6 +18,7 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
   const [preview, setPreview] = useState<FactoryReport | null>(null);
   const [run, setRun] = useState<RunSummary | null>(null);
   const [jobs, setJobs] = useState<FactoryJobView[]>([]);
+  const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -31,8 +32,12 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
   }, [active, run]);
 
   if (!active) return null;
-  const report = run?.summary ? parseFactoryReport(run.summary) : preview;
+  const parsed = run?.summary ? parseFactoryReport(run.summary) : null;
+  const report = parsed ?? preview;
+  const board = report?.jobs.length ? report.jobs : jobs;
+  const selectedJob = board.find(job => job.taskId === selected) ?? null;
   const request = { brief, kind, view: kind === "app" ? "ui" as const : view, orientation };
+  const waiting = run?.approvals.find(action => action.kind === "factory_gate" && action.title === selected) ?? null;
 
   async function act(label: string, task: () => Promise<void>) {
     if (busy) return;
@@ -42,9 +47,9 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
 
   return <div className="factory-layout" role="region" aria-label="앱·게임 팩토리">
     {error && <div className="social-notice error" role="alert"><span>{error}</span></div>}
-    <div className="factory-grid">
+    <div className="factory-console">
       <form className="factory-card" onSubmit={event => { event.preventDefault(); void act("start", async () => { const started = await factoryStart(request); setRun(started); }); }}>
-        <h2>무엇을 만들까요?</h2>
+        <h2>요청</h2>
         <label>요청<textarea rows={5} maxLength={2000} value={brief} onChange={event => setBrief(event.target.value)} required aria-label="제작 요청" /></label>
         <label>종류<select value={kind} onChange={event => setKind(event.target.value === "app" ? "app" : "game")} aria-label="제작 종류"><option value="game">Android 게임</option><option value="app">Android 앱</option></select></label>
         <label>화면<select value={kind === "app" ? "ui" : view} disabled={kind === "app"} onChange={event => setView(event.target.value === "3d" ? "3d" : "2d")} aria-label="화면 형식"><option value="2d">2D</option><option value="3d">3D</option><option value="ui">UI</option></select></label>
@@ -54,11 +59,29 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
           <button type="submit" className="social-button primary" disabled={Boolean(busy) || !brief.trim()}>{busy === "start" ? <LoaderCircle size={15} className="social-spin" /> : <Play size={15} />}팩토리 시작</button>
           <button type="button" className="social-button" onClick={onOpenAgent}>모델 설정</button>
         </div>
-        <p>미리보기는 규칙으로 만든 명세입니다. 시작 후 Agent 모델의 JSON이 검사를 통과하면 그 명세를 쓰고, 아니면 템플릿이라고 표시합니다. 유료 API, 기기 설치, 서명, 스토어 제출은 자동으로 하지 않습니다.</p>
+        <p className="factory-note">미리보기는 규칙으로 만든 명세입니다. 시작 후 Agent 모델의 JSON이 검사를 통과하면 그 명세를 쓰고, 아니면 템플릿이라고 표시합니다. 유료 API, 기기 설치, 서명, 스토어 제출은 자동으로 하지 않습니다.</p>
+        {report?.spec && <FactoryProject spec={report.spec} notes={report.notes} />}
       </form>
-      {report?.spec && <FactoryProject spec={report.spec} jobs={report.jobs.length ? report.jobs : jobs} notes={report.notes} />}
+      <section className="factory-card" aria-label="작업 DAG">
+        <div className="factory-actions">
+          <h2>작업</h2>
+          {run && run.phase !== "done" && run.phase !== "failed" && run.phase !== "cancelled" && <button type="button" className="social-button" disabled={Boolean(busy)} onClick={() => void act("cancel", async () => setRun(await factoryCancel(run.runId)))}><Square size={14} />중단</button>}
+        </div>
+        <div className="factory-dag-wrap"><FactoryDag jobs={board} selected={selected} onSelect={setSelected} /></div>
+        <FactoryTaskDetail job={selectedJob} action={waiting} busy={Boolean(busy)} onDecide={(action, decision, feedback) => void act("decide", async () => { if (!run) return; setRun(await factoryDecide(run.runId, action, decision, feedback)); })} />
+        {run && <WaitingTasks run={run} selected={selected} onSelect={setSelected} />}
+      </section>
+      <section className="factory-card" aria-label="검증 게이트">
+        {report ? <BuildReview report={report} /> : <div><h2>검증</h2><p className="factory-empty">실행하지 않은 Android·에셋 검사는 통과로 표시하지 않습니다.</p></div>}
+      </section>
     </div>
-    {run && <FactoryRun run={run} busy={Boolean(busy)} onCancel={() => void act("cancel", async () => setRun(await factoryCancel(run.runId)))} onDecide={(action, decision, feedback) => void act("decide", async () => setRun(await factoryDecide(run.runId, action, decision, feedback)))} />}
-    {(report || jobs.length > 0) && <div className="factory-grid"><AssetReview jobs={report?.jobs.length ? report.jobs : jobs} />{report && <BuildReview report={report} />}</div>}
-    </div>;
+  </div>;
+}
+
+function WaitingTasks({ run, selected, onSelect }: { run: RunSummary; selected: string; onSelect: (taskId: string) => void }) {
+  const others = run.approvals.flatMap(action => action.kind === "factory_gate" && action.title !== selected ? [action] : []);
+  if (!others.length) return null;
+  return <div className="factory-actions">
+    {others.map(action => <button key={action.id} type="button" className="social-button" onClick={() => onSelect(action.title)}>승인 대기 · {action.title}</button>)}
+  </div>;
 }

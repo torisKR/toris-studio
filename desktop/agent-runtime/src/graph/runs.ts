@@ -46,6 +46,9 @@ export class RunManager {
     readonly workflows: WorkflowRegistry = defaultWorkflows(),
   ) {}
 
+  /** Set by the desktop runtime. Tests leave it empty so factory tools stay blocked. */
+  hostTool?: RunContext["hostTool"];
+
   /** Loads saved runs and saves every later change. A run the app closed on cannot resume: its lanes lived in memory. */
   attachHistory(history: RunHistory): void {
     this.history = history;
@@ -114,6 +117,7 @@ export class RunManager {
         return hits.map(hit => `[${hit.path}:${hit.startLine}-${hit.endLine} · ${hit.score}]\n${clip(hit.text, 1600)}`).join("\n\n") || "검색 결과가 없습니다.";
       },
       files: () => (spec.needsProject ? (files ??= projectFiles(root)) : []),
+      hostTool: this.hostTool,
     };
     run.graph = spec.build(ctx);
     this.runs.set(runId, run);

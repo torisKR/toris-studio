@@ -792,6 +792,20 @@
   "test": "desktop/agent-runtime/test/factory.test.ts"
  },
  {
+  "id": "factory.host-args",
+  "file": "desktop/agent-runtime/src/factory/adapters.ts",
+  "find": "      if (!canonical) return Promise.resolve({ exit: null, log: \"허용되지 않은 인자입니다.\" });",
+  "replace": "      if (!canonical) return host!(invocation.tool, invocation.args, cwd, signal);",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "factory.null-exit-succeeds",
+  "file": "desktop/agent-runtime/src/runtime.ts",
+  "find": "  return { exit: typeof p.exit === \"number\" ? p.exit : null, log: typeof p.log === \"string\" ? p.log.slice(0, 2000) : \"\" };",
+  "replace": "  return { exit: Number(p.exit), log: typeof p.log === \"string\" ? p.log.slice(0, 2000) : \"\" };",
+  "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
   "id": "factory.permissions-ignored",
   "file": "desktop/agent-runtime/src/factory/validators.ts",
   "find": "  return found.filter(name => name.startsWith(\"android.permission.\"));",

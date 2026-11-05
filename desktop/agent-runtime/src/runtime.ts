@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { defaultSearchPath } from "./llm/cli.js";
 import { generateImage } from "./llm/image.js";
 import { listFactoryJobs, previewFactory } from "./factory/pipeline.js";
 import { listProjects } from "./projects.js";
+import type { ToolResult } from "./factory/adapters.js";
 import type { ModelChoice, OutboundEvent, Request, Response, RuntimeSettings } from "./protocol.js";
 import { ChromaClient } from "./rag/chroma.js";
 import { ProjectIndex } from "./rag/index.js";
@@ -65,13 +67,21 @@ export function parseSettings(raw: unknown): RuntimeSettings {
   };
 }
 
+/** A JSON null exit must stay null. `Number(null)` is 0 and would look like success. */
+export function toolResultOf(params: unknown): ToolResult {
+  const p = params && typeof params === "object" ? params as Record<string, unknown> : {};
+  return { exit: typeof p.exit === "number" ? p.exit : null, log: typeof p.log === "string" ? p.log.slice(0, 2000) : "" };
+}
+
 export class Runtime {
   settings = defaultSettings();
   private indexing = new Map<string, AbortController>();
   private historyDir = "";
+  private tools = new Map<string, (result: ToolResult) => void>();
   readonly runs: RunManager;
   constructor(private out: (event: OutboundEvent) => void) {
     this.runs = new RunManager(() => this.settings, event => this.out(event));
+    this.runs.hostTool = (tool, args, cwd, signal) => this.callHostTool(tool, args, cwd, signal);
   }
   private secrets() { return Object.values(this.settings.keys).filter((v): v is string => Boolean(v)); }
 
@@ -100,6 +110,11 @@ export class Runtime {
         return previewFactory(params, kind);
       }
       case "factory.jobs": return { jobs: listFactoryJobs(this.settings.projectsRoot) };
+      case "factory.tool-result": {
+        const callId = typeof p.callId === "string" ? p.callId : "";
+        this.tools.get(callId)?.(toolResultOf(p));
+        return { ok: true };
+      }
       case "run.start": {
         const workflow = text(p.workflow, "워크플로", 60, { optional: true }) || "coding";
         if (!this.hostOnly(workflow, p)) throw new UserError("이 워크플로는 Studio 화면에서만 시작할 수 있습니다.");
@@ -122,6 +137,25 @@ export class Runtime {
       case "image": return generateImage(this.settings, text(p.prompt, "이미지 프롬프트", 32_000), String(p.size ?? "1024x1024"));
       default: throw new UserError(`알 수 없는 요청입니다: ${method}`);
     }
+  }
+
+  private callHostTool(tool: string, args: string[], cwd: string, signal: AbortSignal): Promise<ToolResult> {
+    const callId = randomUUID();
+    return new Promise(resolve => {
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (result: ToolResult) => {
+        if (!this.tools.delete(callId)) return;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+      const onAbort = () => finish({ exit: null, log: "작업이 취소되었습니다." });
+      timer = setTimeout(() => finish({ exit: null, log: "도구 실행 시간이 초과되었습니다." }), 130_000);
+      this.tools.set(callId, finish);
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.out({ event: "factory.tool", callId, tool, args, cwd, projectsRoot: this.settings.projectsRoot });
+    });
   }
 
   /** Workflows without a project save through the host; the host marks its own calls. */

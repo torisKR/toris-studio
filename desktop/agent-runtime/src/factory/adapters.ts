@@ -76,6 +76,23 @@ function pinnedBinary(env: NodeJS.ProcessEnv, tool: ToolId): string | null {
   } catch { return null; }
 }
 
+export const TOOL_MISSING = "도구를 실행하지 않았습니다";
+
+export type HostTool = (tool: string, args: string[], cwd: string, signal: AbortSignal) => Promise<ToolResult>;
+
+/** Real factory runs. The host process spawns the pinned binary; this process does not. */
+export function hostRunner(host: HostTool | undefined): ToolRunner {
+  return {
+    which() { return host ? { path: "host" } : null; },
+    run(invocation, cwd, signal) {
+      const canonical = canonicalInvocation(invocation);
+      if (!canonical) return Promise.resolve({ exit: null, log: "허용되지 않은 인자입니다." });
+      if (!host) return Promise.resolve({ exit: null, log: `${TOOL_MISSING}: ${invocation.tool}` });
+      return host(canonical.tool, canonical.args, cwd, signal);
+    },
+  };
+}
+
 export function envRunner(env: NodeJS.ProcessEnv = process.env): ToolRunner {
   return {
     which(tool) {
@@ -110,8 +127,6 @@ export function scriptedRunner(results: Partial<Record<ToolId, ToolResult | ((in
     },
   };
 }
-
-export const TOOL_MISSING = "도구를 실행하지 않았습니다";
 
 export type TaskOutcome = { status: "passed" | "failed" | "blocked" | "cancelled"; message: string; hashes: string[] };
 

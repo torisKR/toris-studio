@@ -40,12 +40,14 @@
    "paths": [
     "desktop/src/factory/**",
     "desktop/src-tauri/src/factory.rs",
-    "desktop/src-tauri/src/factory_native.rs"
+    "desktop/src-tauri/src/factory_exec.rs",
+    "desktop/src-tauri/src/factory_native.rs",
+    "scripts/verify-factory-ui.mjs"
    ],
    "verify": [
     "pnpm agent:test",
     "node --import tsx --test tests/factory-ui.test.ts tests/workspace-navigation.test.ts",
-    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib factory::"
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --no-default-features --lib factory"
    ],
    "mutants": [
     "desktop/agent-runtime/test/mutants.json"

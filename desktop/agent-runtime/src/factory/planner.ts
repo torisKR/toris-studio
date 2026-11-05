@@ -103,6 +103,10 @@ function dependencies(id: TaskId, ids: TaskId[]): TaskId[] {
   return deps;
 }
 
+export function declaredDeps(id: TaskId): readonly TaskId[] {
+  return DEPS[id];
+}
+
 export function jobKey(project: string, specRevision: number, taskId: TaskId, inputHash: string, adapterVersion: string): string {
   return createHash("sha256").update([project, String(specRevision), taskId, inputHash, adapterVersion].join("\0")).digest("hex");
 }
