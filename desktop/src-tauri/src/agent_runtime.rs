@@ -457,6 +457,21 @@ impl AgentRuntime {
                     if let Some(tx) = ready.take() {
                         let _ = tx.send(());
                     }
+                } else if value["event"] == "factory.tool" {
+                    let this = Arc::clone(&this);
+                    let request = value;
+                    tokio::spawn(async move {
+                        let projects_root = (this.config)()
+                            .ok()
+                            .and_then(|cfg| cfg["projectsRoot"].as_str().map(str::to_string))
+                            .unwrap_or_default();
+                        let outcome = tokio::task::spawn_blocking(move || crate::factory_exec::from_event(&request, &projects_root))
+                            .await
+                            .unwrap_or_else(|_| json!({"callId": "", "exit": null, "log": "도구를 실행하지 않았습니다: 도구 실행이 중단되었습니다."}));
+                        let _ = this
+                            .send("factory.tool-result", outcome, Duration::from_secs(30))
+                            .await;
+                    });
                 } else if value["event"].is_string() {
                     this.emit(value);
                 }

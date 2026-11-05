@@ -4,7 +4,7 @@ import type { PendingAction, RunSummary } from "../agent-client";
 export type FactoryGateName = "plan" | "code" | "asset" | "model3d" | "gameplay" | "android" | "release";
 export type FactoryGateStatus = "passed" | "failed" | "blocked" | "not_run";
 export type FactoryGate = { name: FactoryGateName; status: FactoryGateStatus; detail: string; required: boolean };
-export type FactoryJobView = { taskId: string; status: string; message: string; approval: "automatic" | "explicit" };
+export type FactoryJobView = { taskId: string; status: string; message: string; approval: "automatic" | "explicit"; deps: string[] };
 export type FactorySpecView = {
   title: string;
   slug: string;
@@ -47,6 +47,33 @@ export function verdictLabel(verdict: FactoryReport["verdict"]): string {
   }
 }
 
+export function taskStatusLabel(status: string): string {
+  switch (status) {
+    case "queued": return "대기";
+    case "running": return "실행 중";
+    case "waiting_approval": return "승인";
+    case "passed": return "통과";
+    case "failed": return "실패";
+    case "blocked": return "차단";
+    case "cancelled": return "취소";
+    case "interrupted": return "중단";
+    default: return "대기";
+  }
+}
+
+export function gateStatusLabel(status: FactoryGateStatus): string {
+  switch (status) {
+    case "passed": return "통과";
+    case "failed": return "실패";
+    case "blocked": return "차단";
+    case "not_run": return "실행 안 함";
+    default: {
+      const neverStatus: never = status;
+      return neverStatus;
+    }
+  }
+}
+
 export function gateLabel(name: FactoryGateName): string {
   switch (name) {
     case "plan": return "계획";
@@ -85,7 +112,13 @@ export function parseFactoryReport(summary: string): FactoryReport | null {
       model: typeof raw.model === "string" ? raw.model : "",
       spec: isRecord(raw.spec) ? raw.spec as FactorySpecView : null,
       project: typeof raw.project === "string" ? raw.project : "",
-      jobs: raw.jobs.filter(isRecord).map(job => ({ taskId: String(job.taskId ?? ""), status: String(job.status ?? ""), message: String(job.message ?? ""), approval: job.approval === "explicit" ? "explicit" : "automatic" })),
+      jobs: raw.jobs.filter(isRecord).map(job => ({
+        taskId: String(job.taskId ?? ""),
+        status: String(job.status ?? ""),
+        message: String(job.message ?? ""),
+        approval: job.approval === "explicit" ? "explicit" as const : "automatic" as const,
+        deps: Array.isArray(job.deps) ? job.deps.filter((dep): dep is string => typeof dep === "string") : [],
+      })),
       gates,
       verdict: raw.verdict,
       costUsd: typeof raw.costUsd === "number" ? raw.costUsd : 0,

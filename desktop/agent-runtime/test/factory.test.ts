@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { canonicalInvocation, missingTool, scriptedRunner, toolInvocation } from "../src/factory/adapters.js";
+import { canonicalInvocation, hostRunner, missingTool, scriptedRunner, toolInvocation } from "../src/factory/adapters.js";
 import { fingerprint, fingerprintMatches } from "../src/factory/artifacts.js";
 import { factorySummary } from "../src/factory/graph.js";
 import { newJob, reconcileJobs } from "../src/factory/jobs.js";
@@ -16,7 +16,7 @@ import { pngAlphaProblem, unexpectedPermissions, verdictOf } from "../src/factor
 import { RunManager } from "../src/graph/runs.js";
 import { defaultWorkflows } from "../src/harness/registry.js";
 import { RoleModel } from "../src/harness/testing.js";
-import { parseSettings } from "../src/runtime.js";
+import { parseSettings, toolResultOf } from "../src/runtime.js";
 import { validateCommand } from "../src/tools/terminal.js";
 import type { ChatModel } from "../src/llm/types.js";
 
@@ -204,6 +204,30 @@ async function run(root: string, model: ChatModel, input: Record<string, unknown
   manager.shutdown();
   return { ...JSON.parse(view.summary), message: events.join("\n"), phase: view.phase };
 }
+
+test("the host runner refuses arguments it did not pin and a null exit stays null", async () => {
+  const calls: string[][] = [];
+  const runner = hostRunner(async (_tool, args) => { calls.push(args); return { exit: 0, log: "" }; });
+  assert.ok(runner.which("gradle_build"));
+  const signal = new AbortController().signal;
+  const bad = await runner.run({ tool: "gradle_build", args: ["tasks"] }, "/tmp/game", signal);
+  assert.equal(bad.exit, null);
+  assert.match(bad.log, /허용되지 않은 인자/);
+  assert.equal(calls.length, 0);
+  const good = await runner.run(toolInvocation("gradle_build"), "/tmp/game", signal);
+  assert.equal(good.exit, 0);
+  assert.deepEqual(calls, [["assembleDebug"]]);
+  assert.equal(hostRunner(undefined).which("godot_import"), null);
+  assert.equal(toolResultOf({ exit: null, log: "도구를 실행하지 않았습니다: godot_import" }).exit, null);
+  assert.equal(toolResultOf({ exit: 0, log: "ok" }).exit, 0);
+});
+
+test("preview jobs keep the planner edges", () => {
+  const preview = previewFactory({ brief: BRIEF, kind: "app", view: "ui", orientation: "portrait" }, "app");
+  const android = preview.jobs.find(job => job.taskId === "android-debug-build");
+  assert.ok(android?.deps.includes("screen-core"));
+  assert.equal(android?.status, "queued");
+});
 
 test("coding remains registered beside the factory workflows", () => {
   const ids = defaultWorkflows().list().map(item => item.id);

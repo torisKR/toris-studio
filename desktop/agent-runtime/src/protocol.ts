@@ -82,4 +82,6 @@ export type RunEvent = {
 export type LogEvent = { event: "log"; level: "info" | "warn" | "error"; message: string };
 export type IndexEvent = { event: "index"; project: string; phase: "scanning" | "embedding" | "done" | "failed"; done: number; total: number; message: string };
 export type ReadyEvent = { event: "ready"; version: string };
-export type OutboundEvent = RunEvent | LogEvent | IndexEvent | ReadyEvent;
+/** Host-only. Rust runs the pinned command and answers with `factory.tool-result`. */
+export type FactoryToolEvent = { event: "factory.tool"; callId: string; tool: string; args: string[]; cwd: string; projectsRoot: string };
+export type OutboundEvent = RunEvent | LogEvent | IndexEvent | ReadyEvent | FactoryToolEvent;

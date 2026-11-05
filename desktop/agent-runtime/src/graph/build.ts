@@ -43,6 +43,8 @@ export interface RunContext {
   approve(action: PendingAction, message: string): Promise<ApprovalDecision>;
   search(query: string): Promise<string>;
   files(): string[];
+  /** Desktop host runs one pinned factory command. Unit tests leave this unset. */
+  hostTool?(tool: string, args: string[], cwd: string, signal: AbortSignal): Promise<{ exit: number | null; log: string }>;
 }
 
 export async function ask(ctx: RunContext, system: string, messages: ChatMessage[]): Promise<Record<string, unknown>> {
