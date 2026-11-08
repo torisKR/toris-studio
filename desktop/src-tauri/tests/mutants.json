@@ -1,5 +1,13 @@
 [
  {
+  "id": "rs.browser-handoff-invalid-capacity",
+  "file": "desktop/browser-runtime/policy.mjs",
+  "find": "  if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('invalid_capacity');",
+  "replace": "  // capacity validation removed",
+  "cmd": ["node", "--test", "desktop/browser-runtime/policy.test.mjs"],
+  "timeoutMs": 30000
+ },
+ {
   "id": "rs.compose-all-interfaces",
   "file": "infrastructure/agent-vector-db/compose.yaml",
   "find": "\"127.0.0.1:18765:8000\"",

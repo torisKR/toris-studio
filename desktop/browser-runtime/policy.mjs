@@ -16,6 +16,7 @@ export function classifyUrl(value) {
   return { url: url.href, auth: authHost || authPath || authParams };
 }
 export function createHandoff(emit, { now = Date.now, ttlMs = 30_000, capacity = 256 } = {}) {
+  if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('invalid_capacity');
   const sent = new Map();
   return value => {
     const { url, auth } = classifyUrl(value);

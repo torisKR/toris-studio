@@ -21,6 +21,21 @@ test('handoff deduplicates only identical auth URLs, bounds memory and expires e
   now = 11; assert.equal(handoff('https://accounts.google.com/o/oauth2/auth?state=secret'), true);
   assert.equal(seen.length, 3);
 });
+test('handoff rejects invalid capacity before it can hang or grow without bounds', async () => {
+  const { createHandoff } = await import('./policy.mjs');
+  for (const capacity of [0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, '2']) {
+    assert.throws(() => createHandoff(() => {}, { capacity }), /invalid_capacity/);
+  }
+});
+test('handoff evicts the oldest URL when its capacity is reached', async () => {
+  const { createHandoff } = await import('./policy.mjs');
+  const seen = [];
+  const handoff = createHandoff(url => seen.push(url), { now: () => 0, capacity: 1 });
+  assert.equal(handoff('https://example.com/login?a=1'), true);
+  assert.equal(handoff('https://example.com/login?a=2'), true);
+  assert.equal(handoff('https://example.com/login?a=1'), true);
+  assert.equal(seen.length, 3);
+});
 test('encoded auth path, case-insensitive query, callbacks and login pages use system', async () => {
  const {classifyUrl}=await import('./policy.mjs');
  for(const url of ['https://example.com/%6f%61uth/authorize','https://example.com/path?CLIENT_ID=a','https://example.com/cb?state=s&code=c','https://example.com/cb?STATE=s&ACCESS_TOKEN=t','https://example.com/login','https://example.com/auth'])assert.equal(classifyUrl(url).auth,true,url);
