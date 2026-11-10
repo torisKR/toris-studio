@@ -1,5 +1,19 @@
 [
  {
+  "id": "media.zlib-obsolete-url",
+  "file": "desktop/src-tauri/resources/media/sources.json",
+  "find": "https://zlib.net/fossils/zlib-1.3.2.tar.gz",
+  "replace": "https://zlib.net/zlib-1.3.2.tar.gz",
+  "cmd": ["node", "--test", "scripts/prepare-media.test.mjs"]
+ },
+ {
+  "id": "media.download-diagnostics-hidden",
+  "file": "scripts/prepare-media.mjs",
+  "find": "(fetch ${fetchFailure}; curl ${curlFailure})",
+  "replace": "(download error)",
+  "cmd": ["node", "--test", "scripts/prepare-media.test.mjs"]
+ },
+ {
   "id": "rs.compose-all-interfaces",
   "file": "infrastructure/agent-vector-db/compose.yaml",
   "find": "\"127.0.0.1:18765:8000\"",
