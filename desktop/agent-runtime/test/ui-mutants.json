@@ -42,8 +42,8 @@
 {
  "id": "ui.pipeline-status-fabricated",
  "file": "desktop/src/reason/pipeline-client.ts",
- "find": "if (s.stage !== STAGES[index] || !STATUSES.includes(s.status as StageStatus)) return null;",
- "replace": "if (s.stage !== STAGES[index]) return null;",
+ "find": "if (s.stage !== order[index] || !STATUSES.includes(s.status as StageStatus)) return null;",
+ "replace": "if (s.stage !== order[index]) return null;",
  "cmd": ["node", "--import", "tsx", "--test", "tests/reason-pipeline-client.test.ts"]
 },
 {
@@ -253,5 +253,19 @@
    "scripts/verify-production-ui.mjs"
   ],
   "timeoutMs": 300000
- }
+ },
+{
+ "id": "ui.reason-project-relative-path",
+ "file": "desktop/src/reason/agent-launch-client.ts",
+ "find": "if (!typed.startsWith(\"/\") && !typed.startsWith(\"~/\")) throw",
+ "replace": "if (false) throw",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/reason-project-client.test.ts"]
+},
+{
+ "id": "ui.reason-project-folder-from-window",
+ "file": "desktop/src/reason/pipeline-client.ts",
+ "find": "assignees.map(assignee => assignee ? onRoster(assignee, peers) : null), projectSessionId };",
+ "replace": "assignees.map(assignee => assignee ? onRoster(assignee, peers) : null), projectSessionId, folder: \"/Users/toris\" };",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/reason-project-client.test.ts"]
+}
 ]

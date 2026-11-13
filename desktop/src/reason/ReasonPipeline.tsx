@@ -2,9 +2,10 @@ import { LoaderCircle, Send, Workflow } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { nativeInvoke, type BridgeInvoke } from "../ai-client";
 import {
-  createPipeline, listPipelines, sendStage, STAGE_LABELS, STAGES, STATUS_LABELS, updatePipeline,
+  createPipeline, listPipelines, sendStage, STAGE_LABELS, stageLabel, STAGES, stagesFor, STATUS_LABELS, updatePipeline,
   type PipelineAction, type PipelineView, type Stage
 } from "./pipeline-client";
+import { ProjectStudio } from "./ProjectStudio";
 import type { NetworkSnapshot, ReasonPeer } from "./types";
 
 const REPLY_POLL_MS = 60_000;
@@ -63,8 +64,11 @@ export function ReasonPipeline({ active, snapshot, onRefresh, call = nativeInvok
     if (created) { setBrief(""); setAssignees(noAssignees()); }
   };
   const locked = busy || !connected;
+  const added = (view: PipelineView) => setViews(current => [view, ...current.filter(item => item.id !== view.id)]);
 
-  return <section className="reason-pipeline" aria-labelledby="reason-pipeline-title">
+  return <>
+  <ProjectStudio snapshot={snapshot} locked={busy} call={call} onCreated={added} onRefresh={onRefresh} />
+  <section className="reason-pipeline" aria-labelledby="reason-pipeline-title">
     <div className="reason-section-heading"><h3 id="reason-pipeline-title"><Workflow size={15} />단계별 작업 맡기기</h3><span>디자인 → 기획 → 개발 → 음향 → 배포</span></div>
     <p className="reason-note">단계마다 연결된 에이전트 하나를 정하면, 앞 단계의 답장을 다음 단계 요청에 인용해 이어 갑니다. 요청은 보낼 내용을 확인하고 승인할 때만 전송됩니다.</p>
     {error && <p className="reason-alert" role="alert">{error}</p>}
@@ -80,7 +84,8 @@ export function ReasonPipeline({ active, snapshot, onRefresh, call = nativeInvok
     </form>
     {views.map(view => <PipelineCard key={view.id} view={view} peers={peers} locked={locked} busy={busy}
       onAction={action => act(view, action)} onSend={deployApproved => void perform(() => sendStage(view, deployApproved, call))} />)}
-  </section>;
+  </section>
+  </>;
 }
 
 type CardProps = {
@@ -95,28 +100,32 @@ function PipelineCard({ view, peers, locked, busy, onAction, onSend }: CardProps
   const send = () => { onSend(deployApproved); setDeployApproved(false); };
   const done = view.cancelled || view.current === null;
   const name = (address: string | null) => peers.find(peer => peer.id === address)?.name ?? address ?? "담당자 없음";
+  const label = (stage: Stage) => stageLabel(view.kind, stage);
+  // A project's development stage belongs to its own implementation agent only.
+  const choices = (stage: Stage) => view.project && stage === "development" ? peers.filter(peer => peer.name === view.project!.agentName) : peers;
   const next = view.next, isDeploy = next?.stage === "deploy";
   // The stage just before an untouched current stage can still be taken back.
   const lastDone = (stage: Stage) => {
-    const following = view.stages[STAGES.indexOf(stage) + 1];
+    const following = view.stages[stagesFor(view.kind).indexOf(stage) + 1];
     return !!following && view.current === following.stage && following.status === "pending";
   };
-  return <article className="reason-message reason-pipeline-card" aria-label={"단계 파이프라인: " + view.brief.slice(0, 40)}>
-    <header><div><strong>{view.brief}</strong></div>
-      <span className="reason-pipeline-state">{view.cancelled ? "취소됨" : view.current ? STAGE_LABELS[view.current] + " 단계" : "모든 단계 완료"}</span></header>
+  return <article className="reason-message reason-pipeline-card" aria-label={(view.kind === "project" ? "프로젝트 파이프라인: " : "단계 파이프라인: ") + view.brief.slice(0, 40)}>
+    <header><div><strong>{view.brief}</strong>
+      {view.project && <small className="reason-project-meta">{[view.project.name, view.project.branch, view.project.agentModel].filter(Boolean).join(" · ")} · <code title={view.project.folder}>{view.project.folder}</code></small>}</div>
+      <span className="reason-pipeline-state">{view.cancelled ? "취소됨" : view.current ? label(view.current) + " 단계" : "모든 단계 완료"}</span></header>
     <ol className="reason-stages">{view.stages.map(stage => {
       const current = !done && view.current === stage.stage;
       return <li key={stage.stage} className={current ? "current" : undefined} aria-current={current ? "step" : undefined}>
-        <div className="reason-stage-row"><strong>{STAGE_LABELS[stage.stage]}</strong><span>{STATUS_LABELS[stage.status]}</span></div>
+        <div className="reason-stage-row"><strong>{label(stage.stage)}</strong><span>{STATUS_LABELS[stage.status]}</span></div>
         {stage.status === "pending" && !done
-          ? <PeerSelect id={view.id + "-" + stage.stage} label={STAGE_LABELS[stage.stage] + " 담당 변경"} value={stage.assignee ?? ""} peers={peers} disabled={locked}
+          ? <PeerSelect id={view.id + "-" + stage.stage} label={label(stage.stage) + " 담당 변경"} value={stage.assignee ?? ""} peers={choices(stage.stage)} disabled={locked}
               onChange={value => { if (value) onAction({ type: "assign", stage: stage.stage, assignee: value }); }} />
           : <small>{name(stage.assignee)}</small>}
         {stage.reply && <blockquote>{stage.reply}</blockquote>}
         {!done && <div className="reason-actions">
-          {current && stage.status === "pending" && <button type="button" className="social-button compact" disabled={locked} onClick={() => onAction({ type: "skip", stage: stage.stage })}>이 단계 건너뛰기</button>}
+          {current && stage.status === "pending" && !(view.kind === "project" && stage.stage === "development") && <button type="button" className="social-button compact" disabled={locked} onClick={() => onAction({ type: "skip", stage: stage.stage })}>이 단계 건너뛰기</button>}
           {((current && stage.status === "waiting") || (["replied", "skipped"].includes(stage.status) && lastDone(stage.stage)))
-            && <button type="button" className="social-button compact" disabled={locked} onClick={() => onAction({ type: "reset", stage: stage.stage })}>{STAGE_LABELS[stage.stage]} 단계 되돌리기</button>}
+            && <button type="button" className="social-button compact" disabled={locked} onClick={() => onAction({ type: "reset", stage: stage.stage })}>{label(stage.stage)} 단계 되돌리기</button>}
         </div>}
       </li>;
     })}</ol>
@@ -127,8 +136,8 @@ function PipelineCard({ view, peers, locked, busy, onAction, onSend }: CardProps
         <button type="button" className="social-button compact" disabled={locked} onClick={() => onAction({ type: "attach", stage: view.current!, messageId: candidate.id })}>이 답장으로 진행</button>
       </div>)}
     </div>}
-    {next && <div className="reason-pipeline-approval" role="group" aria-label={STAGE_LABELS[next.stage] + " 단계 전송 승인"}>
-      <strong>{STAGE_LABELS[next.stage]} 단계 요청 · 받는 에이전트 {name(next.assignee)}</strong>
+    {next && <div className="reason-pipeline-approval" role="group" aria-label={label(next.stage) + " 단계 전송 승인"}>
+      <strong>{label(next.stage)} 단계 요청 · 받는 에이전트 {name(next.assignee)}</strong>
       {next.resend && <p className="reason-alert" role="alert">이전 전송이 도착했는지 확인하지 못했습니다. 다시 보내면 상대에게 같은 요청이 두 번 갈 수 있습니다.</p>}
       <pre className="reason-message-text">{next.text}</pre>
       {isDeploy && <label className="reason-deploy-approve"><input type="checkbox" checked={deployApproved} disabled={locked} onChange={event => setDeployApproved(event.target.checked)} />

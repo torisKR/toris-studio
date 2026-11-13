@@ -107,3 +107,11 @@
   .reason-actions > button { flex: 1 1 auto; }
   .reason-footer small { margin-left: 0; }
 }
+.reason-project { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--social-line); border-radius: 10px; }
+.reason-project .reason-section-heading h3 { display: flex; align-items: center; gap: 6px; }
+.reason-message-form input[type="text"] { width: 100%; min-width: 0; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-inset); color: var(--social-text); padding: 10px 12px; font: inherit; font-size: 13px; }
+.reason-project-path .reason-launcher-pick input { flex: 1 1 240px; width: auto; }
+.reason-project-session { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--social-line); border-radius: 8px; font-size: 12px; min-width: 0; }
+.reason-project-session span, .reason-project-session code, .reason-project-meta { color: var(--social-muted); overflow-wrap: anywhere; }
+.reason-project-meta { display: block; margin-top: 4px; font-size: 12px; }
+.reason-fixed-assignee { display: block; padding: 12px; border: 1px dashed var(--social-line); border-radius: 8px; font-size: 13px; color: var(--social-muted); overflow-wrap: anywhere; }

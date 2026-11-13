@@ -87,6 +87,7 @@ macro_rules! app_command_registry {
             [crate::reason_native] reason_agent_launch,
             [crate::reason_native] reason_agent_stop,
             [crate::reason_native] reason_agent_list,
+            [crate::reason_native] reason_project_start,
             [crate::desktop] get_settings,
             [crate::desktop] get_keychain_status,
             [crate::desktop] retry_keychain_access,

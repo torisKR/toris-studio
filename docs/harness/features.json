@@ -3,7 +3,7 @@
  "features": [
   {
    "id": "reason-network",
-   "label": "Reason Network 에이전트 연결, 단계 파이프라인, 개발 에이전트 실행, 영상 요청",
+   "label": "Reason Network 에이전트 연결, 앱 프로젝트(기획·디자인·구현) 파이프라인, 개발 에이전트 실행, 영상 요청",
    "paths": [
     "desktop/src/reason/**",
     "desktop/src-tauri/src/reason*.rs",
@@ -11,11 +11,12 @@
     "desktop/src-tauri/examples/reason_network_probe.rs",
     "tests/reason-network-client.test.ts",
     "tests/reason-pipeline-client.test.ts",
+    "tests/reason-project-client.test.ts",
     "scripts/verify-reason-network-ui.mjs",
     "docs/REASON_NETWORK.md"
    ],
    "verify": [
-    "node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts",
+    "node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts tests/reason-project-client.test.ts",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test reason_video_contract --test reason_network_contract --test reason_pipeline_contract --test reason_agents_contract",
     "node scripts/verify-reason-network-ui.mjs"
    ],

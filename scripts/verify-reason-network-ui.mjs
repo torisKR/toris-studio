@@ -41,7 +41,12 @@ let state = "connected", refreshFails = false, responseNull = false;
 const STAGE_IDS = ["design", "planning", "development", "audio", "deploy"];
 let pipeline = null, deployFailsOnce = true, agentSessions = [], launchCancelled = true;
 const agentDraft = { kind: "codex", folder: "/Users/qa/projects/demo", branch: "main", name: "mac-mini-codex-demo" };
-const pipelineView = () => {
+const PROJECT_STAGE_IDS = ["planning", "spec", "design", "development"];
+const projectSession = { id: "project-session-1", kind: "claude", folder: "/Users/qa/projects/todo-app", branch: "main", name: "mac-mini-claude-todo-app-9f3c", model: "Claude Opus 5.5 · effort medium", running: true, exitCode: null };
+let projectPipeline = null, projectStartCancelled = true;
+const pipelines = () => [pipeline, projectPipeline].filter(Boolean);
+const byId = id => pipelines().find(p => p.id === id);
+const pipelineView = pipeline => {
   const row = pipeline.stages.find(stage => !["replied", "skipped"].includes(stage.status));
   const quoted = pipeline.stages.filter(stage => stage.reply).map(stage => "> " + stage.reply).join("\n");
   const next = !pipeline.cancelled && row?.assignee && ["pending", "uncertain"].includes(row.status)
@@ -100,24 +105,39 @@ try {
       return { messageIds: ["result-sent-1"] };
     }
     if (command === "copy_text") { copies.push(args.text); return null; }
-    if (command === "reason_pipeline_list") return pipeline ? [pipelineView()] : [];
+    if (command === "reason_pipeline_list") return pipelines().map(p => pipelineView(p));
+    if (command === "reason_project_start") {
+      assert.deepEqual(args, { input: { path: "~/projects/todo-app" } }, "the page sends only the typed path");
+      if (projectStartCancelled) return { cancelled: true };
+      return { cancelled: false, reused: false, session: structuredClone(projectSession), sessions: [structuredClone(projectSession)] };
+    }
+    if (command === "reason_pipeline_create" && args.input.projectSessionId) {
+      assert.deepEqual(Object.keys(args.input), ["brief", "assignees", "projectSessionId"], "the page never supplies the folder");
+      assert.equal(args.input.projectSessionId, projectSession.id);
+      projectPipeline = { id: "project-1", identity: "fixture", brief: args.input.brief, createdAt: "2026-11-13T06:00:00.000Z", cancelled: false, kind: "project",
+        project: { folder: projectSession.folder, name: "todo-app", branch: "main", agentName: projectSession.name, agentModel: projectSession.model, snapshot: "- 감지한 구성: Flutter/Dart" },
+        stages: PROJECT_STAGE_IDS.map((stage, index) => ({ stage, assignee: args.input.assignees[index], status: "pending", sendKey: null, sentId: null, sentAt: null, replyId: null, reply: null })) };
+      return pipelineView(projectPipeline);
+    }
     if (command === "reason_pipeline_create") {
       assert.deepEqual(Object.keys(args.input), ["brief", "assignees"]);
       pipeline = { id: "pipe-1", identity: "fixture", brief: args.input.brief, createdAt: "2026-11-13T05:00:00.000Z", cancelled: false,
         stages: STAGE_IDS.map((stage, index) => ({ stage, assignee: args.input.assignees[index], status: "pending", sendKey: null, sentId: null, sentAt: null, replyId: null, reply: null })) };
-      return pipelineView();
+      return pipelineView(pipeline);
     }
     if (command === "reason_pipeline_update") {
+      const pipeline = byId(args.input.pipelineId);
       const { action } = args.input, row = pipeline.stages.find(stage => stage.stage === action.stage);
-      assert.equal(args.input.pipelineId, "pipe-1");
+      assert.ok(pipeline);
       if (action.type === "cancel") pipeline.cancelled = true;
       else if (action.type === "skip") row.status = "skipped";
       else if (action.type === "assumeSent") row.status = "waiting";
       else throw new Error("unexpected pipeline action: " + action.type);
-      return pipelineView();
+      return pipelineView(pipeline);
     }
     if (command === "reason_pipeline_send") {
       assert.deepEqual(Object.keys(args.input), ["pipelineId", "stage", "digest", "deployApproved"], "the page never supplies message text");
+      const pipeline = byId(args.input.pipelineId);
       const row = pipeline.stages.find(stage => stage.stage === args.input.stage);
       assert.equal(args.input.digest, "digest-" + row.stage);
       if (row.stage === "deploy") {
@@ -125,7 +145,7 @@ try {
         if (deployFailsOnce) { deployFailsOnce = false; row.status = "uncertain"; throw new Error("전송 여부가 불확실할 수 있으므로 자동 재전송하지 않았습니다."); }
       }
       row.status = "waiting"; row.sentId = "sent-stage";
-      return pipelineView();
+      return pipelineView(pipeline);
     }
     if (command === "reason_agent_list") return structuredClone(agentSessions);
     if (command === "reason_agent_launch") {
@@ -228,6 +248,69 @@ try {
   await card.getByRole("button", { name: "파이프라인 취소", exact: true }).click();
   await card.getByText("취소됨", { exact: true }).waitFor();
   assert.equal(count("reason_pipeline_send"), 2);
+
+  // App project: typed path -> host confirmation -> Opus implementation agent; Muse drafts, OpenAI Dots specifies.
+  const project = panel.getByRole("region", { name: "앱 프로젝트", exact: true });
+  await project.getByText(/Claude Opus 5.5 · effort medium/).first().waitFor();
+  await project.getByLabel("프로젝트 경로", { exact: true }).fill("projects/relative");
+  await project.getByRole("button", { name: "프로젝트 열기", exact: true }).click();
+  await project.getByText(/전체 경로를 입력하세요/).waitFor();
+  assert.equal(count("reason_project_start"), 0, "a relative path never reaches the host");
+  await project.getByLabel("프로젝트 경로", { exact: true }).fill("~/projects/todo-app");
+  await project.getByRole("button", { name: "프로젝트 열기", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".reason-project .social-spin"));
+  assert.equal(count("reason_project_start"), 1);
+  assert.equal(await project.getByLabel("만들고 싶은 것", { exact: true }).count(), 0, "a cancelled host confirmation starts nothing");
+  projectStartCancelled = false;
+  await project.getByRole("button", { name: "프로젝트 열기", exact: true }).click();
+  await project.getByText(projectSession.name, { exact: true }).waitFor();
+  await project.getByText("구현 에이전트 등록 대기 중", { exact: true }).waitFor();
+  const projectPeers = [
+    { id: "toris/openai-dots@cloud", name: "OpenAI Dots", kind: "dots", machine: "cloud", cwd: null, branch: null, busy: false },
+    { id: "toris/" + projectSession.name + "@mac-mini", name: projectSession.name, kind: "claude-code", machine: "mac-mini", cwd: projectSession.folder, branch: "main", busy: false }
+  ];
+  peers.push(...projectPeers);
+  await refresh();
+  await project.getByText(/연결됨/).waitFor();
+  assert.equal(await project.getByLabel("프로젝트 기획 초안 담당", { exact: true }).inputValue(), "toris/muse@cloud", "Muse is suggested for the draft plan");
+  assert.equal(await project.getByLabel("프로젝트 기획 확정 담당", { exact: true }).inputValue(), "toris/openai-dots@cloud", "OpenAI Dots is suggested for the spec");
+  await project.getByLabel("만들고 싶은 것", { exact: true }).fill("할 일 앱에 반복 일정 추가");
+  await project.getByRole("button", { name: "프로젝트 파이프라인 만들기", exact: true }).click();
+  const projectCard = panel.getByRole("article", { name: "프로젝트 파이프라인: 할 일 앱에 반복 일정 추가", exact: true });
+  const projectApproval = stage => projectCard.getByRole("group", { name: stage + " 단계 전송 승인", exact: true });
+  await projectApproval("기획 초안").waitFor();
+  assert.deepEqual(last("reason_pipeline_create").args, { input: { brief: "할 일 앱에 반복 일정 추가",
+    assignees: ["toris/muse@cloud", "toris/openai-dots@cloud", null, projectPeers[1].id], projectSessionId: projectSession.id } });
+  await projectCard.getByText(projectSession.folder, { exact: true }).waitFor();
+  const sendsBefore = count("reason_pipeline_send");
+  await projectApproval("기획 초안").getByRole("button", { name: "승인하고 보내기", exact: true }).click();
+  await projectCard.getByText("답장 대기", { exact: true }).waitFor();
+  assert.deepEqual(last("reason_pipeline_send").args, { input: { pipelineId: "project-1", stage: "planning", digest: "digest-planning", deployApproved: false } });
+  Object.assign(projectPipeline.stages[0], { status: "replied", reply: "핵심 기능: 반복 규칙과 알림" });
+  await refresh();
+  await projectApproval("기획 확정").getByText(/> 핵심 기능: 반복 규칙과 알림/).waitFor();
+  await projectApproval("기획 확정").getByRole("button", { name: "승인하고 보내기", exact: true }).click();
+  await projectCard.getByText("답장 대기", { exact: true }).waitFor();
+  Object.assign(projectPipeline.stages[1], { status: "replied", reply: "수용 기준: 매주 반복 일정 생성" });
+  await refresh();
+  await projectCard.getByText("디자인 단계", { exact: true }).waitFor();
+  await projectCard.getByRole("button", { name: "이 단계 건너뛰기", exact: true }).click();
+  await projectApproval("개발").waitFor();
+  assert.equal(await projectCard.getByRole("button", { name: "이 단계 건너뛰기", exact: true }).count(), 0, "the project's development stage cannot be skipped");
+  assert.deepEqual(await projectCard.getByLabel("개발 담당 변경", { exact: true }).locator("option").allTextContents(),
+    ["담당 에이전트 선택", projectSession.name + " · claude-code"], "only the project's own implementation agent can develop");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await project.screenshot({ path: resolve(out, "reason-project-form.png") });
+  await projectCard.screenshot({ path: resolve(out, "reason-project-pipeline.png") });
+  await projectApproval("개발").getByRole("button", { name: "승인하고 보내기", exact: true }).click();
+  await projectCard.getByText("답장 대기", { exact: true }).waitFor();
+  assert.equal(last("reason_pipeline_send").args.input.stage, "development");
+  assert.equal(count("reason_pipeline_send"), sendsBefore + 3, "each project stage is one approved send");
+  await projectCard.getByRole("button", { name: "파이프라인 취소", exact: true }).click();
+  await projectCard.getByText("취소됨", { exact: true }).waitFor();
+  peers.splice(peers.length - projectPeers.length, projectPeers.length);
+  await refresh();
+  report.checks.push("App project: only the typed path reaches the host, a cancelled confirmation starts nothing, Muse/OpenAI Dots are suggested planners, development is locked to the project's Opus agent and cannot be skipped, each stage is one approved send.");
   report.checks.push("Stage pipeline: roster-only assignment, digest-only approval, plain-text reply quoting, separate deploy approval, no automatic resend.");
 
   // Development agent: the host picks and confirms the folder; a cancelled dialog starts nothing.

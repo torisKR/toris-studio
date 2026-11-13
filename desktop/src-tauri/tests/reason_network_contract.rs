@@ -624,10 +624,12 @@ async fn reason_pipeline_sends_only_the_approved_request_and_chains_the_reply() 
 
     let mut off_roster = vec![peer.clone(); 5];
     off_roster[2] = Some("alice/ghost@laptop".into());
-    assert!(reason_pipeline::create(client, "게임 출시", &off_roster)
-        .await
-        .is_err());
-    let created = reason_pipeline::create(client, "게임 출시", &vec![peer.clone(); 5])
+    assert!(
+        reason_pipeline::create(client, "게임 출시", &off_roster, None)
+            .await
+            .is_err()
+    );
+    let created = reason_pipeline::create(client, "게임 출시", &vec![peer.clone(); 5], None)
         .await
         .unwrap();
     let id = created.pipeline.id.clone();
@@ -712,7 +714,7 @@ async fn reason_pipeline_interrupted_or_refused_resend_stays_uncertain_with_its_
     let client = &fixture.client;
     let storage = fixture.root.path().join("studio");
     let peer = Some("alice/agent@laptop".to_string());
-    let created = reason_pipeline::create(client, "게임 출시", &vec![peer; 5])
+    let created = reason_pipeline::create(client, "게임 출시", &vec![peer; 5], None)
         .await
         .unwrap();
     let id = created.pipeline.id.clone();

@@ -3,8 +3,12 @@
 //!
 //! A served agent edits files in that folder without asking (serve runs Claude
 //! with acceptEdits and Codex in its workspace-write sandbox), so a launch is
-//! bound to one explicit pick + confirmation: the folder never comes from the
-//! webview, a model, or a network message. `--full-access` is never passed.
+//! bound to one explicit folder + native confirmation. The folder comes from the
+//! OS dialog or from a path the user typed for an app project; a typed path is
+//! only a proposal that is resolved and checked here and shown in the OS
+//! confirmation before anything starts. A model or network message never names
+//! a folder. `--full-access` is never passed. Claude sessions are pinned to
+//! Opus 5.5 at medium effort through the environment `serve` passes on.
 //! Output is discarded because it carries sender names and message excerpts.
 //! Nothing is restarted automatically. If Studio crashes, sessions it started
 //! keep running until stopped from a terminal.
@@ -19,6 +23,13 @@ use std::{
 };
 
 pub const MAX_SESSIONS: usize = 4;
+/// The implementation agent Studio starts for a project: Claude Code on Opus 5.5
+/// at medium effort. `serve` passes Studio's environment through to Claude, and
+/// Claude Code reads these two variables ahead of the user's own settings.
+pub const CLAUDE_MODEL: &str = "claude-opus-5-5";
+pub const CLAUDE_EFFORT: &str = "medium";
+pub const CLAUDE_MODEL_LABEL: &str = "Claude Opus 5.5 · effort medium";
+const MAX_PATH_INPUT: usize = 1024;
 const MAX_MACHINE: usize = 18;
 const MAX_SLUG: usize = 17;
 // Folders an agent with unprompted write access must never be given.
@@ -59,6 +70,13 @@ impl AgentKind {
             AgentKind::Codex => "Codex",
         }
     }
+    /// The fixed model a Studio-started session runs on, when Studio pins one.
+    pub fn model(self) -> Option<&'static str> {
+        match self {
+            AgentKind::Claude => Some(CLAUDE_MODEL_LABEL),
+            AgentKind::Codex => None,
+        }
+    }
 }
 
 /// What the user is asked to confirm before anything runs.
@@ -69,6 +87,7 @@ pub struct Draft {
     pub folder: String,
     pub branch: Option<String>,
     pub name: String,
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,6 +98,7 @@ pub struct AgentSession {
     pub name: String,
     pub folder: String,
     pub branch: Option<String>,
+    pub model: Option<String>,
     pub running: bool,
     pub exit_code: Option<i32>,
 }
@@ -213,9 +233,52 @@ impl ReasonAgents {
             folder: text.to_string(),
             branch: branch(&folder),
             name: session_name(machine, kind, &folder),
+            model: kind.model().map(str::to_owned),
         };
         self.inner().pending = Some(draft.clone());
         Ok(draft)
+    }
+
+    /// A project path the user typed. It is only a proposal: it is expanded and
+    /// resolved here, held to the same folder rules as a dialog pick, and still
+    /// needs the native confirmation before anything starts.
+    pub fn offer_path(&self, typed: &str, kind: AgentKind, machine: &str) -> Result<Draft, String> {
+        let typed = typed.trim();
+        if typed.is_empty() || typed.len() > MAX_PATH_INPUT || typed.chars().any(char::is_control) {
+            return Err("프로젝트 폴더 경로를 입력하세요.".into());
+        }
+        let path = match typed.strip_prefix("~/") {
+            Some(rest) => dirs::home_dir()
+                .ok_or("홈 폴더를 확인하지 못했습니다.")?
+                .join(rest),
+            None => PathBuf::from(typed),
+        };
+        if !path.is_absolute() {
+            return Err("/ 또는 ~/ 로 시작하는 전체 경로를 입력하세요.".into());
+        }
+        self.offer(&path, kind, machine)
+    }
+
+    /// A running session Studio started, by ID.
+    pub fn running(&self, id: &str) -> Option<AgentSession> {
+        let mut inner = self.inner();
+        refresh(&mut inner.sessions);
+        inner
+            .sessions
+            .iter()
+            .find(|s| s.info.id == id && s.info.running)
+            .map(|s| s.info.clone())
+    }
+
+    /// The running session of this kind already serving `folder`, if any.
+    pub fn serving(&self, kind: AgentKind, folder: &str) -> Option<AgentSession> {
+        let mut inner = self.inner();
+        refresh(&mut inner.sessions);
+        inner
+            .sessions
+            .iter()
+            .find(|s| s.info.running && s.info.kind == kind && s.info.folder == folder)
+            .map(|s| s.info.clone())
     }
 
     /// Starts the session the user confirmed. One confirmation starts at most one session.
@@ -269,6 +332,7 @@ impl ReasonAgents {
                 name: draft.name,
                 folder: draft.folder,
                 branch: draft.branch,
+                model: draft.model,
                 running: true,
                 exit_code: None,
             },
@@ -370,6 +434,11 @@ fn spawn(cli: &Path, path: &[PathBuf], draft: &Draft) -> Result<Child, String> {
         command.env("PATH", joined);
     }
     command.env("NO_COLOR", "1");
+    if draft.kind == AgentKind::Claude {
+        command
+            .env("ANTHROPIC_MODEL", CLAUDE_MODEL)
+            .env("CLAUDE_CODE_EFFORT_LEVEL", CLAUDE_EFFORT);
+    }
     command
         .spawn()
         .map_err(|_| "Reason 개발 에이전트를 시작하지 못했습니다.".into())

@@ -12,9 +12,45 @@ Toris Studio의 **Agent → Reason Network**에서 외부 에이전트와 메시
 
 설치, 로그인, 새로운 네트워크 가입은 Studio가 자동으로 실행하지 않는다. Reason의 기존 로그인과 네트워크 설정을 이용하며 Studio의 화면에 Reason 토큰을 입력하지 않는다. 연결 목록·받은 요청은 탭 활성화 또는 확인 버튼으로 갱신한다.
 
+## 앱 프로젝트: 경로 하나로 기획 → 디자인 → 구현
+
+**Agent → Reason Network → 앱 프로젝트**에서 프로젝트 경로를 넣으면 그 폴더를 대상으로 기획·디자인·앱 개발을 이어서 진행한다.
+
+1. **프로젝트 경로**에 `~/projects/my-app` 또는 `/Users/…/my-app` 같은 전체 경로를 넣고 **프로젝트 열기**를 누른다.
+2. 네이티브 계층이 경로를 실제 폴더로 해석하고(`~/` 확장, `..`·심볼릭 링크 정리) 아래 "개발 에이전트 실행"과 같은 폴더 규칙으로 검사한 뒤, 폴더·브랜치·세션 이름·모델을 보여 주는 **OS 확인 창**을 띄운다. **실행**을 눌러야 그 폴더에서 구현 에이전트가 시작된다. 같은 폴더에서 Studio가 띄운 Claude 세션이 이미 실행 중이면 확인 창 없이 그 세션을 이어서 쓴다.
+3. 구현 에이전트는 `reason network serve claude`로 실행한 Claude Code이며, 모델은 **Claude Opus 5.5 · effort medium**으로 고정한다(아래 "구현 모델 고정").
+4. **만들고 싶은 것**을 쓰고 단계 담당을 확인한 뒤 **프로젝트 파이프라인 만들기**를 누른다. 연결된 에이전트 목록에 Muse·OpenAI Dots가 있으면 각각 기획 초안·기획 확정 담당으로 미리 골라 두며, 다른 에이전트로 바꿀 수 있다.
+
+| 단계 | 기본 담당 | 하는 일 |
+| --- | --- | --- |
+| 기획 초안 | Muse | 프로젝트 현황과 브리프로 목표 사용자, 핵심 기능과 우선순위, 화면 흐름, 데이터·연동, 범위 밖, 열린 질문 |
+| 기획 확정 | OpenAI Dots | 초안을 검토·보완해 수용 기준, 화면별 요소, 데이터 모델, 구현 순서, 검증 방법이 있는 최종 명세 |
+| 디자인 | 사용자가 선택(건너뛰기 가능) | 색·서체·간격 토큰, 화면별 레이아웃과 컴포넌트, 빈 화면·로딩·오류 상태, 에셋 목록 |
+| 개발 | 이 프로젝트의 구현 에이전트(고정) | 그 폴더에서 명세와 디자인대로 구현하고 바꾼 파일, 실제 실행한 빌드·테스트 결과, 남은 일을 답장 |
+
+동작 원칙:
+
+- 각 단계 요청은 아래 "단계별 작업 맡기기"와 같은 방식으로 보낸다. 요청 전문을 확인하고 **승인하고 보내기**를 눌러야 전송되며, 앞 단계 답장은 인용으로만 이어진다.
+- 기획·디자인 요청에는 Studio가 폴더에서 직접 읽은 **프로젝트 현황**이 인용으로 들어간다: 감지한 구성(package.json, pubspec.yaml, Cargo.toml, Gradle, Xcode 등), 숨김 항목과 `node_modules`·빌드 폴더를 뺀 최상위 항목 48개까지, package.json의 이름·scripts·의존성 이름, README 앞부분 2 KiB. 전체 6 KiB 이하이며 일반 파일만 읽고 심볼릭 링크는 따라가지 않는다. 원격 에이전트에게 전송되므로 보내기 전에 전문을 확인한다.
+- 기획·디자인 요청은 문서로만 답하고 프로젝트 파일을 수정하지 말라고 명시한다. 개발 요청은 그 폴더 안에서만 작업하라고 명시한다. 모두 커밋·배포·외부 게시·결제를 하지 말라고 요청한다(상대 에이전트에 대한 요청이며 강제 수단은 아니다).
+- 개발 단계의 담당은 그 프로젝트의 구현 에이전트 세션 이름과 일치하는 주소만 허용한다. 생성·담당 변경·저장 기록 불러오기에서 모두 네이티브 계층이 검사한다. 개발 단계는 건너뛸 수 없으며, 필요 없으면 파이프라인을 취소한다.
+- 화면은 실행 중인 세션의 ID만 보낸다. 폴더·브랜치·현황은 네이티브 계층이 그 세션에서 읽어 파이프라인에 저장하므로 화면이 폴더를 바꿀 수 없다.
+- 구현 에이전트가 네트워크 목록에 등록되기 전에 파이프라인을 만들면 개발 담당이 비어 있다가, 개발 단계에서 그 에이전트를 고를 수 있다.
+
+### 구현 모델 고정
+
+`reason network serve`는 Studio의 환경 변수를 그대로 Claude Code에 넘긴다. Studio는 자신이 실행하는 Claude 세션에 다음 두 값을 지정한다.
+
+```bash
+ANTHROPIC_MODEL=claude-opus-5-5
+CLAUDE_CODE_EFFORT_LEVEL=medium
+```
+
+Claude Code는 이 환경 변수를 사용자 설정보다 먼저 적용한다. `ANTHROPIC_MODEL=claude-opus-5-5`로 실행한 `claude -p`의 응답에서 사용 모델이 `claude-opus-5-5`로 기록되는 것을 이 컴퓨터(Claude Code 2.1.323)에서 확인했다. effort 적용은 Claude Code가 응답에 노출하지 않아 직접 확인하지 못했다. Codex 세션의 모델은 바꾸지 않는다.
+
 ## 개발 에이전트 실행 (Claude Code·Codex)
 
-**개발 에이전트 실행**에서 Claude Code 또는 Codex를 고르고 **폴더 선택 후 실행**을 누르면 OS 폴더 선택 창이 열린다. 폴더를 고르면 폴더·브랜치·세션 이름을 보여 주는 OS 확인 창이 한 번 더 뜨고, 거기서 **실행**을 눌러야 시작된다. 두 창 모두 네이티브 계층이 띄우므로 화면(웹뷰)의 내용이 폴더를 정하거나 대신 승인할 수 없다. Studio가 실행하는 명령은 다음과 같다.
+**개발 에이전트 실행**에서 Claude Code(Opus 5.5 · effort medium 고정) 또는 Codex를 고르고 **폴더 선택 후 실행**을 누르면 OS 폴더 선택 창이 열린다. 폴더를 고르면 폴더·브랜치·세션 이름을 보여 주는 OS 확인 창이 한 번 더 뜨고, 거기서 **실행**을 눌러야 시작된다. 두 창 모두 네이티브 계층이 띄우므로 화면(웹뷰)의 내용이 폴더를 정하거나 대신 승인할 수 없다. Studio가 실행하는 명령은 다음과 같다.
 
 ```bash
 reason network serve codex --name <컴퓨터>-codex-<폴더>-<경로 해시 4자> --cwd <선택한 폴더> --non-interactive --no-color
@@ -174,7 +210,7 @@ reason network serve codex --name <컴퓨터>-codex-<폴더>-<경로 해시 4자
 
 ## 네이티브 연결 구조
 
-화면은 다음 열두 IPC만 호출한다. 모두 로컬 메인 창 권한을 확인한다.
+화면은 다음 열세 IPC만 호출한다. 모두 로컬 메인 창 권한을 확인한다.
 
 | IPC | 동작 |
 | --- | --- |
@@ -184,12 +220,13 @@ reason network serve codex --name <컴퓨터>-codex-<폴더>-<경로 해시 4자
 | `reason_network_video_result` | 연결된 작업의 최소 상태 요약 조회 |
 | `reason_network_send_result` | 실제 발신자 metadata에 연결한 상태 답장 전송 |
 | `reason_pipeline_list` | 현재 네트워크의 단계 파이프라인 조회, 저장된 수신 기록으로 답장 연결 (전송 없음) |
-| `reason_pipeline_create` | 브리프와 단계별 담당자로 파이프라인 생성 (전송 없음) |
+| `reason_pipeline_create` | 브리프와 단계별 담당자로 파이프라인 생성 (전송 없음). `projectSessionId`가 있으면 그 실행 중 세션의 폴더로 앱 프로젝트 파이프라인 생성 |
 | `reason_pipeline_update` | 닫힌 동작만 적용: 담당 변경·건너뛰기·되돌리기·답장 연결·보낸 것으로 간주·취소 |
 | `reason_pipeline_send` | 표시한 승인 값이 일치할 때 현재 단계 요청을 담당자에게 전송. 배포 단계는 OS 확인 창에서 승인한 뒤에만 전송 |
 | `reason_agent_launch` | 에이전트 종류만 받아 OS 폴더 선택 창과 OS 확인 창을 띄우고, 승인하면 `reason network serve` 시작 |
 | `reason_agent_stop` | 세션 중지 또는 종료된 세션 기록 닫기 |
 | `reason_agent_list` | Studio가 실행한 세션의 실행 여부와 종료 코드 |
+| `reason_project_start` | 입력한 프로젝트 경로를 검사하고 OS 확인 창에서 승인하면 그 폴더에서 Claude Code(Opus 5.5 · medium) 구현 에이전트 시작. 이미 실행 중이면 재사용 |
 
 `reason_network.rs`는 설치된 `reason-network mcp`를 shell 없이 실행한다. 진실한 MCP 클라이언트 이름 `toris-studio`와 영속적인 `REASON_NETWORK_SESSION` UUID를 사용하며, 다른 에이전트의 세션을 상속할 수 있는 환경변수를 제거한다.
 
@@ -234,7 +271,7 @@ pnpm verify:full
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
   --test reason_network_contract --test reason_video_contract --test reason_pipeline_contract \
   --test reason_agents_contract --test ipc_acl_contract
-node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts
+node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts tests/reason-project-client.test.ts
 node scripts/verify-reason-network-ui.mjs
 
 cargo run --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
@@ -247,5 +284,7 @@ cargo run --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
 - 개발 에이전트 계약 테스트는 가짜 `reason` 셸 스크립트를 실행한다. 정확한 인자와 `--full-access` 부재, 환경 변수, 선택한 폴더 외 실행 거부, 선택 후 바뀐 폴더 거부, 시스템·설정 폴더 거부, 세션 이름 충돌 방지, 세션 한도, 프로세스 그룹 종료, 세션이 죽은 뒤 남은 작업자 정리, 앱 종료 시 정리, 자동 재시작 없음을 검사한다. 실제 에이전트는 실행하지 않으며, OS 폴더 선택 창과 확인 창 자체는 자동 테스트 범위 밖이다.
 - UI 검사는 명시적인 IPC fixture다. 파이프라인은 목록의 에이전트만 배정되는지, 승인 전 전송이 없는지, 배포 체크가 필요한지, 답장이 일반 텍스트로 표시되는지를, 개발 에이전트는 화면이 에이전트 종류만 보내는지, 확인 창을 취소하면 세션이 생기지 않는지를 검사한다. 외부 대본 미리보기와 가져온 작업 열기, 작업 열기가 새 작업 생성·승인을 하지 않는지, 늦은 조회 응답이 수락된 작업 링크를 지우지 않는지, 사용자 동작 전 전송되지 않는지를 검사한다.
 - 읽기 진단 예제는 실제 설치된 엔진과 전용 세션을 확인하되 메시지를 보내거나 수신 확인하지 않는다. 모델·렌더·외부 계정 게시 검증과는 별개다.
+
+- 앱 프로젝트 계약 테스트는 4단계 순서와 단계별 요청문, 프로젝트 현황 인용, 개발 담당 고정·건너뛰기 금지, 다른 파이프라인 단계 거부, 전송 한도, 저장 형식(이전 기록 호환), 현황 수집(숨김·`node_modules`·심볼릭 링크 제외, README 정리), 입력 경로 해석과 거부, Claude 세션의 모델·effort 환경 변수를 다룬다. UI 검사는 화면이 입력 경로와 세션 ID만 보내는지, 확인 창 취소 시 아무것도 시작하지 않는지, Muse·OpenAI Dots 추천, 개발 담당 고정을 확인한다.
 
 실제 외부 AI와의 왕복, 실제 `reason network serve` 세션 실행, 실제 영상 렌더, 실제 YouTube 게시는 각각 별도로 실행한 증거가 있어야 성공했다고 보고한다. 이 문서 작성 시점에 단계 파이프라인과 개발 에이전트 실행은 실제 에이전트로 왕복한 증거가 없다.

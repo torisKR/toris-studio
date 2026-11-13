@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use toris_studio_desktop::reason_agents::{session_name, AgentKind, ReasonAgents, MAX_SESSIONS};
+use toris_studio_desktop::reason_agents::{
+    session_name, AgentKind, ReasonAgents, CLAUDE_EFFORT, CLAUDE_MODEL, CLAUDE_MODEL_LABEL,
+    MAX_SESSIONS,
+};
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -428,4 +431,109 @@ fn reason_agent_workers_left_by_a_dead_session_are_stopped_on_dismiss() {
     assert!(alive(&worker), "the worker outlived the session leader");
     assert!(fixture.agents.stop(&id).unwrap().is_empty());
     gone(&worker);
+}
+
+#[test]
+fn reason_agent_claude_runs_on_opus_5_5_at_medium_effort() {
+    std::env::set_var("ANTHROPIC_MODEL", "claude-haiku-inherited");
+    let fixture = Fixture::new("serve");
+    let draft = fixture
+        .agents
+        .offer(&fixture.project("app"), AgentKind::Claude, "Mac-Studio")
+        .unwrap();
+    assert_eq!(draft.model.as_deref(), Some(CLAUDE_MODEL_LABEL));
+    let sessions = fixture
+        .agents
+        .start(AgentKind::Claude, &draft.folder)
+        .unwrap();
+    assert_eq!(sessions[0].model.as_deref(), Some(CLAUDE_MODEL_LABEL));
+    fixture.wait_for("started.txt", 1);
+    let env = fixture.read("env.txt");
+    let lines: Vec<&str> = env.lines().collect();
+    assert!(
+        lines.contains(&"ANTHROPIC_MODEL=claude-opus-5-5"),
+        "Studio pins the implementation model over an inherited one"
+    );
+    assert!(lines.contains(&"CLAUDE_CODE_EFFORT_LEVEL=medium"));
+    assert!(!env.contains("claude-haiku-inherited"));
+    assert_eq!((CLAUDE_MODEL, CLAUDE_EFFORT), ("claude-opus-5-5", "medium"));
+    let args = fixture.read("args.txt");
+    assert!(
+        !args.contains("--full-access") && !args.contains("--model"),
+        "the model travels only in the environment: {args}"
+    );
+    std::env::remove_var("ANTHROPIC_MODEL");
+}
+
+#[test]
+fn reason_agent_typed_project_path_is_resolved_and_held_to_folder_rules() {
+    let fixture = Fixture::new("serve");
+    let folder = fixture.project("typed app");
+    let typed = format!("  {}  ", folder.to_str().unwrap());
+    let draft = fixture
+        .agents
+        .offer_path(&typed, AgentKind::Claude, "Mac-Studio")
+        .unwrap();
+    assert_eq!(draft.folder, folder.to_str().unwrap());
+    // A typed path may contain `..`; it resolves to the real folder before use.
+    let dotted = format!("{}/../typed app", folder.to_str().unwrap());
+    assert_eq!(
+        fixture
+            .agents
+            .offer_path(&dotted, AgentKind::Claude, "Mac-Studio")
+            .unwrap()
+            .folder,
+        draft.folder
+    );
+    for bad in [
+        "",
+        "   ",
+        "relative/app",
+        "~",
+        "~/",
+        "/",
+        "/etc",
+        "/no/such/folder/for/studio",
+    ] {
+        assert!(
+            fixture
+                .agents
+                .offer_path(bad, AgentKind::Claude, "Mac-Studio")
+                .is_err(),
+            "{bad:?} must be refused"
+        );
+    }
+    let control = format!("{}\n/etc", folder.to_str().unwrap());
+    assert!(fixture
+        .agents
+        .offer_path(&control, AgentKind::Claude, "Mac-Studio")
+        .is_err());
+    assert!(fixture
+        .agents
+        .offer_path(&"/a".repeat(600), AgentKind::Claude, "Mac-Studio")
+        .is_err());
+    // A typed path is only an offer: nothing starts until the confirmed start.
+    assert!(fixture.agents.list().is_empty());
+    assert!(fixture
+        .agents
+        .serving(AgentKind::Claude, &draft.folder)
+        .is_none());
+    fixture
+        .agents
+        .start(AgentKind::Claude, &draft.folder)
+        .unwrap();
+    let serving = fixture
+        .agents
+        .serving(AgentKind::Claude, &draft.folder)
+        .unwrap();
+    assert_eq!(
+        fixture.agents.running(&serving.id).unwrap().name,
+        draft.name
+    );
+    assert!(fixture
+        .agents
+        .serving(AgentKind::Codex, &draft.folder)
+        .is_none());
+    fixture.agents.stop(&serving.id).unwrap();
+    assert!(fixture.agents.running(&serving.id).is_none());
 }

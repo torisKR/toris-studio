@@ -1302,5 +1302,101 @@
    "reason_network_contract"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-model-unpinned",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": ".env(\"ANTHROPIC_MODEL\", CLAUDE_MODEL)",
+  "replace": ".env(\"ANTHROPIC_MODEL_UNUSED\", CLAUDE_MODEL)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-effort-unpinned",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": ".env(\"CLAUDE_CODE_EFFORT_LEVEL\", CLAUDE_EFFORT)",
+  "replace": ".env(\"CLAUDE_CODE_EFFORT_LEVEL\", \"high\")",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-project-dev-any-agent",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "if session_of(address) != project.agent_name {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-project-snapshot-unquoted",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "            .snapshot\n            .lines()\n            .for_each(|line| text.push_str(&format!(\"> {line}\\n\")));",
+  "replace": "            .snapshot\n            .lines()\n            .for_each(|line| text.push_str(&format!(\"{line}\\n\")));",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-project-dev-skippable",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "if p.kind == PipelineKind::Project && *stage == Stage::Development {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-project-snapshot-reads-hidden",
+  "file": "desktop/src-tauri/src/reason_project.rs",
+  "find": "(!name.starts_with('.') && !IGNORED.contains(&name.as_str()))",
+  "replace": "(true)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
  }
 ]

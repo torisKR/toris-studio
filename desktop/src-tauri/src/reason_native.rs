@@ -3,6 +3,7 @@
 use crate::reason_agents::{AgentKind, AgentSession, ReasonAgents};
 use crate::reason_network::{Message, ReasonNetwork, Receipt, Snapshot};
 use crate::reason_pipeline::{self, Action, PipelineView, Stage};
+use crate::reason_project;
 use crate::reason_video::{self, VideoRequest};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -39,6 +40,15 @@ pub struct SendInput {
 pub struct PipelineCreateInput {
     brief: String,
     assignees: Vec<Option<String>>,
+    /// A running Studio-started session; its folder is read natively, never sent by the window.
+    #[serde(default)]
+    project_session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectStartInput {
+    path: String,
 }
 
 #[derive(Deserialize)]
@@ -230,10 +240,32 @@ pub async fn reason_pipeline_list(
 pub async fn reason_pipeline_create(
     window: tauri::WebviewWindow,
     network: Network<'_>,
+    agents: Agents<'_>,
     input: PipelineCreateInput,
 ) -> Result<PipelineView, String> {
     crate::updater::authorize(&window)?;
-    reason_pipeline::create(&network, &input.brief, &input.assignees).await
+    let project = match input.project_session_id.as_deref() {
+        Some(id) => {
+            let session = agents
+                .running(id)
+                .filter(|session| session.kind == AgentKind::Claude)
+                .ok_or("실행 중인 구현 에이전트를 찾지 못했습니다. 프로젝트를 다시 열어 주세요.")?;
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    reason_project::describe(
+                        &session.folder,
+                        session.branch,
+                        &session.name,
+                        session.model,
+                    )
+                })
+                .await
+                .map_err(|_| "프로젝트 폴더를 읽지 못했습니다.".to_owned())?,
+            )
+        }
+        None => None,
+    };
+    reason_pipeline::create(&network, &input.brief, &input.assignees, project).await
 }
 
 #[tauri::command]
@@ -319,10 +351,11 @@ pub async fn reason_agent_launch(
         let path = selected.into_path().map_err(|_| "로컬 폴더를 선택하세요.".to_owned())?;
         let draft = agents.offer(&path, input.kind, &machine)?;
         let message = format!(
-            "폴더: {}\n브랜치: {}\n세션 이름: {}\n\n• 이 에이전트는 받은 요청에 따라 이 폴더의 파일을 묻지 않고 수정합니다.\n• 신뢰하는 프로젝트 폴더만 맡기세요. 폴더 안의 설정과 스크립트가 에이전트 동작에 영향을 줄 수 있습니다.\n• 같은 이름으로 답하지 못한 이전 요청이 있으면 실행 직후 그 작업부터 시작합니다.\n• Studio를 종료하면 함께 중지됩니다.",
+            "폴더: {}\n브랜치: {}\n세션 이름: {}\n모델: {}\n\n• 이 에이전트는 받은 요청에 따라 이 폴더의 파일을 묻지 않고 수정합니다.\n• 신뢰하는 프로젝트 폴더만 맡기세요. 폴더 안의 설정과 스크립트가 에이전트 동작에 영향을 줄 수 있습니다.\n• 같은 이름으로 답하지 못한 이전 요청이 있으면 실행 직후 그 작업부터 시작합니다.\n• Studio를 종료하면 함께 중지됩니다.",
             draft.folder,
             draft.branch.as_deref().unwrap_or("확인되지 않음"),
-            draft.name
+            draft.name,
+            draft.model.as_deref().unwrap_or("에이전트 기본 설정")
         );
         let title = match input.kind {
             AgentKind::Claude => "Claude Code를 이 폴더에서 실행할까요?",
@@ -336,6 +369,49 @@ pub async fn reason_agent_launch(
     })
     .await
     .map_err(|_| "폴더 선택 창을 열지 못했습니다.".to_owned())?
+}
+
+/// Opens a project by the path the user typed: the host resolves and checks the
+/// folder, shows it with the fixed implementation model in an OS confirmation,
+/// and only then starts Claude Code there. A project already served by a
+/// Studio-started Claude session is reused without a second launch.
+#[tauri::command]
+pub async fn reason_project_start(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    network: Network<'_>,
+    agents: Agents<'_>,
+    input: ProjectStartInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let self_id = network.cached().await?.self_id;
+    let machine = self_id
+        .as_deref()
+        .and_then(|id| id.split_once('@'))
+        .map(|(_, machine)| machine.to_owned())
+        .ok_or("먼저 Reason Network 연결을 확인하세요.")?;
+    let agents = agents.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let draft = agents.offer_path(&input.path, AgentKind::Claude, &machine)?;
+        if let Some(session) = agents.serving(AgentKind::Claude, &draft.folder) {
+            return Ok(json!({"cancelled": false, "reused": true, "session": session, "sessions": agents.list()}));
+        }
+        let message = format!(
+            "폴더: {}\n브랜치: {}\n세션 이름: {}\n모델: {}\n\n• 기획(Muse·OpenAI Dots)과 디자인 답장을 받은 뒤, 개발 단계 요청을 승인하면 이 에이전트가 이 폴더의 파일을 묻지 않고 수정합니다.\n• 기획 요청에는 이 폴더의 최상위 항목·package.json 요약·README 앞부분이 들어가며, 보내기 전에 전문을 확인합니다.\n• 신뢰하는 프로젝트 폴더만 맡기세요. Studio를 종료하면 함께 중지됩니다.",
+            draft.folder,
+            draft.branch.as_deref().unwrap_or("확인되지 않음"),
+            draft.name,
+            draft.model.as_deref().unwrap_or("기본값"),
+        );
+        if !confirm(&app, "이 프로젝트에서 구현 에이전트를 실행할까요?", message, "실행") {
+            return Ok(json!({"cancelled": true}));
+        }
+        let sessions = agents.start(AgentKind::Claude, &draft.folder)?;
+        let session = agents.serving(AgentKind::Claude, &draft.folder);
+        Ok(json!({"cancelled": false, "reused": false, "session": session, "sessions": sessions}))
+    })
+    .await
+    .map_err(|_| "프로젝트 확인 창을 열지 못했습니다.".to_owned())?
 }
 
 #[tauri::command]

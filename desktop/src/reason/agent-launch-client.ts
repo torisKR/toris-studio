@@ -5,7 +5,9 @@ import type { ReasonPeer } from "./types";
 export const AGENT_KINDS = ["claude", "codex"] as const;
 export type AgentKind = typeof AGENT_KINDS[number];
 export const AGENT_LABELS: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
-export type AgentSession = { kind: AgentKind; folder: string; branch: string | null; name: string; id: string; running: boolean; exitCode: number | null };
+export type AgentSession = { kind: AgentKind; folder: string; branch: string | null; name: string; id: string; running: boolean; exitCode: number | null; model: string | null };
+/** The implementation model Studio pins for Claude Code sessions it starts. */
+export const IMPLEMENTATION_MODEL = "Claude Opus 5.5 · effort medium";
 export type SessionState = "registering" | "connected" | "exited";
 
 type Rec = Record<string, unknown>;
@@ -22,7 +24,7 @@ export function normalizeSessions(value: unknown): AgentSession[] {
     if (!str(r.id) || !str(r.folder) || !str(r.name) || typeof r.running !== "boolean") return [];
     try {
       return [{ kind: agentKind(r.kind), folder: str(r.folder), branch: str(r.branch) || null, name: str(r.name),
-        id: str(r.id), running: r.running, exitCode: typeof r.exitCode === "number" ? r.exitCode : null }];
+        id: str(r.id), running: r.running, exitCode: typeof r.exitCode === "number" ? r.exitCode : null, model: str(r.model) || null }];
     } catch { return []; }
   });
 }
@@ -47,4 +49,20 @@ export async function stopAgent(id: string, call: BridgeInvoke = nativeInvoke): 
 }
 export async function listAgents(call: BridgeInvoke = nativeInvoke): Promise<AgentSession[]> {
   return normalizeSessions(await call("reason_agent_list"));
+}
+
+export type ProjectStart = { session: AgentSession; sessions: AgentSession[]; reused: boolean };
+/**
+ * Opens a project by its typed path. The host resolves and checks the folder and asks in an OS
+ * confirmation before starting Claude Code (Opus 5.5, medium effort) there. Returns null when cancelled.
+ */
+export async function startProject(path: string, call: BridgeInvoke = nativeInvoke): Promise<ProjectStart | null> {
+  const typed = path.trim();
+  if (!typed) throw new Error("프로젝트 폴더 경로를 입력하세요.");
+  if (!typed.startsWith("/") && !typed.startsWith("~/")) throw new Error("/ 또는 ~/ 로 시작하는 전체 경로를 입력하세요.");
+  const result = rec(await call("reason_project_start", { input: { path: typed } }));
+  if (result.cancelled !== false) return null;
+  const [session] = normalizeSessions([result.session]);
+  if (!session || session.kind !== "claude" || !session.running) throw new Error("구현 에이전트 상태를 확인하지 못했습니다. 목록을 새로고침하세요.");
+  return { session, sessions: normalizeSessions(result.sessions), reused: result.reused === true };
 }
