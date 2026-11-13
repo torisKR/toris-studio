@@ -33,6 +33,10 @@
     if (command === 'tts_status') {
       return {supported: true, state: 'stopped', owned: false, narration: false, installed: false, python: null, model: null, install: {phase: 'idle', step: '', log: []}, lastError: null, endpoint: 'http://127.0.0.1:50010', license: {commercialUse: true, model: {name: 'Qwen3-TTS-12Hz-1.7B-CustomVoice', license: 'Apache-2.0', url: 'https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'}, runtime: [{name: 'mlx-audio', license: 'MIT'}]}};
     }
+    // Settings shows mobile pairing; the isolated check never starts the host or reads devices.
+    if (command === 'mobile_status') {
+      return {available: false, enabled: false, interfaces: [], address: null, port: null, fingerprint: null, devices: [], pending: null, projects: []};
+    }
     if (command === 'oauth_connections') {
       return {connections: [], bindings: [], warnings: []};
     }
