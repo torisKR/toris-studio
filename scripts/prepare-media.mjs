@@ -6,6 +6,20 @@ import { spawnSync } from 'node:child_process';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 export const sources=JSON.parse(await readFile(path.join(root,'desktop/src-tauri/resources/media/sources.json'),'utf8'));
 const hash=b=>createHash('sha256').update(b).digest('hex');
+export async function downloadSource(item,{fetchSource=fetch,runCurl=spawnSync}={}) {
+ let fetchFailure='network error';
+ try {
+  const response=await fetchSource(item.url,{signal:AbortSignal.timeout(180000)});
+  if(response.ok)return Buffer.from(await response.arrayBuffer());
+  if(Number.isInteger(response.status)&&response.status>=100&&response.status<=599)fetchFailure=`HTTP ${response.status}`;
+ } catch {}
+ const downloaded=runCurl('curl',['--fail','--location','--proto','=https','--tlsv1.2','--max-time','180','--silent','--show-error','--url',item.url],{shell:false,maxBuffer:64*1024*1024});
+ if(downloaded.status!==0){
+  const curlFailure=Number.isInteger(downloaded.status)&&downloaded.status>=1&&downloaded.status<=255?`exit ${downloaded.status}`:'could not execute';
+  throw new Error(`Pinned source download failed: ${item.file} (fetch ${fetchFailure}; curl ${curlFailure})`);
+ }
+ return downloaded.stdout;
+}
 export function mediaOverlay(target){return {resources:{[`media-runtime/${target}/`]:'media-runtime/'}};}
 export function mediaBuildCommand(target,platform=process.platform,environment=process.env){
  const env={...environment};
@@ -68,8 +82,7 @@ if(process.argv[1]===fileURLToPath(import.meta.url)) {
   for(const item of Object.values(sources).filter(i=>typeof i==='object')) {
    const dest=path.join(arg,item.file);let bytes;try{bytes=await readFile(dest);}catch{}
    if(!bytes || hash(bytes)!==item.sha256) {
-    try {const response=await fetch(item.url,{signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error(`HTTP ${response.status}`);bytes=Buffer.from(await response.arrayBuffer());}
-    catch {const downloaded=spawnSync('curl',['--fail','--location','--proto','=https','--tlsv1.2','--max-time','180','--silent','--show-error','--url',item.url],{shell:false,maxBuffer:64*1024*1024});if(downloaded.status!==0)throw new Error(`Pinned source download failed: ${item.file}`);bytes=downloaded.stdout;}
+    bytes=await downloadSource(item);
     if(hash(bytes)!==item.sha256)throw new Error(`Source SHA256 mismatch: ${item.file}`);await writeFile(dest,bytes);
    }
   }
