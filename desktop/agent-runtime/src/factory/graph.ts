@@ -24,11 +24,18 @@ export function factorySummary(report: FactoryReport): { phase: "done" | "failed
 
 export function buildFactory(ctx: RunContext, kind: FactoryKind): CompiledWorkflow {
   const run = async () => {
+    let model = ctx.model.model === "none" ? null : ctx.model;
+    let modelDeclined = false;
+    if (ctx.origin === "mobile" && model && model.provider !== "ollama" && !ctx.input.resumeProject) {
+      const reason = "선택한 외부 모델 호출에 요금이 발생할 수 있습니다. Mac에서 승인한 뒤 명세를 만듭니다.";
+      const decision = await ctx.approve({ kind: "factory_gate", id: randomUUID(), agent: "supervisor", gate: "paid_api", title: "모델 사용 승인", preview: reason, reason }, reason);
+      if (decision.decision !== "approve") { model = null; modelDeclined = true; }
+    }
     const produced = await produceFactory({
       kind,
       input: ctx.input,
       projectsRoot: ctx.projectsRoot,
-      model: ctx.model.model === "none" ? null : ctx.model,
+      model,
       runner: envRunner(),
       signal: ctx.signal,
       emit: message => ctx.emit(kind === "app" ? "frontend" : "backend", "coding", message),
@@ -46,6 +53,7 @@ export function buildFactory(ctx: RunContext, kind: FactoryKind): CompiledWorkfl
         return decision.decision === "approve" ? "approve" : "reject";
       },
     });
+    if (modelDeclined) produced.notes.unshift("Mac에서 모델 사용을 거절하여 템플릿으로 만들었습니다.");
     const summary = JSON.stringify(produced);
     const closing = factorySummary(produced);
     ctx.emit("qa", closing.phase, closing.message, { detail: summary });

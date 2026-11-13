@@ -1,0 +1,271 @@
+[
+  {
+    "id": "mobile.qr-replay",
+    "file": "desktop/src-tauri/src/mobile_pairing.rs",
+    "find": "        // Consume before parsing any device data; even malformed use cannot replay it.\n        self.issued = None;",
+    "replace": "        // Mutant: leave the one-time token available.",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_pairing::tests::enrollment_is_one_use_and_approval_is_bound_to_the_session_and_key"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.reconnect-port-forgotten",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "pub fn host_port(&self) -> Option<u16> {\n        self.data.host_port\n    }",
+    "replace": "pub fn host_port(&self) -> Option<u16> {\n        None\n    }",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::host_port_survives_restart_and_loads_older_registries"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.host-pin-bypass",
+    "file": "android/companion/app/src/main/java/com/toris/studio/remote/HostKeyPin.kt",
+    "find": "if (MessageDigest.isEqual(expected, MessageDigest.getInstance(\"SHA-256\").digest(key))) {",
+    "replace": "if (true) {",
+    "cmd": [
+      "android/companion/gradlew",
+      "-p",
+      "android/companion",
+      ":app:testDebugUnitTest",
+      "--tests",
+      "com.toris.studio.remote.HostKeyPinTest"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.other-device-run",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": ".find(|run| run.device_id == device && run.run_id == run_id)\n            .ok_or(\"작업을 찾을 수 없습니다.\")?;",
+    "replace": ".find(|run| run.run_id == run_id)\n            .ok_or(\"작업을 찾을 수 없습니다.\")?;",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::persists_device_grants_and_rejects_other_devices_and_removed_permissions"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.injected-request-fields",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": "if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str()))\n        {",
+    "replace": "if false\n        {",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::protocol_rejects_shell_approval_and_path_injection"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.regrant-loses-history",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "known.extend(device.retired_projects.clone());",
+    "replace": "// Mutant: forget revoked project IDs.",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::mobile_run_pages_only_include_owned_runs_with_current_project_grants"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.title-leaks-path",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": "        || !text\n            .chars()\n            .all(|ch| ch.is_alphanumeric() || ch == ' ' || ch == '-' || ch == '_')",
+    "replace": "        || false",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::display_titles_do_not_expose_paths_commands_or_credential_prefixes"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.list-pagination-skipped",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "const PAGE_SIZE: usize = 12;",
+    "replace": "const PAGE_SIZE: usize = 13;",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::mobile_run_pages_only_include_owned_runs_with_current_project_grants"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.stale-status-rewinds-cache",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "old_seq <= next_seq",
+    "replace": "true",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::mobile_run_pages_only_include_owned_runs_with_current_project_grants"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.list-sequence-lost",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": ".or_else(|| run[\"lastSeq\"].as_u64())",
+    "replace": "",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::pruned_mobile_history_remains_visible_as_an_explicitly_stale_safe_snapshot"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.list-other-device-runs",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "if run.device_id != device {\n                    return None;\n                }",
+    "replace": "if false {\n                    return None;\n                }",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::mobile_run_pages_only_include_owned_runs_with_current_project_grants"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.list-leaks-raw-job-message",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": "Some(json!({\"id\":id,\"status\":status,\"reason\":reason}))",
+    "replace": "Some(json!({\"id\":id,\"status\":status,\"reason\":reason,\"message\":job[\"message\"]}))",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::snapshots_only_return_safe_status_and_closed_gate_labels"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.lost-background-result",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": "                        if service\n                            .registry\n                            .lock()\n                            .await\n                            .cache_snapshots(device, &[(run_id, safe_run(&run))])\n                            .is_err()\n                            || terminal\n                        {",
+    "replace": "                        if terminal\n                        {",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::completed_work_is_cached_even_after_the_phone_disconnects"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.restart-interruption-hidden",
+    "file": "desktop/src-tauri/src/mobile_service.rs",
+    "find": "\"interrupted\": run[\"interrupted\"] == true",
+    "replace": "\"interrupted\": false",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::snapshots_only_return_safe_status_and_closed_gate_labels"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.incomplete-result-shown-complete",
+    "file": "android/companion/app/src/main/java/com/toris/studio/remote/StudioComponents.kt",
+    "find": "\"done\" -> if (run.verdict == \"incomplete\") \"검증 보류\" else \"작업 종료\"",
+    "replace": "\"done\" -> \"작업 종료\"",
+    "cmd": [
+      "android/companion/gradlew",
+      "-p",
+      "android/companion",
+      ":app:testDebugUnitTest",
+      "--tests",
+      "com.toris.studio.remote.ProtocolTest"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.paid-model-without-mac-approval",
+    "file": "desktop/agent-runtime/src/factory/graph.ts",
+    "find": "if (ctx.origin === \"mobile\" && model && model.provider !== \"ollama\" && !ctx.input.resumeProject) {",
+    "replace": "if (false && model && model.provider !== \"ollama\" && !ctx.input.resumeProject) {",
+    "cmd": [
+      "node",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-name-pattern",
+      "a mobile run waits for Mac approval",
+      "desktop/agent-runtime/test/factory.test.ts"
+    ],
+    "timeoutMs": 120000
+  },
+  {
+    "id": "mobile.refresh-blocks-cancel",
+    "file": "android/companion/app/src/main/java/com/toris/studio/remote/RemoteController.kt",
+    "find": "if (!foreground || busy || (silent && pollTask?.isActive == true)) return",
+    "replace": "if (!foreground || busy || pollTask?.isActive == true) return",
+    "cmd": [
+      "android/companion/gradlew",
+      "-p",
+      "android/companion",
+      ":app:testDebugUnitTest",
+      "--tests",
+      "com.toris.studio.remote.RemoteControllerTest"
+    ],
+    "timeoutMs": 300000
+  }
+]

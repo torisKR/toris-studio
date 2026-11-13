@@ -13,9 +13,10 @@ import {
   generationSize, initialComposer, JOB_STATUS_LABELS, outputSize, PROMPT_MAX, QUALITIES, sceneCount, shortDate, sizeText, storyboardProblem, STYLES, SUBTITLES, usableEngine,
   type ComposerState
 } from "./production-model";
+import type { ProductionSelection } from "../reason/types";
 import "./ProductionStudio.css";
 
-type Props = { active: boolean; onOpenSettings?: () => void; onEditInEditor?: (project: Record<string, unknown>) => void };
+type Props = { active: boolean; selection?: ProductionSelection | null; onOpenSettings?: () => void; onEditInEditor?: (project: Record<string, unknown>) => void };
 type Notice = { text: string; tone: "success" | "error" | "info" };
 const POLL_MS = 1200;
 const live = (job: ProductionJob | null) => !!job && (job.status === "planning" || job.status === "running");
@@ -297,7 +298,7 @@ function Result({ job, busy, onOpen, onSave, onDraft, onEdit }: { job: Productio
   </section>;
 }
 
-export function ProductionStudio({ active, onOpenSettings, onEditInEditor }: Props) {
+export function ProductionStudio({ active, selection, onOpenSettings, onEditInEditor }: Props) {
   const [composer, setComposer] = useState<ComposerState>(initialComposer);
   const [engines, setEngines] = useState<EngineStatus | null>(null);
   const [engineError, setEngineError] = useState("");
@@ -402,6 +403,21 @@ export function ProductionStudio({ active, onOpenSettings, onEditInEditor }: Pro
     const next = await productionApi.get(id);
     if (jobId.current === id) setJob(next);
   });
+  // An explicit handoff opens exactly this existing job. It never creates or approves one.
+  const selectionId = selection?.jobId, selectionRequest = selection?.requestId;
+  useEffect(() => {
+    if (!selectionId) return;
+    let ignore = false;
+    jobId.current = selectionId; readSeq.current++; draftFor.current = null;
+    setDraft(null); setJob(null); setBusy("open"); setNotice(null);
+    void productionApi.get(selectionId).then(next => {
+      if (!ignore && jobId.current === selectionId) setJob(next);
+    }).catch(error => {
+      if (!ignore && jobId.current === selectionId) setNotice({ tone: "error", text: errorMessage(error) });
+    }).finally(() => { if (!ignore) setBusy(null); });
+    return () => { ignore = true; };
+  }, [selectionId, selectionRequest]);
+
   const startNew = () => { jobId.current = null; readSeq.current++; draftFor.current = null; setDraft(null); setJob(null); setNotice(null); };
   const install = (engine: string) => void run("install", async () => { await productionApi.installEngine(engine); await refreshEngines(); });
   const approve = () => { if (job && draft) void run("approve", () => apply(job.id, productionApi.approve(job.id, draft))); };

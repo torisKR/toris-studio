@@ -24,6 +24,7 @@ export const STEPS = {
     ['agent runtime mutants', 'node', ['scripts/mutation-check.mjs', 'desktop/agent-runtime/test/mutants.json']],
     ['rust mutants', 'node', ['scripts/mutation-check.mjs', 'desktop/src-tauri/tests/mutants.json']],
     ['agent UI check', 'node', ['scripts/verify-agent-ui.mjs']],
+    ['Reason Network UI check', 'node', ['scripts/verify-reason-network-ui.mjs']],
     ['agent UI mutants', 'node', ['scripts/mutation-check.mjs', 'desktop/agent-runtime/test/ui-mutants.json']],
     ['planner UI check', 'node', ['scripts/verify-planner-ui.mjs']],
     ['ops UI check', 'node', ['scripts/verify-ops-ui.mjs']],

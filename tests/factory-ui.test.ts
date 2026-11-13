@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decide, runTitle } from "../desktop/src/agent-client";
-import { gateLabel, parseFactoryReport, verdictLabel } from "../desktop/src/factory/factory-client";
+import { factoryRuns, gateLabel, parseFactoryReport, verdictLabel } from "../desktop/src/factory/factory-client";
 
 test("factory approvals go through the host command and titles stay on the factory", async () => {
   const calls: Array<[string, unknown]> = [];
@@ -11,6 +11,15 @@ test("factory approvals go through the host command and titles stay on the facto
   assert.equal(runTitle({ workflow: "app-factory", project: "" }), "앱 팩토리");
   assert.equal(verdictLabel("incomplete"), "아직 끝나지 않은 검사");
   assert.equal(gateLabel("android"), "Android");
+});
+
+test("the desktop factory lists factory runs, including runs started elsewhere", async () => {
+  const call = async (command: string, args?: Record<string, unknown>) => {
+    assert.equal(command, "agent_call");
+    assert.deepEqual(args, { method: "run.list", params: {} });
+    return { runs: [{ runId: "mobile", workflow: "game-factory" }, { runId: "other", workflow: "coding" }] };
+  };
+  assert.deepEqual((await factoryRuns(call)).map(run => run.runId), ["mobile"]);
 });
 
 test("a factory summary that did not run Android is not read as a pass", () => {

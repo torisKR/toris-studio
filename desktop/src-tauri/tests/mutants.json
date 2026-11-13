@@ -1,17 +1,185 @@
 [
  {
+  "id": "rs.reason-storyboard-content-ignored",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "\"settings\": settings, \"storyboard\": storyboard",
+  "replace": "\"settings\": settings, \"storyboard\": Value::Null",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-storyboard-draft-discarded",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "job[\"draft\"] = storyboard;",
+  "replace": "job[\"draft\"] = Value::Null;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-sender-name-guessed",
+  "file": "desktop/src-tauri/src/reason_network.rs",
+  "find": "matches.next().is_none().then_some(first)",
+  "replace": "Some(first)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-inbox-consumes-before-save",
+  "file": "desktop/src-tauri/src/reason_network.rs",
+  "find": "\"peek\":true",
+  "replace": "\"peek\":false",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-recipient-unchecked",
+  "file": "desktop/src-tauri/src/reason_network.rs",
+  "find": "validate_recipient(&state.peers, &state.messages, target, reply_to)\n                    .map_err(Failure::from)?;",
+  "replace": "let _ = (&state.peers, &state.messages, target, reply_to);",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-team-switch-mixed",
+  "file": "desktop/src-tauri/src/reason_network.rs",
+  "find": "Some(id) if id != team.team_id =>",
+  "replace": "Some(id) if false && id != team.team_id =>",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-video-unknown-action",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "#[serde(rename_all = \"camelCase\", deny_unknown_fields)]\npub struct VideoRequest {",
+  "replace": "#[serde(rename_all = \"camelCase\")]\npub struct VideoRequest {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-video-changed-request",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "|| marker[\"settingsHash\"] != settings_hash(request)?",
+  "replace": "|| false",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-video-origin-unbound",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "for part in [network_session, from, request_id] {",
+  "replace": "for part in [\"\", from, request_id] {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-video-qa-ignored",
+  "file": "desktop/src-tauri/src/reason_video.rs",
+  "find": "&& job[\"qa\"][\"passed\"] == true;",
+  "replace": "&& true;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_video_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
   "id": "media.zlib-obsolete-url",
   "file": "desktop/src-tauri/resources/media/sources.json",
   "find": "https://zlib.net/fossils/zlib-1.3.2.tar.gz",
   "replace": "https://zlib.net/zlib-1.3.2.tar.gz",
-  "cmd": ["node", "--test", "scripts/prepare-media.test.mjs"]
+  "cmd": [
+   "node",
+   "--test",
+   "scripts/prepare-media.test.mjs"
+  ]
  },
  {
   "id": "media.download-diagnostics-hidden",
   "file": "scripts/prepare-media.mjs",
   "find": "(fetch ${fetchFailure}; curl ${curlFailure})",
   "replace": "(download error)",
-  "cmd": ["node", "--test", "scripts/prepare-media.test.mjs"]
+  "cmd": [
+   "node",
+   "--test",
+   "scripts/prepare-media.test.mjs"
+  ]
  },
  {
   "id": "rs.compose-all-interfaces",
@@ -828,6 +996,310 @@
    "--lib",
    "--",
    "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-digest-unchecked",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "if digest(p, stage, &text) != approved_digest {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-deploy-unapproved",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "if stage == Stage::Deploy && !deploy_approved {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-reply-sender-unchecked",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "                && same_sender(&m.from, assignee)\n                && !used(&result, &m.id)",
+  "replace": "                && !used(&result, &m.id)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-uncertain-resent",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "        SendOutcome::Uncertain => StageState {\n            status: StageStatus::Uncertain,",
+  "replace": "        SendOutcome::Uncertain => StageState {\n            status: StageStatus::Pending,\n            send_key: None,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-truncation-dropped",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "if clean.len() <= MAX_REPLY_BYTES {",
+  "replace": "if true {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-cwd-unchecked",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": ".filter(|draft| draft.kind == kind && draft.folder == folder)",
+  "replace": ".filter(|_| true)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-full-access",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": ".args([\"--non-interactive\", \"--no-color\"])",
+  "replace": ".args([\"--non-interactive\", \"--no-color\", \"--full-access\"])",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-not-killed-on-exit",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "        let sessions = std::mem::take(&mut self.inner().sessions);\n        terminate(sessions, STOP_GRACE);",
+  "replace": "        let _ = STOP_GRACE;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-cap-removed",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "if inner.sessions.len() >= MAX_SESSIONS {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-home-allowed",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "if folder.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&folder))\n        {",
+  "replace": "if false\n        {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-group-not-stopped",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": ".for_each(|s| signal_group(&s.child, libc::SIGTERM));",
+  "replace": ".for_each(|s| signal_group(&s.child, 0));",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-quote-escaped",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "        .filter(|c| !invisible(*c))\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-approval-replayed",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "        s.send_key.as_deref().unwrap_or(\"\"),\n        text,",
+  "replace": "        \"\",\n        text,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.pipeline-rejected-resend-forgotten",
+  "file": "desktop/src-tauri/src/reason_pipeline.rs",
+  "find": "Err(failure) if failure.uncertain || resend =>",
+  "replace": "Err(failure) if failure.uncertain =>",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-private-folder-allowed",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "if private || SYSTEM_ROOTS.iter().any(|root| folder.starts_with(root)) {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-swapped-folder-started",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "if Path::new(&draft.folder).canonicalize().ok().as_deref() != Some(Path::new(&draft.folder))\n        {",
+  "replace": "if false\n        {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-leftover-workers",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "        signal_group(&session.child, libc::SIGKILL);\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-agent-shared-name",
+  "file": "desktop/src-tauri/src/reason_agents.rs",
+  "find": "Sha256::digest(folder.as_os_str().as_encoded_bytes())",
+  "replace": "Sha256::digest(b\"same\")",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_agents_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-unfamiliar-status-shown-free",
+  "file": "desktop/src-tauri/src/reason_network.rs",
+  "find": "busy: ![\"idle\", \"live\"].contains(&row.status.as_str()),",
+  "replace": "busy: row.status == \"busy\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_network_contract"
   ],
   "timeoutMs": 900000
  }

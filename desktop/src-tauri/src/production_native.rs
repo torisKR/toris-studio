@@ -85,17 +85,41 @@ pub async fn production_create(
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let settings = crate::production::parse_settings(&input)?;
-    let mut job = crate::production::new_job(&settings);
-    let id = job["id"].as_str().unwrap().to_owned();
+    let job = crate::production::new_job(&settings);
+    start_planning(&app, jobs.inner().clone(), agent.inner().clone(), job, None)
+}
+
+/// Shared by the local editor and an explicitly accepted Reason request. The caller
+/// attaches provenance before the first atomic write, so a retry can find the same job.
+/// This only plans; storyboard approval and publishing remain separate user actions.
+pub(crate) fn start_planning(
+    app: &tauri::AppHandle,
+    jobs: Arc<crate::production::Productions>,
+    agent: Arc<crate::agent_runtime::AgentRuntime>,
+    mut job: Value,
+    imported_storyboard: Option<Value>,
+) -> Result<Value, String> {
+    let settings = crate::production::parse_settings(&job["settings"])?;
+    let imported_storyboard = imported_storyboard
+        .map(|draft| crate::production::validate_storyboard(&draft, &settings))
+        .transpose()?;
+    if let Some(draft) = &imported_storyboard {
+        job["draft"] = draft.clone();
+    }
+    let id = job["id"].as_str().ok_or("작업 ID가 없습니다.")?.to_owned();
+    uuid::Uuid::parse_str(&id).map_err(|_| "작업 ID 형식 오류")?;
     job["stages"]["plan"]["status"] = json!("running");
     let root = crate::production::root()?;
     crate::production::write_json(&root.join(&id).join("job.json"), &job)?;
-    let shown = view(&app, &jobs, &job);
-    let jobs = jobs.inner().clone();
-    let agent = agent.inner().clone();
+    let shown = view(app, &jobs, &job);
     let plan_id = id.clone();
     tauri::async_runtime::spawn(async move {
-        let planned = plan(&agent, &settings).await;
+        // A received storyboard is already creative input. Preserve it exactly
+        // through preparation; only settings-only requests need the local planner.
+        let planned = match imported_storyboard {
+            Some(storyboard) => Ok(storyboard),
+            None => plan(&agent, &settings).await,
+        };
         // Stock jobs fetch photo candidates for every scene before the user reviews the storyboard.
         let candidates = match (&planned, settings.visual.as_str()) {
             (Ok(storyboard), "stock") => {

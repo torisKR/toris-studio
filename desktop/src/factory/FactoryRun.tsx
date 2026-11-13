@@ -1,11 +1,12 @@
 import { Square } from "lucide-react";
 import { useState } from "react";
-import type { PendingAction, RunSummary } from "../agent-client";
+import { PHASE_LABELS, type PendingAction, type RunSummary } from "../agent-client";
 
 export function FactoryRun({ run, busy, onDecide, onCancel }: { run: RunSummary; busy: boolean; onDecide: (action: PendingAction, decision: "approve" | "reject", feedback: string) => void; onCancel: () => void }) {
   const terminal = run.phase === "done" || run.phase === "failed" || run.phase === "cancelled";
   return <section className="factory-card" aria-label="팩토리 진행">
-    <div className="factory-actions"><h2>진행 · {run.phase}</h2>{!terminal && <button type="button" className="social-button" onClick={onCancel} disabled={busy}><Square size={14} />중단</button>}</div>
+    <div className="factory-actions"><h2>진행 · {PHASE_LABELS[run.phase]}</h2>{!terminal && <button type="button" className="social-button" onClick={onCancel} disabled={busy}><Square size={14} />중단</button>}</div>
+    <p>작업 ID: <code>{run.runId}</code></p>
     {run.approvals.map(action => <FactoryApproval key={action.id} action={action} busy={busy} onDecide={onDecide} />)}
     <ol className="factory-list" aria-label="진행 기록">
       {[...run.events].slice(-12).reverse().map(event => <li key={event.seq}><strong>{event.message}</strong>{event.detail && !event.detail.startsWith("{") && <small>{event.detail}</small>}</li>)}

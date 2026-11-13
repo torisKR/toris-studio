@@ -10,7 +10,11 @@ pub const WORKFLOWS: [&str; 2] = ["weekly-content", "ops-triage"];
 /// Hub workflows take their input from the local DB and save on approval, so only the host
 /// (hub_native) may start or resume them. Through agent_call the webview may start code workflows only.
 pub fn ui_params_allowed(method: &str, params: &Value) -> Result<(), String> {
-    if params.get("host").is_some() || params.get("input").is_some() {
+    if params.get("host").is_some()
+        || params.get("input").is_some()
+        || params.get("origin").is_some()
+        || (method == "run.start" && params.get("runId").is_some())
+    {
         return Err("허용되지 않은 에이전트 요청입니다.".into());
     }
     if method == "run.start"
@@ -138,6 +142,14 @@ mod tests {
     fn the_webview_cannot_start_or_feed_hub_workflows_directly() {
         assert!(ui_params_allowed("run.start", &json!({"project": "demo", "task": "x"})).is_ok());
         assert!(ui_params_allowed("run.start", &json!({"workflow": "coding"})).is_ok());
+        assert!(
+            ui_params_allowed("run.start", &json!({"workflow": "coding", "runId": "r"})).is_err()
+        );
+        assert!(ui_params_allowed(
+            "run.start",
+            &json!({"workflow": "coding", "origin": "mobile"})
+        )
+        .is_err());
         assert!(ui_params_allowed("run.start", &json!({"workflow": "weekly-content"})).is_err());
         assert!(
             ui_params_allowed("run.start", &json!({"workflow": "coding", "input": {}})).is_err()

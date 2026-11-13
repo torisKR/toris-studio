@@ -103,7 +103,10 @@ export class Runtime {
       case "run.start": {
         const workflow = text(p.workflow, "워크플로", 60, { optional: true }) || "coding";
         if (!this.hostOnly(workflow, p)) throw new UserError("이 워크플로는 Studio 화면에서만 시작할 수 있습니다.");
-        return this.runs.start(text(p.project, "프로젝트", 200, { optional: true }), text(p.task, "작업", 20_000, { optional: true }), workflow, p.input === undefined ? {} : record(p.input, "워크플로 입력"));
+        const hostRunId = p.runId === undefined ? undefined : text(p.runId, "작업 ID", 36);
+        if (hostRunId && (p.host !== true || (workflow !== "game-factory" && workflow !== "app-factory"))) throw new UserError("작업 ID는 팩토리 호스트만 지정할 수 있습니다.");
+        if (p.origin !== undefined && (p.origin !== "mobile" || !hostRunId || p.host !== true || (workflow !== "game-factory" && workflow !== "app-factory"))) throw new UserError("작업 출처를 확인하세요.");
+        return this.runs.start(text(p.project, "프로젝트", 200, { optional: true }), text(p.task, "작업", 20_000, { optional: true }), workflow, p.input === undefined ? {} : record(p.input, "워크플로 입력"), hostRunId, p.origin === "mobile" ? "mobile" : undefined);
       }
       case "run.resume": {
         const runId = text(p.runId, "작업 ID", 100);
