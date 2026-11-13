@@ -68,6 +68,8 @@ zeroize = "1"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+# Process-group signalling for development agent sessions (reason_agents).
+libc = "0.2"
 keyring = { version = "3", default-features = false, features = ["linux-native"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
