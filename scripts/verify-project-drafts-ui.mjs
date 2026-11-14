@@ -173,15 +173,65 @@ try {
   await page.screenshot({ path: resolve(out, "01-drafts-implement.png") });
   report.checks.push("'이 기획으로 구현' appends the plan after an existing draft and does not send.");
 
-  // 6. Enter with the IME composing and Shift+Enter do not send.
+  // 6. Enter with the IME composing and Shift+Enter do not send. Synthetic events in Chromium:
+  // this checks the composer's key handling for each order, not a real OS input method.
+  // Chromium order: the confirming Enter's keydown arrives while composing (isComposing, 229).
+  // WebKit order: compositionend first, then the confirming Enter's keydown with isComposing
+  // false but keyCode 229 — that Enter belongs to the IME, not to the composer.
+  const imeEnter = isComposing => box.evaluate((el, isComposing) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, which: 229, bubbles: true, cancelable: true, isComposing })), isComposing);
+  const composition = type => box.evaluate((el, type) => el.dispatchEvent(new CompositionEvent(type, { data: "력", bubbles: true })), type);
   await box.fill("한글 입력");
   await box.focus();
+  await composition("compositionstart");
   await box.evaluate(el => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true })));
+  await imeEnter(true);
+  await composition("compositionend");
+  assert.equal(sends().length, sent, "Enter while composing (Chromium order) does not send");
+  await composition("compositionstart");
+  await composition("compositionend");
+  await imeEnter(false);
+  assert.equal(sends().length, sent, "the IME's confirming Enter after compositionend (WebKit order, keyCode 229) does not send");
+  // WKWebView order captured in the real Tauri app (macOS 2-Set Korean, g k s then Enter): no
+  // composition events at all. The IME re-commits "한" with insertReplacementText, then the Enter
+  // keydown arrives as a plain Enter (keyCode 13, isComposing false). isSendEnter alone sent it.
+  const wkConfirmingEnter = () => box.evaluate(el => {
+    el.dispatchEvent(new InputEvent("input", { inputType: "insertReplacementText", data: "한", bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, isComposing: false }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+  });
+  await wkConfirmingEnter();
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(sends().length, sent, "the Enter that confirms a syllable in WKWebView's order (insertReplacementText, then keyCode 13) does not send");
+  await expectBox("한글 입력", "the confirming Enter keeps the text");
   await box.press("Shift+Enter");
   await box.pressSequentially("둘째 줄");
   await expectBox("한글 입력\n둘째 줄", "Shift+Enter adds a line");
   assert.equal(sends().length, sent, "Enter while composing and Shift+Enter do not send");
-  report.checks.push("Enter during IME composition and Shift+Enter do not send.");
+  report.checks.push("Enter during IME composition (Chromium order), the IME's confirming Enter after compositionend (WebKit order, keyCode 229), the confirming Enter in the order captured in the real WKWebView app (insertReplacementText, then keyCode 13) and Shift+Enter do not send (synthetic events).");
+
+  // 6b. After the composition ends, a separate plain Enter sends exactly once, with the mixed text intact.
+  await open("결제 대화");
+  const mixed = "결제 화면 abc  띄어쓰기\n둘째 줄 한글";
+  await box.fill(mixed);
+  await box.focus();
+  await composition("compositionstart");
+  await composition("compositionend");
+  await imeEnter(false);
+  assert.equal(sends().length, sent, "the confirming Enter does not send");
+  await expectBox(mixed, "the confirming Enter keeps the text");
+  await wkConfirmingEnter();
+  assert.equal(sends().length, sent, "the confirming Enter in WKWebView's order does not send");
+  await expectBox(mixed, "the WKWebView confirming Enter keeps the text");
+  await box.press("Enter");
+  await until(() => sends().length === sent + 1, "the plain Enter sends");
+  await until(async () => await root.locator(".pc-composer .social-spin").count() === 0, "the send finishes");
+  assert.equal(sends().length, sent + 1, "one plain Enter sends exactly once");
+  assert.equal(sends().at(-1).args.input.text, mixed, "the sent text is exactly what was typed");
+  assert.equal(sends().at(-1).args.input.threadId, "t-b");
+  await expectBox("", "the sent draft is cleared");
+  await open("로그인 대화");
+  await expectBox("한글 입력\n둘째 줄", "another conversation's draft stays");
+  report.checks.push("After the composition ends, one plain Enter sends exactly once with mixed Korean/English/space text unchanged; other drafts stay.");
 
   // 7. Deleting a conversation drops only its draft.
   await open("알림 대화"); await box.fill("C 초안");
