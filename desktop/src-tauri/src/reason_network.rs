@@ -1112,6 +1112,25 @@ fn parse_receipt(text: &str) -> Result<Receipt, String> {
     })
 }
 
+/// Takes the store lock, waiting a moment for a previous holder to let go.
+/// A process this app spawns from another thread can briefly keep a copy of
+/// the lock between fork and exec, so a store that was just closed may still
+/// look held for a few milliseconds. A real second window keeps holding it
+/// and is still refused.
+fn lock_briefly(lock: &File) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match fs2::FileExt::try_lock_exclusive(lock) {
+            Ok(()) => return Ok(()),
+            Err(error) if tries >= 10 => return Err(error),
+            Err(_) => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+    }
+}
+
 impl Store {
     fn open(root: &Path) -> Result<(Self, Vec<Message>), String> {
         reject_symlink(root)?;
@@ -1134,7 +1153,7 @@ impl Store {
         let lock = options
             .open(lock_path)
             .map_err(|_| "Reason 수신 기록 잠금 파일을 열지 못했습니다.")?;
-        fs2::FileExt::try_lock_exclusive(&lock)
+        lock_briefly(&lock)
             .map_err(|_| "다른 Toris Studio 창이 Reason 수신 기록을 사용 중입니다.")?;
         let identity_path = root.join("identity.json");
         let cache_path = root.join("messages.json");
