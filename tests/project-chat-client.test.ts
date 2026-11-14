@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, searchKey, searchProjects, sendMessage, toRows, type ChatItem, type Project, type Thread
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, type ChatItem, type Project, type Thread
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -103,7 +103,7 @@ test("a planner request stays open until a reply follows it", () => {
 
 const proj = (id: string, name: string): Project => ({ id, name, folder: "/Users/me/" + name, addedAt: "" });
 const thr = (id: string, projectId: string, title: string, extra: Partial<Thread> = {}): Thread =>
-  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, ...extra });
+  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, worktree: null, ...extra });
 const searchFixture = () => ({
   projects: [proj("p1", "Pocket App"), proj("p2", "결제 서버"), proj("p3", "notes")],
   threads: [
@@ -150,4 +150,45 @@ test("project hits come before thread hits and count their threads and running s
   assert.ok(server.kind === "project");
   assert.deepEqual([server.threadCount, server.running], [1, true]);
   assert.deepEqual(labels(searchProjects("notes", projects, threads)), ["P:p3"], "project names do not pull in every thread body or title");
+});
+
+test("a linked worktree is read with its thread, and old threads have none", async () => {
+  const base = "a".repeat(40);
+  const { call } = recorder({ projects: [], threads: [
+    { id: "t1", projectId: "p1", agent: "claude", mode: "edit", updatedAt: "2", worktree: { path: "/Users/me/app-wt", branch: "feature/x", base, linkedAt: "x" } },
+    { id: "t2", projectId: "p1", agent: "codex", mode: "edit", updatedAt: "1" },
+    { id: "t3", projectId: "p1", agent: "codex", mode: "edit", updatedAt: "0", worktree: { path: "app-wt", base: "nothex" } }
+  ] });
+  const { threads } = await listProjects(call);
+  assert.deepEqual(threads[0].worktree, { path: "/Users/me/app-wt", branch: "feature/x", base, linkedAt: "x" });
+  assert.equal(threads[1].worktree, null);
+  assert.equal(threads[2].worktree, null, "a relative path or a non-commit base is not a worktree");
+});
+
+test("linking a worktree sends only the thread ID (or a typed path) and the host picks and confirms", async () => {
+  const base = "b".repeat(40);
+  const linked = recorder({ cancelled: false, thread: { id: "t1", projectId: "p1", agent: "claude", mode: "edit", worktree: { path: "/w/app-wt", branch: null, base } } });
+  assert.equal((await linkWorktree("t1", null, linked.call))?.worktree?.path, "/w/app-wt");
+  assert.deepEqual(linked.calls, [["project_chat_link_worktree", { input: { threadId: "t1" } }]]);
+  await linkWorktree("t1", " ~/w/app-wt ", linked.call);
+  assert.deepEqual(linked.calls.at(-1), ["project_chat_link_worktree", { input: { threadId: "t1", path: "~/w/app-wt" } }]);
+  await assert.rejects(linkWorktree("t1", "app-wt", linked.call));
+  assert.equal(await linkWorktree("t1", null, recorder({ cancelled: true }).call), null);
+  await assert.rejects(linkWorktree("t1", null, recorder({ cancelled: false, thread: { id: "t1", projectId: "p1", agent: "claude", mode: "edit" } }).call));
+});
+
+test("changes are read from the thread's folder when a thread is open", async () => {
+  const r = recorder({ folder: "/w/app-wt", isRepo: true, branch: "feature/x", files: ["?? a"], diff: "", truncated: false });
+  assert.equal((await readChanges("p1", r.call, "t1")).folder, "/w/app-wt");
+  await readChanges("p1", r.call);
+  assert.deepEqual(r.calls, [["project_chat_changes", { input: { projectId: "p1", threadId: "t1" } }], ["project_chat_changes", { input: { projectId: "p1" } }]]);
+});
+
+test("a thread is started once it has items, a provider session or a running turn", () => {
+  const t = { id: "t1", projectId: "p1", title: "", agent: "claude" as const, mode: "edit" as const, providerSession: null, createdAt: "", updatedAt: "", running: false, worktree: null };
+  assert.equal(threadStarted(null, []), false);
+  assert.equal(threadStarted(t, []), false);
+  assert.equal(threadStarted(t, [item("i1", "hosted_request")]), true);
+  assert.equal(threadStarted({ ...t, providerSession: "s" }, []), true);
+  assert.equal(threadStarted({ ...t, running: true }, []), true);
 });

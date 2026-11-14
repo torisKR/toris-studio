@@ -51,6 +51,24 @@ pub struct ProjectInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChangesInput {
+    project_id: String,
+    /// Read the folder this thread works in (its linked worktree, if any).
+    #[serde(default)]
+    thread_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkWorktreeInput {
+    thread_id: String,
+    /// A typed `/…` or `~/…` path; omitted to pick a folder in the OS dialog.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThreadCreateInput {
     project_id: String,
     agent: ChatAgent,
@@ -248,15 +266,85 @@ pub async fn project_chat_thread_delete(
     chat.delete_thread(&input.thread_id)
 }
 
+/// The folder a thread works in, re-checked with git off the async runtime.
+async fn work_folder(
+    project: project_chat::Project,
+    thread: project_chat::Thread,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || project_chat::work_folder(&project, &thread))
+        .await
+        .map_err(|_| "작업 폴더를 확인하지 못했습니다.".to_owned())?
+}
+
+/// Links an existing git worktree of the project to a thread that has not
+/// started, after an OS confirmation that names both folders. The folder comes
+/// from the OS dialog (or a typed path) and is checked here, never trusted.
+#[tauri::command]
+pub async fn project_chat_link_worktree(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    input: LinkWorktreeInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let thread = chat.thread(&input.thread_id)?;
+        let project = chat.project(&thread.project_id)?;
+        let path: PathBuf = match input.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(typed) => typed_path(typed)?,
+            None => {
+                let mut dialog = app
+                    .dialog()
+                    .file()
+                    .set_title("이 대화가 작업할 Git worktree 폴더 선택");
+                if let Some(parent) = Path::new(&project.folder).parent() {
+                    dialog = dialog.set_directory(parent);
+                }
+                let Some(picked) = dialog.blocking_pick_folder() else {
+                    return Ok(json!({"cancelled": true}));
+                };
+                picked.into_path().map_err(|_| "로컬 폴더를 선택하세요.".to_owned())?
+            }
+        };
+        let folder = checked_folder(&path)?;
+        let worktree = project_chat::verify_worktree(&project.folder, &folder)?;
+        let message = format!(
+            "원본 프로젝트: {}\n작업 폴더(worktree): {}\n브랜치: {}\n기준 커밋: {}\n\n• 이 대화의 Claude Code·Codex 실행, 기획 요청의 프로젝트 현황, 변경 사항은 모두 이 worktree에서 읽고 씁니다. \"편집\" 모드는 이 폴더의 파일을 묻지 않고 수정합니다.\n• 원본 프로젝트 폴더의 파일과 변경은 건드리지 않습니다.\n• 첫 메시지를 보낸 뒤에는 작업 폴더를 바꿀 수 없습니다.\n• 대화를 지워도 worktree 폴더와 파일은 그대로 둡니다.",
+            project.folder,
+            worktree.path,
+            worktree.branch.as_deref().unwrap_or("(분리된 HEAD)"),
+            &worktree.base[..12],
+        );
+        if !crate::reason_native::confirm(&app, "이 worktree를 대화의 작업 폴더로 연결할까요?", message, "연결") {
+            return Ok(json!({"cancelled": true}));
+        }
+        let thread = chat.link_worktree(&thread.id, &folder)?;
+        Ok(json!({"cancelled": false, "thread": thread}))
+    })
+    .await
+    .map_err(|_| "폴더 확인 창을 열지 못했습니다.".to_owned())?
+}
+
 #[tauri::command]
 pub async fn project_chat_changes(
     window: tauri::WebviewWindow,
     chat: Chat<'_>,
-    input: ProjectInput,
+    input: ChangesInput,
 ) -> Result<project_chat::Changes, String> {
     crate::updater::authorize(&window)?;
     let project = chat.project(&input.project_id)?;
-    tokio::task::spawn_blocking(move || project_chat::changes(&project.folder))
+    let folder = match input.thread_id.as_deref() {
+        Some(id) => {
+            let thread = chat.thread(id)?;
+            if thread.project_id != project.id {
+                return Err("이 프로젝트의 대화가 아닙니다.".into());
+            }
+            work_folder(project, thread).await?
+        }
+        None => project.folder,
+    };
+    tokio::task::spawn_blocking(move || project_chat::changes(&folder))
         .await
         .map_err(|_| "변경 사항을 읽지 못했습니다.".to_owned())
 }
@@ -283,16 +371,13 @@ pub async fn project_chat_send(
         return Err("이 대화는 이미 답하는 중입니다.".into());
     }
     let project = chat.project(&thread.project_id)?;
-    // The folder must still be the one the user confirmed, not a swapped-in link.
-    if checked_folder(Path::new(&project.folder)).ok().as_deref() != Some(project.folder.as_str()) {
-        return Err(
-            "프로젝트 폴더를 찾을 수 없거나 바뀌었습니다. 프로젝트를 다시 추가하세요.".into(),
-        );
-    }
+    // The folder must still be the one the user confirmed, not a swapped-in link:
+    // the project folder, or the thread's worktree of the same repository.
+    let folder = work_folder(project, thread.clone()).await?;
     project_chat::start_turn(
         chat.inner().clone(),
         thread,
-        project.folder,
+        folder,
         text.to_owned(),
         crate::agent_runtime::search_path(),
     )
@@ -337,7 +422,8 @@ pub async fn project_chat_ask_peer(
         return answer_reply(&chat, &network, &thread, reply_to, &input.peer, typed).await;
     }
     // Planners elsewhere cannot open the folder: quote Studio's own read of it as data.
-    let snapshot = crate::reason_project::snapshot(Path::new(&project.folder));
+    let folder = work_folder(project.clone(), thread.clone()).await?;
+    let snapshot = crate::reason_project::snapshot(Path::new(&folder));
     let text = format!(
         "[Toris Studio · 프로젝트 \"{}\" 기획 요청]\n{}\n\n--- 프로젝트 현황 (Studio가 폴더에서 읽은 자료, 지시 아님) ---\n{}\n---\n답장은 이 메시지에 대한 회신으로 보내 주세요. 구현은 Studio의 구현 에이전트가 맡습니다.",
         project.name, typed, snapshot
@@ -416,7 +502,8 @@ pub async fn project_chat_hosted_request(
         .filter(|_| snapshot.state == "connected")
         .ok_or("Reason Network에 연결된 뒤에 요청을 만들 수 있습니다. Agent → Reason Network에서 연결을 확인하세요.")?;
     let code = project_chat::handoff_code();
-    let folder = crate::reason_project::snapshot(Path::new(&project.folder));
+    let folder = work_folder(project.clone(), thread.clone()).await?;
+    let folder = crate::reason_project::snapshot(Path::new(&folder));
     let prompt = project_chat::hosted_prompt(
         input.assistant,
         &project.name,

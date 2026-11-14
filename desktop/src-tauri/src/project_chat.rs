@@ -79,6 +79,24 @@ pub struct Thread {
     pub updated_at: String,
     #[serde(default)]
     pub running: bool,
+    /// The git worktree this thread works in instead of the project folder.
+    /// Set before the first turn and fixed after it; absent in older stores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<Worktree>,
+}
+
+/// An existing git worktree of the project's repository, linked to a thread.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Worktree {
+    /// Canonical path of the worktree's top folder.
+    pub path: String,
+    /// Branch checked out when it was linked; none when HEAD was detached.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// HEAD commit when it was linked.
+    pub base: String,
+    pub linked_at: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,10 +605,17 @@ pub fn turn_command(thread: &Thread) -> TurnCommand {
 
 pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 
+/// A running turn: its process group, the folder it works in and whether it may edit there.
+struct Run {
+    pid: u32,
+    folder: Option<String>,
+    edit: bool,
+}
+
 pub struct ProjectChat {
     root: PathBuf,
     store: Mutex<()>,
-    running: Mutex<HashMap<String, u32>>,
+    running: Mutex<HashMap<String, Run>>,
     stopping: Mutex<std::collections::HashSet<String>>,
     pub emit: Mutex<Option<Emit>>,
 }
@@ -754,6 +779,7 @@ impl ProjectChat {
             created_at: at.clone(),
             updated_at: at,
             running: false,
+            worktree: None,
         };
         store.threads.push(thread.clone());
         self.write(&store)?;
@@ -791,6 +817,27 @@ impl ProjectChat {
         Ok(self.with_running(updated))
     }
 
+    /// Links an existing worktree of the project's repository to a thread that
+    /// has not started. `candidate` must already have passed
+    /// `reason_agents::checked_folder`; it is verified again with git here.
+    pub fn link_worktree(&self, id: &str, candidate: &str) -> Result<Thread, String> {
+        let thread = self.thread(id)?;
+        let project = self.project(&thread.project_id)?;
+        let worktree = verify_worktree(&project.folder, candidate)?;
+        let started = !self.items(id).is_empty();
+        self.update_thread(id, |t| {
+            if started || t.provider_session.is_some() || self.is_running(&t.id) {
+                return Err(
+                    "대화를 시작한 뒤에는 작업 폴더를 바꿀 수 없습니다. 새 대화를 열어 worktree를 연결하세요."
+                        .into(),
+                );
+            }
+            t.worktree = Some(worktree);
+            Ok(())
+        })
+    }
+
+    /// Forgets the thread and its items. A linked worktree's files stay.
     pub fn delete_thread(&self, id: &str) -> Result<(), String> {
         valid_id(id)?;
         if self.is_running(id) {
@@ -848,17 +895,35 @@ impl ProjectChat {
 
     /// Marks a thread busy. Fails if it already runs or too many turns run.
     pub fn claim(&self, thread: &str, pid: u32) -> Result<(), String> {
+        self.claim_in(thread, pid, None, false)
+    }
+
+    /// Marks a thread busy in `folder`. An editing turn also fails while
+    /// another editing turn works in the same folder.
+    pub fn claim_in(
+        &self,
+        thread: &str,
+        pid: u32,
+        folder: Option<&str>,
+        edit: bool,
+    ) -> Result<(), String> {
         let mut running = self.running.lock().map_err(|_| "상태 오류")?;
-        if running.contains_key(thread) {
-            return Err("이 대화는 이미 답하는 중입니다. 끝나거나 중지한 뒤 보내세요.".into());
-        }
-        if running.len() >= MAX_RUNNING {
-            return Err(format!(
-                "동시에 {MAX_RUNNING}개 대화까지 실행할 수 있습니다. 다른 대화를 먼저 끝내세요."
-            ));
-        }
-        running.insert(thread.to_string(), pid);
+        slot_free(&running, thread, folder, edit)?;
+        running.insert(
+            thread.to_string(),
+            Run {
+                pid,
+                folder: folder.map(str::to_owned),
+                edit,
+            },
+        );
         Ok(())
+    }
+
+    /// Whether a turn could claim a slot now; checked before a CLI starts.
+    pub fn check_slot(&self, thread: &str, folder: &str, edit: bool) -> Result<(), String> {
+        let running = self.running.lock().map_err(|_| "상태 오류")?;
+        slot_free(&running, thread, Some(folder), edit)
     }
 
     pub fn release(&self, thread: &str) {
@@ -869,7 +934,7 @@ impl ProjectChat {
     }
 
     pub fn running_pid(&self, thread: &str) -> Option<u32> {
-        self.running.lock().ok()?.get(thread).copied()
+        self.running.lock().ok()?.get(thread).map(|run| run.pid)
     }
 
     /// `mark`: records a stop request. Otherwise takes (clears) it and says whether it was set.
@@ -893,7 +958,7 @@ impl ProjectChat {
     pub fn running_pids(&self) -> Vec<u32> {
         self.running
             .lock()
-            .map(|r| r.values().copied().collect())
+            .map(|r| r.values().map(|run| run.pid).collect())
             .unwrap_or_default()
     }
 
@@ -966,6 +1031,31 @@ impl ProjectChat {
             .into_iter()
             .find(|i| i.kind == ItemKind::PeerReply && i.message_id.as_deref() == Some(id))
     }
+}
+
+fn slot_free(
+    running: &HashMap<String, Run>,
+    thread: &str,
+    folder: Option<&str>,
+    edit: bool,
+) -> Result<(), String> {
+    if running.contains_key(thread) {
+        return Err("이 대화는 이미 답하는 중입니다. 끝나거나 중지한 뒤 보내세요.".into());
+    }
+    if running.len() >= MAX_RUNNING {
+        return Err(format!(
+            "동시에 {MAX_RUNNING}개 대화까지 실행할 수 있습니다. 다른 대화를 먼저 끝내세요."
+        ));
+    }
+    if edit
+        && folder.is_some()
+        && running
+            .values()
+            .any(|run| run.edit && run.folder.as_deref() == folder)
+    {
+        return Err("같은 작업 폴더에서 다른 대화가 파일을 고치는 중입니다. 그 대화가 끝난 뒤 보내거나, 다른 worktree를 연결한 새 대화를 여세요.".into());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1169,8 @@ pub async fn start_turn(
     };
     let cli = find_cli(spec.program, &path)
         .ok_or_else(|| format!("{label} CLI를 찾지 못했습니다. 설치한 뒤 다시 시도하세요."))?;
+    let edit = thread.mode == ChatMode::Edit;
+    chat.check_slot(&thread.id, &folder, edit)?;
     let mut command = tokio::process::Command::new(cli);
     command
         .args(&spec.args)
@@ -1101,9 +1193,18 @@ pub async fn start_turn(
         .spawn()
         .map_err(|_| format!("{label}을(를) 시작하지 못했습니다."))?;
     let pid = child.id().unwrap_or(0);
-    if let Err(error) = chat.claim(&thread.id, pid) {
+    if let Err(error) = chat.claim_in(&thread.id, pid, Some(&folder), edit) {
+        signal(pid, libc::SIGKILL);
         let _ = child.start_kill();
         return Err(error);
+    }
+    // The work folder is fixed once a turn runs; refuse if it moved meanwhile.
+    let linked = |t: &Thread| t.worktree.as_ref().map(|w| w.path.clone());
+    if chat.thread(&thread.id).ok().as_ref().map(linked) != Some(linked(&thread)) {
+        signal(pid, libc::SIGKILL);
+        let _ = child.start_kill();
+        chat.release(&thread.id);
+        return Err("대화의 작업 폴더가 바뀌었습니다. 다시 보내세요.".into());
     }
     chat.stopped(&thread.id, false);
     let first = chat.items(&thread.id).is_empty();
@@ -1235,6 +1336,8 @@ pub fn stop_turn(chat: Arc<ProjectChat>, thread: &str) {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
+    /// The folder these changes were read from.
+    pub folder: String,
     pub is_repo: bool,
     pub branch: Option<String>,
     /// `git status --porcelain` lines: two status letters, a space, the path.
@@ -1248,6 +1351,11 @@ fn git(folder: &str, args: &[&str]) -> Option<String> {
         .args(["-c", "core.quotepath=off", "--no-optional-locks"])
         .args(args)
         .current_dir(folder)
+        // Only the folder decides which repository git reads.
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
         .env("GIT_PAGER", "cat")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
@@ -1266,6 +1374,7 @@ pub fn changes(folder: &str) -> Changes {
         &["status", "--porcelain=v1", "--untracked-files=all"],
     ) else {
         return Changes {
+            folder: folder.to_owned(),
             is_repo: false,
             branch: None,
             files: vec![],
@@ -1278,8 +1387,11 @@ pub fn changes(folder: &str) -> Changes {
         .unwrap_or_default();
     let truncated = diff.len() > MAX_DIFF_BYTES;
     Changes {
+        folder: folder.to_owned(),
         is_repo: true,
-        branch: crate::reason_agents::current_branch(Path::new(folder)),
+        // A linked worktree has a `.git` file, not a folder: ask git then.
+        branch: crate::reason_agents::current_branch(Path::new(folder))
+            .or_else(|| head_branch(folder)),
         files: status.lines().take(500).map(|l| plain_text(l)).collect(),
         diff: if truncated {
             cut(&diff, MAX_DIFF_BYTES)
@@ -1288,4 +1400,87 @@ pub fn changes(folder: &str) -> Changes {
         },
         truncated,
     }
+}
+
+fn git_line(folder: &str, args: &[&str]) -> Option<String> {
+    git(folder, args)
+        .map(|out| out.trim().to_owned())
+        .filter(|line| !line.is_empty() && !line.contains('\n'))
+}
+
+fn canonical(path: &str) -> Option<PathBuf> {
+    Path::new(path).canonicalize().ok()
+}
+
+fn head_branch(folder: &str) -> Option<String> {
+    git_line(folder, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .filter(|name| name.len() <= 200 && !name.chars().any(char::is_control))
+}
+
+/// The repository's shared git directory, as git itself reports it for `folder`.
+fn common_dir(folder: &str) -> Option<PathBuf> {
+    let dir = git_line(
+        folder,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    canonical(&dir)
+}
+
+/// Checks that `candidate` is the top folder of a checkout of the same git
+/// repository as `project` (same common git directory), other than the
+/// project folder itself, and reads its branch and HEAD commit. Paths are
+/// compared after resolving links; folder names alone never count.
+pub fn verify_worktree(project: &str, candidate: &str) -> Result<Worktree, String> {
+    let repo = common_dir(project)
+        .ok_or("프로젝트 폴더가 Git 저장소가 아니어서 worktree를 연결할 수 없습니다.")?;
+    let path = canonical(candidate).ok_or("선택한 worktree 폴더를 열 수 없습니다.")?;
+    if Some(&path) == canonical(project).as_ref() {
+        return Err(
+            "원본 프로젝트 폴더입니다. 같은 저장소의 다른 worktree 폴더를 고르세요.".into(),
+        );
+    }
+    let theirs = common_dir(candidate).ok_or("선택한 폴더는 Git worktree가 아닙니다.")?;
+    if theirs != repo {
+        return Err("선택한 폴더는 이 프로젝트와 다른 Git 저장소입니다. 이 프로젝트에서 `git worktree add`로 만든 폴더를 고르세요.".into());
+    }
+    let top = git_line(candidate, &["rev-parse", "--show-toplevel"]).and_then(|t| canonical(&t));
+    if top.as_ref() != Some(&path) {
+        return Err("worktree의 최상위 폴더를 고르세요.".into());
+    }
+    let base = git_line(candidate, &["rev-parse", "--verify", "-q", "HEAD^{commit}"])
+        .filter(|sha| matches!(sha.len(), 40 | 64) && sha.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("커밋이 없는 worktree는 연결할 수 없습니다.")?;
+    Ok(Worktree {
+        path: path
+            .to_str()
+            .ok_or("폴더 경로에 사용할 수 없는 문자가 있습니다.")?
+            .to_owned(),
+        branch: head_branch(candidate),
+        base,
+        linked_at: now(),
+    })
+}
+
+/// The folder a thread's agent works in, checked again right before use: the
+/// project folder, or the worktree linked to the thread, which must still be
+/// the same real folder of the same repository.
+pub fn work_folder(project: &Project, thread: &Thread) -> Result<String, String> {
+    use crate::reason_agents::checked_folder;
+    if checked_folder(Path::new(&project.folder)).ok().as_deref() != Some(project.folder.as_str()) {
+        return Err(
+            "프로젝트 폴더를 찾을 수 없거나 바뀌었습니다. 프로젝트를 다시 추가하세요.".into(),
+        );
+    }
+    let Some(linked) = &thread.worktree else {
+        return Ok(project.folder.clone());
+    };
+    if checked_folder(Path::new(&linked.path)).ok().as_deref() != Some(linked.path.as_str()) {
+        return Err(format!(
+            "연결한 worktree 폴더({})를 찾을 수 없거나 바뀌었습니다. 이 대화의 작업 폴더는 바꿀 수 없으니 새 대화를 여세요.",
+            linked.path
+        ));
+    }
+    let again = verify_worktree(&project.folder, &linked.path)
+        .map_err(|e| format!("연결한 worktree를 다시 확인하지 못했습니다: {e}"))?;
+    Ok(again.path)
 }

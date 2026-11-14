@@ -5,8 +5,8 @@ use serde_json::json;
 use std::path::Path;
 use toris_studio_desktop::project_chat::{
     changes, handoff_code, hosted_prompt, normalize_claude, normalize_codex, strip_code,
-    title_from, tool_summary, turn_command, ChatAgent, ChatMode, HostedAssistant, Item, ItemKind,
-    ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL, MAX_RUNNING,
+    title_from, tool_summary, turn_command, verify_worktree, work_folder, ChatAgent, ChatMode,
+    HostedAssistant, Item, ItemKind, ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL, MAX_RUNNING,
 };
 use toris_studio_desktop::reason_agents::{checked_folder, typed_path};
 use toris_studio_desktop::reason_network::Message;
@@ -24,6 +24,7 @@ fn thread(agent: ChatAgent, mode: ChatMode, session: Option<&str>) -> Thread {
         created_at: "now".into(),
         updated_at: "now".into(),
         running: false,
+        worktree: None,
     }
 }
 
@@ -304,12 +305,258 @@ fn project_chat_stores_projects_threads_and_items() {
         chat.release(&format!("other-{n}"));
     }
 
+    // Editing turns in one folder run one at a time; reading turns and other folders do not wait.
+    chat.claim_in("e1", 1, Some("/w/app"), true).unwrap();
+    let busy = chat.claim_in("e2", 1, Some("/w/app"), true).unwrap_err();
+    assert!(busy.contains("같은 작업 폴더"), "{busy}");
+    assert!(chat.check_slot("e2", "/w/app", true).is_err());
+    chat.check_slot("e2", "/w/app", false).unwrap();
+    chat.check_slot("e2", "/w/app-wt", true).unwrap();
+    chat.claim_in("p1", 1, Some("/w/app"), false).unwrap();
+    chat.claim_in("e3", 1, Some("/w/app-wt"), true).unwrap();
+    for id in ["e1", "p1", "e3"] {
+        chat.release(id);
+    }
+    chat.claim_in("e2", 1, Some("/w/app"), true).unwrap();
+    chat.release("e2");
+
     chat.remove_project(&project.id).unwrap();
     assert!(chat.projects().1.is_empty());
     assert!(
         chat.items(&t.id).is_empty(),
         "items removed with the project"
     );
+}
+
+#[test]
+fn project_chat_reads_threads_stored_before_worktrees() {
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("chat");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("projects.json"),
+        r#"{"projects":[{"id":"p1","name":"app","folder":"/Users/me/projects/app","addedAt":"x"}],
+            "threads":[{"id":"t1","projectId":"p1","title":"옛 대화","agent":"codex","mode":"edit",
+            "providerSession":"th-1","createdAt":"x","updatedAt":"x"}]}"#,
+    )
+    .unwrap();
+    let chat = ProjectChat::new(store);
+    let thread = chat.thread("t1").unwrap();
+    assert_eq!(
+        thread.worktree, None,
+        "an old thread keeps the project folder"
+    );
+    assert_eq!(thread.provider_session.as_deref(), Some("th-1"));
+    let saved = serde_json::to_value(&thread).unwrap();
+    assert!(
+        saved.get("worktree").is_none(),
+        "nothing new is written for it"
+    );
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A repository `app` with one commit and staged, unstaged and untracked
+/// changes, its worktree `app-wt` on `feature/x`, and an unrelated `other` repo.
+struct Repos {
+    _dir: tempfile::TempDir,
+    root: std::path::PathBuf,
+    app: String,
+    wt: String,
+    other: String,
+}
+
+fn repos() -> Repos {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for name in ["app", "other"] {
+        let repo = root.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "base\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "init"]);
+    }
+    let app = root.join("app");
+    git_in(
+        &app,
+        &["worktree", "add", "-q", "-b", "feature/x", "../app-wt"],
+    );
+    // The user's own work in progress in the original checkout.
+    std::fs::write(app.join("a.txt"), "staged\n").unwrap();
+    git_in(&app, &["add", "a.txt"]);
+    std::fs::write(app.join("b.txt"), "unstaged\n").unwrap();
+    std::fs::write(app.join("mine.txt"), "untracked\n").unwrap();
+    let text = |name: &str| checked_folder(&root.join(name)).unwrap();
+    Repos {
+        app: text("app"),
+        wt: text("app-wt"),
+        other: text("other"),
+        root,
+        _dir: dir,
+    }
+}
+
+impl Repos {
+    /// The original checkout's status and file contents, to prove they never change.
+    fn original(&self) -> (String, Vec<String>) {
+        let app = Path::new(&self.app);
+        (
+            git_in(app, &["status", "--porcelain=v1", "--untracked-files=all"]),
+            ["a.txt", "b.txt", "mine.txt"]
+                .iter()
+                .map(|f| std::fs::read_to_string(app.join(f)).unwrap())
+                .collect(),
+        )
+    }
+}
+
+#[test]
+fn project_chat_links_only_a_worktree_of_the_same_repository() {
+    let r = repos();
+    let before = r.original();
+    assert_eq!(before.0, "M  a.txt\n M b.txt\n?? mine.txt");
+
+    let ok = verify_worktree(&r.app, &r.wt).unwrap();
+    assert_eq!(ok.path, r.wt);
+    assert_eq!(ok.branch.as_deref(), Some("feature/x"));
+    assert_eq!(ok.base, git_in(Path::new(&r.app), &["rev-parse", "HEAD"]));
+
+    let err = |candidate: &str| verify_worktree(&r.app, candidate).unwrap_err();
+    assert!(err(&r.app).contains("원본 프로젝트 폴더"));
+    assert!(err(&r.other).contains("다른 Git 저장소"));
+    std::fs::create_dir_all(r.root.join("plain")).unwrap();
+    assert!(err(r.root.join("plain").to_str().unwrap()).contains("Git worktree가 아닙니다"));
+    std::fs::create_dir_all(r.root.join("app-wt/src")).unwrap();
+    assert!(err(r.root.join("app-wt/src").to_str().unwrap()).contains("최상위"));
+    assert!(
+        verify_worktree(r.root.join("plain").to_str().unwrap(), &r.wt)
+            .unwrap_err()
+            .contains("프로젝트 폴더가 Git 저장소가 아니어서")
+    );
+    // A worktree of an unrelated repository with the same folder name is still refused.
+    git_in(
+        Path::new(&r.other),
+        &["worktree", "add", "-q", "-b", "y", "../elsewhere/app-wt"],
+    );
+    assert!(err(r.root.join("elsewhere/app-wt").to_str().unwrap()).contains("다른 Git 저장소"));
+
+    assert_eq!(r.original(), before, "the original checkout is untouched");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_chat_thread_works_in_its_linked_worktree() {
+    let r = repos();
+    let before = r.original();
+    let store = tempfile::tempdir().unwrap();
+    let chat = ProjectChat::new(store.path().join("chat"));
+    let project = chat.add_project(&r.app).unwrap();
+    let plain = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+        .unwrap();
+    let t = chat
+        .create_thread(&project.id, ChatAgent::Codex, ChatMode::Edit)
+        .unwrap();
+
+    assert!(chat.link_worktree(&t.id, &r.other).is_err());
+    assert_eq!(
+        chat.thread(&t.id).unwrap().worktree,
+        None,
+        "a refused link stores nothing"
+    );
+    let linked = chat.link_worktree(&t.id, &r.wt).unwrap();
+    let wt = linked.worktree.clone().unwrap();
+    assert_eq!(
+        (wt.path.as_str(), wt.branch.as_deref()),
+        (r.wt.as_str(), Some("feature/x"))
+    );
+
+    // Restart: the link is read back from disk, and turns, planner snapshots
+    // and the changes panel all use the same folder.
+    let again = ProjectChat::new(store.path().join("chat"));
+    let reopened = again.thread(&t.id).unwrap();
+    assert_eq!(reopened.worktree.as_ref(), Some(&wt));
+    assert_eq!(work_folder(&project, &reopened).unwrap(), r.wt);
+    assert_eq!(
+        work_folder(&project, &plain).unwrap(),
+        r.app,
+        "other threads keep the project folder"
+    );
+
+    std::fs::write(Path::new(&r.wt).join("feature.txt"), "x").unwrap();
+    let in_wt = changes(&work_folder(&project, &reopened).unwrap());
+    assert_eq!(in_wt.folder, r.wt);
+    assert_eq!(in_wt.branch.as_deref(), Some("feature/x"));
+    assert_eq!(in_wt.files, ["?? feature.txt"]);
+    let in_app = changes(&r.app);
+    assert_eq!(in_app.branch.as_deref(), Some("main"));
+    assert!(!in_app.files.iter().any(|f| f.ends_with("feature.txt")));
+
+    // Fixed once the thread has started.
+    chat.append(&t.id, &[Item::new(ItemKind::User, "시작")])
+        .unwrap();
+    assert!(chat
+        .link_worktree(&t.id, &r.wt)
+        .unwrap_err()
+        .contains("작업 폴더를 바꿀 수 없습니다"));
+    chat.update_thread(&plain.id, |t| {
+        t.provider_session = Some("s".into());
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        chat.link_worktree(&plain.id, &r.wt).is_err(),
+        "a resumed session keeps its folder"
+    );
+    let running = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+        .unwrap();
+    chat.claim(&running.id, 1).unwrap();
+    assert!(chat.link_worktree(&running.id, &r.wt).is_err());
+    chat.release(&running.id);
+
+    // Deleting the thread leaves the worktree and its files alone.
+    chat.delete_thread(&t.id).unwrap();
+    assert!(Path::new(&r.wt).join("feature.txt").is_file());
+    assert!(Path::new(&r.wt).join(".git").exists());
+
+    // A worktree swapped for a link to another repository, or gone, is refused before use.
+    let moved = r.root.join("app-wt-moved");
+    std::fs::rename(&r.wt, &moved).unwrap();
+    std::os::unix::fs::symlink(&r.other, &r.wt).unwrap();
+    let swapped = work_folder(&project, &reopened).unwrap_err();
+    assert!(swapped.contains("찾을 수 없거나 바뀌었습니다"), "{swapped}");
+    std::fs::remove_file(&r.wt).unwrap();
+    assert!(
+        work_folder(&project, &reopened).is_err(),
+        "missing worktree"
+    );
+    // A different checkout put at the same path is not the same repository.
+    std::fs::create_dir_all(&r.wt).unwrap();
+    git_in(Path::new(&r.wt), &["init", "-q"]);
+    assert!(work_folder(&project, &reopened)
+        .unwrap_err()
+        .contains("다른 Git 저장소"));
+
+    assert_eq!(r.original(), before, "the original checkout is untouched");
 }
 
 fn message(id: &str, from: &str, reply_to: Option<&str>) -> Message {
@@ -788,6 +1035,69 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         )
         .await;
         assert!(missing.unwrap_err().contains("CLI를 찾지 못했습니다"));
+    }
+
+    #[tokio::test]
+    async fn project_chat_turn_runs_in_the_linked_worktree_and_serializes_edits() {
+        let rig = rig("ok");
+        let app = std::path::Path::new(&rig.folder);
+        super::git_in(app, &["init", "-q", "-b", "main"]);
+        fs::write(app.join("a.txt"), "one\n").unwrap();
+        super::git_in(app, &["add", "."]);
+        super::git_in(app, &["commit", "-qm", "init"]);
+        super::git_in(
+            app,
+            &["worktree", "add", "-q", "-b", "feature/t", "../app-wt"],
+        );
+        fs::write(app.join("a.txt"), "user's edit\n").unwrap();
+        let folder = checked_folder(app).unwrap();
+        let wt = checked_folder(&rig.dir.path().join("app-wt")).unwrap();
+        let project = rig.chat.add_project(&folder).unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let t = rig.chat.link_worktree(&t.id, &wt).unwrap();
+        let cwd = work_folder(&project, &t).unwrap();
+        assert_eq!(cwd, wt);
+
+        // Another editing turn holds the same folder: refused before any CLI starts.
+        rig.chat.claim_in("holder", 1, Some(&wt), true).unwrap();
+        let refused = start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            cwd.clone(),
+            "hi".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap_err();
+        assert!(refused.contains("같은 작업 폴더"), "{refused}");
+        assert!(log(&rig, "cwd.txt").is_empty(), "no CLI was started");
+        assert!(!rig.chat.is_running(&t.id));
+        rig.chat.release("holder");
+
+        start_turn(rig.chat.clone(), t.clone(), cwd, "hi".into(), rig.path())
+            .await
+            .unwrap();
+        idle(&rig.chat, &t.id).await;
+        assert_eq!(
+            std::path::Path::new(log(&rig, "cwd.txt").trim())
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            wt,
+            "the agent ran in the worktree"
+        );
+        assert!(
+            rig.chat.link_worktree(&t.id, &wt).is_err(),
+            "fixed after the run"
+        );
+        assert_eq!(
+            fs::read_to_string(app.join("a.txt")).unwrap(),
+            "user's edit\n"
+        );
     }
 
     /// Live: runs the real Claude Code once in a scratch folder. `cargo test -- --ignored live`.

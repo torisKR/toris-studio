@@ -9,13 +9,15 @@ export const ITEM_KINDS = ["user", "assistant", "thinking", "tool", "tool_result
 export type ItemKind = typeof ITEM_KINDS[number];
 
 export type Project = { id: string; name: string; folder: string; addedAt: string };
-export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean };
+/** An existing git worktree of the project a thread works in; fixed once the thread starts. */
+export type Worktree = { path: string; branch: string | null; base: string; linkedAt: string };
+export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null };
 export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; at: string };
 /** Hosted assistants reach Reason Network only through its MCP server and cannot be messaged by name. */
 export const HOSTED_ASSISTANTS = ["muse", "dots", "grok"] as const;
 export type HostedAssistant = typeof HOSTED_ASSISTANTS[number];
 export const HOSTED_LABELS: Record<HostedAssistant, string> = { muse: "Muse", dots: "OpenAI Dots", grok: "Grok Bot" };
-export type Changes = { isRepo: boolean; branch: string | null; files: string[]; diff: string; truncated: boolean };
+export type Changes = { folder: string; isRepo: boolean; branch: string | null; files: string[]; diff: string; truncated: boolean };
 export type ChatEvent = { threadId: string; kind: "items"; items: ChatItem[] } | { threadId: string; kind: "state"; running: boolean; thread?: Thread };
 
 type Rec = Record<string, unknown>;
@@ -27,11 +29,15 @@ export function normalizeProject(value: unknown): Project | null {
   const r = rec(value);
   return str(r.id) && str(r.folder) ? { id: str(r.id), name: str(r.name) || str(r.folder).split("/").pop() || "project", folder: str(r.folder), addedAt: str(r.addedAt) } : null;
 }
+export function normalizeWorktree(value: unknown): Worktree | null {
+  const r = rec(value);
+  return str(r.path).startsWith("/") && /^[0-9a-f]{40,64}$/i.test(str(r.base)) ? { path: str(r.path), branch: str(r.branch) || null, base: str(r.base), linkedAt: str(r.linkedAt) } : null;
+}
 export function normalizeThread(value: unknown): Thread | null {
   const r = rec(value);
   if (!str(r.id) || !str(r.projectId) || !CHAT_AGENTS.includes(r.agent as ChatAgent) || (r.mode !== "plan" && r.mode !== "edit")) return null;
   return { id: str(r.id), projectId: str(r.projectId), title: str(r.title) || "새 대화", agent: r.agent as ChatAgent, mode: r.mode, providerSession: str(r.providerSession) || null,
-    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true };
+    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true, worktree: normalizeWorktree(r.worktree) };
 }
 export function normalizeItem(value: unknown): ChatItem | null {
   const r = rec(value);
@@ -161,9 +167,25 @@ export function awaitingPlanner(items: ChatItem[]): boolean {
 export async function syncPeers(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
   return compact(list(await call("project_chat_sync_peers", { input: { threadId } })).map(normalizeItem));
 }
-export async function readChanges(projectId: string, call: BridgeInvoke = nativeInvoke): Promise<Changes> {
-  const r = rec(await call("project_chat_changes", { input: { projectId } }));
-  return { isRepo: r.isRepo === true, branch: str(r.branch) || null, files: list(r.files).map(str).filter(Boolean), diff: str(r.diff), truncated: r.truncated === true };
+/** A thread can change its folder only before it starts. */
+export function threadStarted(thread: Thread | null, items: ChatItem[]): boolean {
+  return !!thread && (thread.running || !!thread.providerSession || items.length > 0);
+}
+/** The host picks the folder in an OS dialog (or checks a typed path), verifies it is a worktree of the
+ * project's repository and asks for confirmation. Null when cancelled. */
+export async function linkWorktree(threadId: string, path: string | null, call: BridgeInvoke = nativeInvoke): Promise<Thread | null> {
+  const typed = path?.trim() ?? "";
+  if (path !== null && !typed.startsWith("/") && !typed.startsWith("~/")) throw new Error("/ 또는 ~/ 로 시작하는 전체 경로를 입력하세요.");
+  const r = rec(await call("project_chat_link_worktree", { input: typed ? { threadId, path: typed } : { threadId } }));
+  if (r.cancelled !== false) return null;
+  const thread = normalizeThread(r.thread);
+  if (!thread?.worktree) throw new Error("worktree를 연결하지 못했습니다.");
+  return thread;
+}
+/** Changes in the folder a thread works in (its worktree), or the project folder without a thread. */
+export async function readChanges(projectId: string, call: BridgeInvoke = nativeInvoke, threadId?: string): Promise<Changes> {
+  const r = rec(await call("project_chat_changes", { input: threadId ? { projectId, threadId } : { projectId } }));
+  return { folder: str(r.folder), isRepo: r.isRepo === true, branch: str(r.branch) || null, files: list(r.files).map(str).filter(Boolean), diff: str(r.diff), truncated: r.truncated === true };
 }
 export function normalizeEvent(value: unknown): ChatEvent | null {
   const r = rec(value);
