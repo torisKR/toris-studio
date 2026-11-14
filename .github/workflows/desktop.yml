@@ -66,7 +66,7 @@ jobs:
 
   native:
     needs: [security, contracts, publication-safety]
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
