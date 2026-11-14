@@ -34,12 +34,15 @@
     "desktop/src-tauri/tests/project_chat_contract.rs",
     "tests/project-chat-client.test.ts",
     "scripts/verify-project-chat-ui.mjs",
+    "scripts/verify-project-drafts-ui.mjs",
     "docs/PROJECT_CHAT.md"
    ],
    "verify": [
     "node --import tsx --test tests/project-chat-client.test.ts",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract",
-    "node scripts/verify-project-chat-ui.mjs"
+    "node scripts/verify-project-chat-ui.mjs",
+    "node --import tsx --test tests/project-drafts.test.ts",
+    "node scripts/verify-project-drafts-ui.mjs"
    ],
    "mutants": [
     "desktop/src-tauri/tests/mutants.json"
