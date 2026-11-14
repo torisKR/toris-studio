@@ -14,8 +14,15 @@ const calls = [];
 const at = n => `2026-11-14T03:0${n}:00.000Z`;
 const project = { id: "p-app", name: "pocket-app", folder: "/Users/qa/projects/pocket-app", addedAt: at(0) };
 const adminProject = { id: "p-admin", name: "admin-web", folder: "/Users/qa/projects/admin-web", addedAt: at(9) };
-let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set(), planReplies = [], createReplies = [], leftovers = [];
+let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set(), planReplies = [], createReplies = [], leftovers = [], commitBlocked = null, commitReplies = [];
 const planFor = id => ({ threadId: id, projectFolder: project.folder, path: `${project.folder}-worktrees/${id}`, branch: `studio/${id}`, base: "89abcdef0123456789abcdef0123456789abcdef" });
+const commitHead = "89abcdef0123456789abcdef0123456789abcdef";
+const commitFilesFixture = [
+  { path: "src/Checkout.tsx", change: "added", fingerprint: "100644:1111111111111111111111111111111111111111", diff: "새 파일 src/Checkout.tsx\n+export function Checkout() {\n+  return <form aria-label=\"결제\" />;\n+}\n", truncated: false },
+  { path: "README.md", change: "modified", fingerprint: "100644:2222222222222222222222222222222222222222", diff: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-# app\n+# pocket-app 결제", truncated: false },
+  { path: "old.txt", change: "deleted", fingerprint: "deleted", diff: "diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye", truncated: false },
+  { path: "config/link.json", change: "added", fingerprint: "", diff: "", truncated: false, refused: "심볼릭 링크는 커밋하지 않습니다." }
+];
 const worktree = { path: "/Users/qa/projects/pocket-app-wt", branch: "feature/login", base: "0123456789abcdef0123456789abcdef01234567", linkedAt: at(9) };
 const inboxMessage = { id: "m-free", from: "toris/grok-bot", fromName: "Grok Bot", text: "코드 없이 보낸 결제 기획\n1. 구독", createdAt: at(8), replyTo: null, video: null, requestError: null, jobId: null };
 // Attachments: the host keeps picked files per thread; the page only ever holds their IDs.
@@ -89,6 +96,19 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       leftovers = leftovers.filter(l => l !== left);
       threads = threads.map(t => t.id === args.input.threadId ? { ...t, worktree: { path: left.path, branch: left.branch, base: left.base, linkedAt: at(9) } } : t);
       return { cancelled: false, thread: threads.find(t => t.id === args.input.threadId) };
+    }
+    case "project_chat_commit_review": {
+      assert.deepEqual(Object.keys(args.input), ["threadId"]);
+      const wt = threads.find(t => t.id === args.input.threadId)?.worktree;
+      return { threadId: args.input.threadId, folder: wt.path, branch: wt.branch, head: commitHead, more: false, files: commitFilesFixture, blocked: commitBlocked };
+    }
+    case "project_chat_commit": {
+      assert.deepEqual(Object.keys(args.input).sort(), ["files", "head", "message", "threadId"], "only the reviewed HEAD, picked paths with fingerprints and the message leave the page");
+      const reply = commitReplies.shift();
+      if (reply === "stale") throw new Error("검토한 뒤 src/Checkout.tsx의 내용이 바뀌었습니다. 다시 검토하세요.");
+      if (reply === "cancel") return { cancelled: true };
+      const wt = threads.find(t => t.id === args.input.threadId)?.worktree;
+      return { cancelled: false, commit: { sha: "fedcba9876543210fedcba9876543210fedcba98", branch: wt.branch, folder: wt.path, files: args.input.files.map(f => f.path), indexUpdated: true } };
     }
     case "project_chat_worktree_forget":
       assert.deepEqual(args.input, { recordId: "r-missing" });
@@ -452,6 +472,7 @@ try {
   await changes.getByText("worktree: " + worktree.path, { exact: true }).waitFor();
   assert.deepEqual(last("project_chat_changes").args, { input: { projectId: project.id, threadId: linkedId } }, "changes come from the thread's folder");
   await page.screenshot({ path: resolve(out, "06-worktree-linked.png") });
+  assert.equal(await changes.getByRole("button", { name: "선택 커밋", exact: true }).count(), 0, "a worktree the user linked offers no commit");
   await target.selectOption("agent:claude");
   await box.fill("결제 화면을 구현해줘");
   await box.press("Enter");
@@ -621,6 +642,60 @@ try {
   assert.equal(await root.locator(".pc-title strong").textContent(), "랜딩 문구 정리", "stopping another job keeps the open thread");
   await page.screenshot({ path: resolve(out, "12-parallel-jobs-after.png") });
   report.checks.push("The jobs list shows running, done, failed and stopped threads across projects with agent and branch, opens one (switching project) without mixing another thread's stream, and stops only the thread asked.");
+
+  // Selected-file commit in the Studio-made worktree: blocked states, per-file diff, picking,
+  // message, a host refusal that asks for a new review, then success with SHA and branch.
+  // Back to the thread working in the Studio-made worktree (studio/old1) from the isolated-thread scenario.
+  threads = threads.map(t => t.worktree?.branch === "studio/old1" ? { ...t, title: "격리된 커밋 대화" } : t);
+  await openSection(page, "제작");
+  await openSection(page, "프로젝트");
+  await root.getByRole("button", { name: "pocket-app", exact: true }).click();
+  await root.locator(".pc-thread").filter({ hasText: "격리된 커밋 대화" }).click();
+  await root.locator(".pc-title strong").getByText("격리된 커밋 대화", { exact: true }).waitFor();
+  commitBlocked = "이 worktree에 이미 staged(git add된) 변경이 있습니다. Studio는 그 변경을 섞지 않으려고 커밋하지 않습니다.";
+  await changes.getByRole("button", { name: "선택 커밋", exact: true }).click();
+  const commitBox = changes.getByRole("region", { name: "선택 파일 커밋", exact: true });
+  await commitBox.getByText("staged(git add된) 변경", { exact: false }).waitFor();
+  assert.equal(await commitBox.getByRole("checkbox", { name: "src/Checkout.tsx 커밋에 포함" }).isDisabled(), true, "blocked: nothing can be picked");
+  const commitThread = last("project_chat_commit_review").args.input.threadId;
+  const commitBranch = threads.find(t => t.id === commitThread).worktree.branch;
+  assert.ok(commitBranch.startsWith("studio/"));
+  commitBlocked = null;
+  await commitBox.getByRole("button", { name: "커밋 목록 다시 검토" }).click();
+  await commitBox.getByText("staged(git add된) 변경", { exact: false }).waitFor({ state: "detached" });
+  await commitBox.getByText(`${commitBranch} · HEAD ${commitHead.slice(0, 12)}`, { exact: true }).waitFor();
+  assert.equal(await commitBox.getByRole("checkbox", { name: "config/link.json 커밋에 포함" }).isDisabled(), true, "a refused file cannot be picked");
+  await commitBox.getByText("심볼릭 링크는 커밋하지 않습니다.", { exact: true }).waitFor();
+  const commitButton = commitBox.getByRole("button", { name: "고른 파일 커밋…" });
+  assert.equal(await commitButton.isDisabled(), true, "no file picked, no message");
+  await commitBox.getByRole("button", { name: "src/Checkout.tsx diff 보기" }).click();
+  await commitBox.getByText("+export function Checkout() {", { exact: true }).waitFor();
+  await commitBox.getByRole("button", { name: "old.txt diff 보기" }).click();
+  await commitBox.getByRole("checkbox", { name: "src/Checkout.tsx 커밋에 포함" }).check();
+  await commitBox.getByRole("checkbox", { name: "old.txt 커밋에 포함" }).check();
+  assert.equal(await commitButton.isDisabled(), true, "a message is required");
+  const commitMessage = commitBox.getByRole("textbox", { name: "커밋 메시지" });
+  await commitMessage.fill("feat: 결제 화면 추가");
+  await commitBox.getByText("고른 2개 파일만", { exact: false }).waitFor();
+  await page.screenshot({ path: resolve(out, "11-commit-review.png") });
+  commitReplies = ["stale", "ok"];
+  await commitButton.click();
+  await commitBox.getByText("다시 검토하세요", { exact: false }).waitFor();
+  assert.deepEqual(last("project_chat_commit").args, { input: { threadId: commitThread, head: commitHead, message: "feat: 결제 화면 추가",
+    files: [{ path: "src/Checkout.tsx", fingerprint: commitFilesFixture[0].fingerprint }, { path: "old.txt", fingerprint: "deleted" }] } }, "README.md was not picked and is not sent");
+  const reviewsBefore = count("project_chat_commit_review");
+  await commitBox.getByRole("button", { name: "다시 검토", exact: true }).click();
+  await commitBox.getByText("다시 검토하세요", { exact: false }).waitFor({ state: "detached" });
+  assert.equal(count("project_chat_commit_review"), reviewsBefore + 1);
+  assert.equal(await commitBox.getByRole("checkbox", { name: "src/Checkout.tsx 커밋에 포함" }).isChecked(), false, "a new review starts with nothing picked");
+  await commitBox.getByRole("checkbox", { name: "src/Checkout.tsx 커밋에 포함" }).check();
+  await commitButton.click();
+  await commitBox.getByRole("status").getByText("fedcba987654", { exact: true }).waitFor();
+  await commitBox.getByRole("status").getByText(`· ${commitBranch} · 파일 1개`, { exact: false }).waitFor();
+  assert.deepEqual(last("project_chat_commit").args.input.files, [{ path: "src/Checkout.tsx", fingerprint: commitFilesFixture[0].fingerprint }]);
+  assert.equal(count("project_chat_commit"), 2);
+  await page.screenshot({ path: resolve(out, "12-commit-done.png") });
+  report.checks.push("In a Studio-made worktree the changes panel commits only picked files: blocked and refused files cannot be picked, each file's diff is shown, a message is required, a host refusal asks for a new review that clears the picks, and success shows the SHA and branch. A linked worktree offers no commit; nothing is pushed.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });

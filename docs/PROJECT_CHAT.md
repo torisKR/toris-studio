@@ -40,6 +40,13 @@
    - 만든 폴더는 6의 **기존 worktree 연결**과 같은 검사(같은 저장소·최상위·커밋)를 거쳐 대화에 저장되고, 브랜치와 기준 커밋이 계획과 같은지도 확인한다. 이후 고정·재검증·편집 직렬화도 6과 같다.
    - git을 부르기 전에 생성 기록을 대화 저장 폴더의 `worktree-pending.json`에 남기고, 대화에 저장한 뒤 지운다. 앱이 중간에 멈췄거나 저장에 실패하면 프로젝트 화면에 **만들다 멈춘 worktree**가 보인다. 폴더가 계획한 브랜치의 같은 저장소 worktree이면 **새 대화로 이어서 연결**(OS 확인 후)할 수 있고, 폴더가 없거나 다른 것이 있으면 안내만 보여 준다. **기록 지우기**는 기록만 지운다. Studio는 출처가 불명확한 폴더나 브랜치를 자동으로 지우지 않는다. git이 실패했는데 폴더도 브랜치도 남지 않았으면 기록을 바로 지우고 "아무것도 바뀌지 않았다"고 알린다.
 7. 오른쪽 **변경 사항**은 그 대화의 작업 폴더(worktree가 있으면 worktree)의 `git status`와 `git diff HEAD`를 읽기 전용으로 보여 주며, 대화의 한 턴이 끝날 때마다 다시 읽는다.
+7-1. **선택 파일 커밋 (Studio가 만든 전용 worktree만)**: 6-1의 **격리된 새 대화**로 만든 worktree(`studio/<대화 ID 앞 8자>` 브랜치, `<프로젝트>-worktrees/<같은 8자>` 폴더)에서만 변경 사항 머리에 **선택 커밋**이 보인다. 직접 연결한 worktree와 프로젝트 폴더 자체에서는 커밋하지 않는다(native가 경로·브랜치 이름을 대화 ID로 다시 계산해 확인).
+   - 패널은 바뀐 파일마다 상태(A·M·D)와 파일별 diff를 보여 준다. 파일을 하나씩 고르고 커밋 메시지를 쓴 뒤 **고른 파일 커밋…**을 누르면 **OS 확인 창**(worktree·브랜치·기준 HEAD·파일 목록·메시지 첫 줄)이 뜬다. **커밋**을 눌러야 진행한다.
+   - 검토할 때 native는 각 파일의 현재 내용 지문(`<모드>:<blob ID>`, 삭제는 `deleted`)과 HEAD를 함께 준다. 화면은 고른 경로와 그 지문, 검토한 HEAD, 메시지만 보낸다. native는 확인 창 전후로 작업 폴더·Studio 소유·브랜치·HEAD·staged 변경·실행 중 에이전트·각 파일 지문을 다시 확인하고, 하나라도 바뀌었으면 커밋하지 않고 **다시 검토**를 요구한다(다시 검토하면 고른 파일은 비워진다).
+   - 고른 파일은 한 번만 읽어(링크를 따라가지 않음) 그 바이트가 검토한 지문과 같을 때만 저장한다. HEAD에서 시작한 **임시 index**에 그 파일들만 넣고 `write-tree` → `commit-tree` → `update-ref <브랜치> <새 커밋> <검토한 HEAD>` 순으로 만든다. 그래서 고르지 않은 파일은 커밋에 들어가지 않고, 그사이 브랜치가 움직였으면 브랜치를 바꾸지 않는다. 성공하면 worktree의 index에서도 그 파일들만 새 커밋과 맞추고, 실제 커밋 SHA와 브랜치를 패널에 보여 준다.
+   - 거부: 이미 staged(git add된) 변경이 있을 때, 그 폴더에서 에이전트 턴이 실행 중일 때, 병합·리베이스·체리픽이 진행 중일 때, worktree가 다른 브랜치로 바뀌었을 때. 심볼릭 링크, 링크된 폴더 안의 파일, 하위 저장소, 5 MiB보다 큰 파일, 보이지 않는 문자나 UTF-8이 아닌 이름은 고를 수 없다. 한 번에 100개 파일, 메시지 4000바이트까지.
+   - `git add .`는 쓰지 않는다. git은 셸 없이 인자로만 부르고 `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `commit.gpgSign=false`, `--literal-pathspecs`, 필터·textconv·외부 diff 없이 실행한다. 저장소 훅과 서명 프로그램은 돌지 않는다(서명이 필요하면 직접 커밋한다).
+   - push·원본 브랜치 반영·병합·되돌리기·hunk 단위 선택은 하지 않는다. 커밋이 실패하면 브랜치·파일·index는 그대로이고 이유를 보여 준다.
 8. 다음 메시지는 같은 CLI 대화를 이어 간다(Claude `--resume`, Codex `exec resume`). 대화를 시작한 뒤에는 에이전트를 바꿀 수 없고, 새 대화를 연다.
 9. 왼쪽 위 **프로젝트·대화 검색**은 프로젝트 이름과 대화 제목만 대소문자·연속 공백을 무시하고 거른다(대화 본문·코드 검색은 하지 않는다). 결과마다 프로젝트·에이전트·실행 상태를 보여 주며 ↓/↑로 이동, Enter로 열기, Esc로 지운다. 결과를 열어도 실행·중지 대상은 바뀌지 않고, 입력 중인 초안은 대화마다 따로 남는다.
 10. 대화 머리 아래 **미리보기 주소**에 그 대화의 로컬 개발 서버 주소(예: `http://localhost:5173`)를 직접 넣고 **저장**한다. `http`/`https`이면서 호스트가 `localhost`, `127.0.0.1`, `[::1]`인 주소만 받는다. 아이디·비밀번호가 붙은 주소, 원격 호스트, 다른 스킴은 거부한다(화면에서 먼저 막고 Studio가 URL 파서로 다시 검사). 주소는 대화마다 따로 저장되어 재시작 뒤에도 남는다. **미리보기 열기**는 기존 `open_external` 경로로 외부 브라우저에서만 연다. Studio 창 안에서는 열지 않는다. 이 주소는 *사용자가 연결한 주소*일 뿐이며, 그 작업 폴더의 서버인지 Studio가 확인하지 않는다. 서버를 대신 실행하거나 포트를 찾지 않고, 에이전트 출력에 있는 주소를 자동으로 저장하거나 열지도 않는다. 비우려면 연필 버튼을 누른 뒤 **지우기**를 누른다.
@@ -66,6 +73,8 @@
 ```bash
 node --import tsx --test tests/project-chat-client.test.ts
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_git_contract   # 임시 저장소에서 실제 선택 커밋
+node --import tsx --test tests/project-git-client.test.ts
 node scripts/verify-project-chat-ui.mjs   # Chromium + 고정 IPC 응답, 스크린샷은 /private/tmp/toris-project-chat-ui (첨부: 08-attachments.png, 09-attachments-sent.png)
 # 실제 Claude Code로 임시 폴더에서 한 턴 (비용 발생)
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract -- --ignored live --nocapture

@@ -1,15 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X, FileText, Paperclip, Activity, CircleCheck, CircleSlash } from "lucide-react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X, FileText, Paperclip, Activity, CircleCheck, CircleSlash } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
 } from "./project-chat-client";
 import { ThreadPreview } from "./ThreadPreview";
+import { ChangesPanel } from "./ChangesPanel";
 import "./ProjectChat.css";
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value);
@@ -135,32 +136,6 @@ function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: 
     </div>;
     default: return null;
   }
-}
-
-function ChangesPanel({ project, threadId, refreshKey, onClose }: { project: Project; threadId: string | null; refreshKey: number; onClose: () => void }) {
-  const [changes, setChanges] = useState<Changes | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const load = useCallback(async () => {
-    setLoading(true); setError("");
-    try { setChanges(await readChanges(project.id, undefined, threadId ?? undefined)); } catch (cause) { setChanges(null); setError(errorText(cause)); } finally { setLoading(false); }
-  }, [project.id, threadId]);
-  useEffect(() => { void load(); }, [load, refreshKey]);
-  const lines = useMemo(() => diffLines(changes?.diff ?? ""), [changes?.diff]);
-  return <aside className="pc-changes" aria-label="변경 사항">
-    <header><strong><FileDiff size={15} />변경 사항</strong>
-      <span>{changes?.branch && <><GitBranch size={12} />{changes.branch}</>}</span>
-      <button type="button" className="pc-icon" aria-label="변경 사항 새로고침" onClick={() => void load()} disabled={loading}>{loading ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}</button>
-      <button type="button" className="pc-icon" aria-label="변경 사항 닫기" onClick={onClose}><PanelRightClose size={15} /></button>
-    </header>
-    {changes?.folder && changes.folder !== project.folder && <p className="pc-muted pc-changes-folder" title={changes.folder}>worktree: {changes.folder}</p>}
-    {error && <p className="pc-error" role="alert">{error}</p>}
-    {changes && !changes.isRepo && <p className="pc-muted">git 저장소가 아니어서 변경 사항을 보여 줄 수 없습니다.</p>}
-    {changes?.isRepo && !changes.files.length && <p className="pc-muted">바뀐 파일이 없습니다.</p>}
-    {!!changes?.files.length && <ul className="pc-files">{changes.files.map(file => <li key={file}><code>{file.slice(0, 2)}</code><span>{file.slice(3)}</span></li>)}</ul>}
-    {!!changes?.diff && <pre className="pc-diff">{lines.map((line, i) => <span key={i} className={line.kind}>{line.text + "\n"}</span>)}</pre>}
-    {changes?.truncated && <p className="pc-muted">diff가 커서 앞부분만 표시합니다.</p>}
-  </aside>;
 }
 
 type Props = { active: boolean };
@@ -610,6 +585,6 @@ export function ProjectChat({ active }: Props) {
         </form>
       </>}
     </div>
-    {project && showChanges && <ChangesPanel key={thread?.worktree?.path ?? project.folder} project={project} threadId={thread?.id ?? null} refreshKey={changesKey} onClose={() => setShowChanges(false)} />}
+    {project && showChanges && <ChangesPanel key={thread?.worktree?.path ?? project.folder} project={project} thread={thread ?? null} refreshKey={changesKey} onClose={() => setShowChanges(false)} />}
   </section>;
 }

@@ -1,0 +1,20 @@
+.pc-changes > header .social-button { flex-shrink: 0; }
+.pc-commit { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--social-line); border-radius: 10px; background: var(--social-inset); font-size: 12px; min-width: 0; }
+.pc-commit > header { display: flex; align-items: center; gap: 6px; }
+.pc-commit > header strong { flex: 1; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.pc-commit p { margin: 0; }
+.pc-commit-where { display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.pc-commit-done { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-radius: 8px; color: #7ee2a0; background: rgba(46, 160, 67, .12); }
+.pc-commit-done code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pc-commit-files { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.pc-commit-files li { display: grid; gap: 4px; min-width: 0; }
+.pc-commit-files li.refused { opacity: .7; }
+.pc-commit-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pc-commit-row input[type="checkbox"] { width: 14px; height: 14px; min-width: 0; margin: 0; padding: 0; flex: none; }
+.pc-commit-row > code { color: var(--social-accent); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; flex-shrink: 0; }
+.pc-commit-path { flex: 1; width: auto; min-height: 0;  display: inline-flex; align-items: center; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; color: var(--social-text); font: inherit; cursor: pointer; text-align: left; }
+.pc-commit-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-commit .pc-diff { max-height: 260px; flex: none; }
+.pc-commit textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 8px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); color: var(--social-text); font: inherit; }
+.pc-commit-note { font-size: 11px; }
+.pc-commit > .social-button { justify-self: start; }
