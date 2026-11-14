@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
@@ -179,7 +179,9 @@ export function ProjectChat({ active }: Props) {
   const textNow = useRef(text);
   const carryDraft = useRef(false);
   textNow.current = text;
-  useEffect(() => {
+  // A layout effect swaps the draft in the same commit that opens the thread, so its input never
+  // shows empty (or the previous thread's text) for a frame.
+  useLayoutEffect(() => {
     const previous = draftKeyRef.current;
     if (previous === draftKey) return;
     draftKeyRef.current = draftKey;
