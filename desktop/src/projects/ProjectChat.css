@@ -109,7 +109,7 @@
 }
 @media (max-width: 760px) {
   .pc-root, .pc-root.with-changes { grid-template-columns: 1fr; height: auto; }
-  .pc-sidebar { border-right: 0; border-bottom: 1px solid var(--social-line); max-height: 240px; }
+  .pc-sidebar { border-right: 0; border-bottom: 1px solid var(--social-line); max-height: 320px; overflow-y: auto; }
   .pc-main { min-height: 560px; }
 }
 
@@ -184,3 +184,20 @@
 .pc-msg.hosted .pc-attached { justify-content: flex-start; }
 .pc-attached li { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px dashed var(--social-line); border-radius: 999px; font-size: 11px; color: var(--social-muted); min-width: 0; }
 .pc-attached li span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--social-text); }
+
+/* Parallel jobs: every thread running now or finished, across projects. */
+.pc-jobs { margin: 0 8px 8px; padding: 6px 4px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); }
+.pc-jobs > header { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px; font-size: 12px; color: var(--social-text); }
+.pc-jobs > header small { margin-left: auto; font-size: 11px; color: var(--social-muted); }
+.pc-jobs ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; max-height: 220px; overflow-y: auto; }
+.pc-job { display: flex; align-items: center; gap: 2px; border-radius: 6px; }
+.pc-job.active { background: var(--social-active, rgba(127, 127, 127, .14)); }
+.pc-job-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; column-gap: 6px; align-items: center; padding: 5px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--social-text); font: inherit; text-align: left; cursor: pointer; }
+.pc-job-open:hover { background: rgba(127, 127, 127, .1); }
+.pc-job-open > svg { grid-column: 1; grid-row: 1 / span 2; }
+.pc-job-title { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.pc-job-meta { grid-column: 2 / span 2; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--social-muted); }
+.pc-job-state { grid-column: 3; grid-row: 1; font-size: 10.5px; color: var(--social-muted); }
+.pc-job.running .pc-job-state { color: var(--social-accent, #3b82f6); }
+.pc-job.done > .pc-job-open > svg { color: #16a34a; }
+.pc-job.failed > .pc-job-open > svg, .pc-job.failed .pc-job-state { color: #dc2626; }

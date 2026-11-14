@@ -11,7 +11,10 @@ export type ItemKind = typeof ITEM_KINDS[number];
 export type Project = { id: string; name: string; folder: string; addedAt: string };
 /** An existing git worktree of the project a thread works in; fixed once the thread starts. */
 export type Worktree = { path: string; branch: string | null; base: string; linkedAt: string };
-export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null; previewUrl: string | null };
+export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null; previewUrl: string | null; lastRun: LastRun | null };
+/** How a thread's latest finished turn ended, recorded by the host. */
+export type RunOutcome = "done" | "failed" | "stopped";
+export type LastRun = { outcome: RunOutcome; startedAt: string; finishedAt: string };
 /** What a message's record keeps of a file it carried: the name relative to the work folder and its size. */
 export type AttachmentRef = { name: string; bytes: number };
 /** A file picked for the next message. The host keeps its path; the window holds only the ID. */
@@ -40,11 +43,15 @@ export function normalizeWorktree(value: unknown): Worktree | null {
   const r = rec(value);
   return str(r.path).startsWith("/") && /^[0-9a-f]{40,64}$/i.test(str(r.base)) ? { path: str(r.path), branch: str(r.branch) || null, base: str(r.base), linkedAt: str(r.linkedAt) } : null;
 }
+export function normalizeLastRun(value: unknown): LastRun | null {
+  const r = rec(value);
+  return r.outcome === "done" || r.outcome === "failed" || r.outcome === "stopped" ? { outcome: r.outcome, startedAt: str(r.startedAt), finishedAt: str(r.finishedAt) } : null;
+}
 export function normalizeThread(value: unknown): Thread | null {
   const r = rec(value);
   if (!str(r.id) || !str(r.projectId) || !CHAT_AGENTS.includes(r.agent as ChatAgent) || (r.mode !== "plan" && r.mode !== "edit")) return null;
   return { id: str(r.id), projectId: str(r.projectId), title: str(r.title) || "새 대화", agent: r.agent as ChatAgent, mode: r.mode, providerSession: str(r.providerSession) || null,
-    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true, worktree: normalizeWorktree(r.worktree), previewUrl: checkPreviewUrl(str(r.previewUrl)).url ?? null };
+    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true, worktree: normalizeWorktree(r.worktree), previewUrl: checkPreviewUrl(str(r.previewUrl)).url ?? null, lastRun: normalizeLastRun(r.lastRun) };
 }
 
 const PREVIEW_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -107,6 +114,22 @@ const compact = <T,>(values: (T | null)[]) => values.filter((v): v is T => v !==
 /** Newest thread first. */
 export function sortThreads(threads: Thread[]): Thread[] {
   return [...threads].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** The host runs at most this many turns at once (one per thread); it enforces the limit itself. */
+export const MAX_RUNNING = 4;
+export type JobState = "running" | RunOutcome;
+export type Job = { thread: Thread; project: Project | null; state: JobState; branch: string | null; at: string };
+export const JOB_LABELS: Record<JobState, string> = { running: "실행 중", done: "완료", failed: "실패", stopped: "중지됨" };
+/** Threads across every project that run now or have finished a turn: running first, then the latest finished. */
+export function jobRows(threads: Thread[], projects: Project[], limit = 12): Job[] {
+  const byId = new Map(projects.map(p => [p.id, p]));
+  return threads
+    .filter(t => t.running || t.lastRun)
+    .map((t): Job => ({ thread: t, project: byId.get(t.projectId) ?? null, state: t.running ? "running" : t.lastRun!.outcome,
+      branch: t.worktree ? t.worktree.branch ?? "분리된 HEAD" : null, at: t.running ? t.updatedAt : t.lastRun!.finishedAt }))
+    .sort((a, b) => Number(b.state === "running") - Number(a.state === "running") || b.at.localeCompare(a.at))
+    .slice(0, limit);
 }
 
 /** Adds items not seen yet, in order, so an event and a reload never duplicate a row. */
