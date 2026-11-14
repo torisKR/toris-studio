@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronRight, FileDiff, GitBranch, GitCommitHorizontal, LoaderCircle, PanelRightClose, RefreshCw, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LatestRequest } from "./project-view-state";
 import {
   canCommitIn, commitFiles, commitMessageProblem, diffLines, pickableFiles, readChanges, reviewCommit,
   type Changes, type CommitChange, type CommitDone, type CommitReview, type Project, type Thread
@@ -24,10 +25,15 @@ function CommitBox({ thread, onCommitted, onClose }: { thread: Thread; onCommitt
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState<CommitDone | null>(null);
+  // Only the latest review is shown: an earlier one answering late would show files as they were.
+  const reviews = useRef(new LatestRequest());
   const load = useCallback(async () => {
     // A new review always starts with nothing picked: what was picked before may have changed.
+    const n = reviews.current.begin();
     setBusy(true); setError(""); setPicked(new Set()); setOpen(new Set());
-    try { setReview(await reviewCommit(thread.id)); } catch (cause) { setReview(null); setError(errorText(cause)); } finally { setBusy(false); }
+    try { const next = await reviewCommit(thread.id); if (reviews.current.isLatest(n)) setReview(next); }
+    catch (cause) { if (reviews.current.isLatest(n)) { setReview(null); setError(errorText(cause)); } }
+    finally { if (reviews.current.isLatest(n)) setBusy(false); }
   }, [thread.id]);
   useEffect(() => { void load(); }, [load]);
   const pickable = useMemo(() => new Set(pickableFiles(review).map(f => f.path)), [review]);
@@ -38,7 +44,12 @@ function CommitBox({ thread, onCommitted, onClose }: { thread: Thread; onCommitt
     setBusy(true); setError("");
     try {
       const result = await commitFiles(review, [...picked], message);
-      if (result) { setDone(result); setMessage(""); onCommitted(); setReview(await reviewCommit(thread.id)); setPicked(new Set()); setOpen(new Set()); }
+      if (result) {
+        setDone(result); setMessage(""); onCommitted();
+        const n = reviews.current.begin();
+        const next = await reviewCommit(thread.id);
+        if (reviews.current.isLatest(n)) { setReview(next); setPicked(new Set()); setOpen(new Set()); }
+      }
     } catch (cause) { setError(errorText(cause)); } finally { setBusy(false); }
   };
   const stale = /다시 검토/.test(error);
@@ -81,14 +92,24 @@ function CommitBox({ thread, onCommitted, onClose }: { thread: Thread; onCommitt
 
 export function ChangesPanel({ project, thread, refreshKey, onClose }: { project: Project; thread: Thread | null; refreshKey: number; onClose: () => void }) {
   const threadId = thread?.id ?? null;
-  const [changes, setChanges] = useState<Changes | null>(null);
-  const [error, setError] = useState("");
+  // Conversations sharing a work folder share this panel. Each diff is kept with the thread it was
+  // read for and only the latest request's answer is applied, so a late diff (or error) of a
+  // conversation that was left never shows on the one open now.
+  const [shown, setShown] = useState<{ threadId: string | null; changes: Changes | null; error: string } | null>(null);
+  const current = shown && shown.threadId === threadId ? shown : null;
+  const changes = current?.changes ?? null;
+  const error = current?.error ?? "";
   const [loading, setLoading] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [bump, setBump] = useState(0);
+  const requests = useRef(new LatestRequest());
   const load = useCallback(async () => {
-    setLoading(true); setError("");
-    try { setChanges(await readChanges(project.id, undefined, threadId ?? undefined)); } catch (cause) { setChanges(null); setError(errorText(cause)); } finally { setLoading(false); }
+    const n = requests.current.begin();
+    setLoading(true);
+    setShown(s => s && s.threadId === threadId ? { ...s, error: "" } : s);
+    try { const next = await readChanges(project.id, undefined, threadId ?? undefined); if (requests.current.isLatest(n)) setShown({ threadId, changes: next, error: "" }); }
+    catch (cause) { if (requests.current.isLatest(n)) setShown({ threadId, changes: null, error: errorText(cause) }); }
+    finally { if (requests.current.isLatest(n)) setLoading(false); }
   }, [project.id, threadId]);
   useEffect(() => { void load(); }, [load, refreshKey, bump]);
   const lines = useMemo(() => diffLines(changes?.diff ?? ""), [changes?.diff]);

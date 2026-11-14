@@ -55,8 +55,25 @@ const until = async (check, message, timeout = 5000) => {
     await new Promise(r => setTimeout(r, 25));
   }
 };
+// Held replies: a call matching (command, thread) waits until the scenario releases it, so a
+// late answer can be made to arrive after the screen moved on. release({ reply }) answers with
+// that value (a snapshot from when it was asked), release({ error }) fails, release() answers normally.
+const held = [];
+const hold = (command, threadId) => {
+  const h = { command, threadId, hit: false };
+  h.promise = new Promise(resolve => { h.release = (outcome = {}) => resolve(outcome); });
+  held.push(h); return h;
+};
 await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
   calls.push({ command, args });
+  const h = held.find(x => !x.hit && x.command === command && x.threadId === args.input?.threadId);
+  if (h) {
+    h.hit = true;
+    const outcome = await h.promise;
+    h.answered = true;
+    if (outcome.error) throw new Error(outcome.error);
+    if ("reply" in outcome) return outcome.reply;
+  }
   if (command === "get_dashboard") return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: "fixture" } };
   switch (command) {
     case "project_chat_list": return { projects, threads };
@@ -156,6 +173,10 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       threads = threads.map(t => t.id === args.input.threadId ? { ...t, ...("mode" in args.input ? { mode: args.input.mode } : {}) } : t);
       return threads.find(t => t.id === args.input.threadId);
     case "project_chat_changes": {
+      if (String(args.input.threadId).startsWith("v-")) {
+        const id = args.input.threadId;
+        return { folder: project.folder, isRepo: true, branch: "main", files: [` M ${id}.txt`], diff: `diff --git a/${id}.txt b/${id}.txt\n@@ -1 +1 @@\n-old\n+${id} 변경`, truncated: false };
+      }
       const linked = threads.find(t => t.id === args.input.threadId)?.worktree;
       if (linked) return { folder: linked.path, isRepo: true, branch: linked.branch, files: ["?? src/Checkout.tsx"], diff: "", truncated: false };
       const own = projects.find(p => p.id === args.input.projectId) ?? project;
@@ -174,6 +195,11 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       return [{ id: "rep1", kind: "peer_reply", text: "## 로그인 기획\n1. 이메일·비밀번호 입력\n2. **실패 시** 안내 문구\n<img src=x onerror=alert(1)>", peer: "Muse", messageId: "m-1", at: at(6) }];
     case "reason_network_refresh": return { state: "connected", version: "0.12.17", selfId: "toris/studio@mac", peers, messages: [inboxMessage], error: null };
     case "project_chat_hosted_request":
+      if (String(args.input.threadId).startsWith("v-")) {
+        const made = { id: "vh-" + args.input.threadId, kind: "hosted_request", text: args.input.text, peerName: "Muse", code: "TS-LATE000001", prompt: "…", at: at(9) };
+        items[args.input.threadId] = [...(items[args.input.threadId] ?? []), made];
+        return [made];
+      }
       if (args.input.attachments) {
         assert.deepEqual(args.input, { threadId: args.input.threadId, assistant: "muse", text: "이 파일로 결제 기획을 다듬어줘", attachments: [planFile.id] }, "the hosted prompt gets the same files by ID");
         pending[args.input.threadId] = [];
@@ -708,6 +734,105 @@ try {
   assert.equal(count("project_chat_commit"), 2);
   await page.screenshot({ path: resolve(out, "12-commit-done.png") });
   report.checks.push("In a Studio-made worktree the changes panel commits only picked files: blocked and refused files cannot be picked, each file's diff is shown, a message is required, a host refusal asks for a new review that clears the picks, and success shows the SHA and branch. A linked worktree offers no commit; nothing is pushed.");
+
+  // Switching conversations while answers are late: two threads of the same project share the
+  // project folder (so one changes panel), and replies are held until the screen has moved on.
+  // Initial read vs. live event, A→B→A reads, a late send result, a left screen's error and a
+  // late diff must each stay with the conversation that asked.
+  const vThread = (id, title) => thread(id, { title, updatedAt: at(9) });
+  threads = [...threads.filter(t => !t.id.startsWith("v-")).map(t => ({ ...t, running: false })), vThread("v-a", "지연 대화 A"), vThread("v-b", "지연 대화 B")];
+  items["v-a"] = [{ id: "va1", kind: "user", text: "A의 저장된 기록", at: at(8) }];
+  items["v-b"] = [{ id: "vb1", kind: "user", text: "B의 저장된 기록", at: at(8) }];
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSection(page, "제작");
+  await openSection(page, "프로젝트");
+  await root.getByRole("button", { name: "pocket-app", exact: true }).click();
+  const openThread = async title => {
+    await root.locator(".pc-thread").filter({ hasText: title }).click();
+    await root.locator(".pc-title strong").getByText(title, { exact: true }).waitFor();
+  };
+  const transcript = root.locator(".pc-transcript");
+  const settle = () => page.waitForTimeout(150);
+  const reached = h => until(() => h.hit, `${h.command} for ${h.threadId} was asked`);
+  const answered = h => until(() => h.answered, `${h.command} for ${h.threadId} was answered`);
+
+  // 1. A live item that arrives before the initial read is kept when the (older) snapshot lands.
+  const firstRead = hold("project_chat_thread_get", "v-a");
+  await openThread("지연 대화 A");
+  await reached(firstRead);
+  await emit({ threadId: "v-a", kind: "items", items: [{ id: "va-live", kind: "assistant", text: "A의 실시간 항목", at: at(9) }] });
+  await transcript.getByText("A의 실시간 항목", { exact: true }).waitFor();
+  firstRead.release({ reply: { thread: threads.find(t => t.id === "v-a"), items: items["v-a"], attachments: [] } });
+  await transcript.getByText("A의 저장된 기록", { exact: true }).waitFor();
+  await settle();
+  assert.equal(await transcript.getByText("A의 실시간 항목", { exact: true }).count(), 1, "the live item survives the late snapshot, once");
+
+  // 2. A→B→A: the first read of A answers last and must not replace the newer one.
+  await openThread("지연 대화 B");
+  const staleRead = hold("project_chat_thread_get", "v-a");
+  await openThread("지연 대화 A");
+  await reached(staleRead);
+  await openThread("지연 대화 B");
+  items["v-a"] = [...items["v-a"], { id: "va-live", kind: "assistant", text: "A의 실시간 항목", at: at(9) }, { id: "va2", kind: "assistant", text: "A의 새 조회", at: at(9) }];
+  await openThread("지연 대화 A");
+  await transcript.getByText("A의 새 조회", { exact: true }).waitFor();
+  staleRead.release({ reply: { thread: threads.find(t => t.id === "v-a"), items: [{ id: "va-old", kind: "notice", text: "A의 옛 조회", at: at(7) }], attachments: [] } });
+  await settle();
+  assert.equal(await transcript.getByText("A의 옛 조회", { exact: true }).count(), 0, "A's earlier read does not land on the newer A");
+  await transcript.getByText("A의 새 조회", { exact: true }).waitFor();
+
+  // 3. A planner request sent from A answers after the user moved to B and started typing there.
+  await target.selectOption("hosted:muse");
+  const lateSend = hold("project_chat_hosted_request", "v-a");
+  await box.fill("A에서 보낸 기획 요청");
+  await root.getByRole("button", { name: "보내기", exact: true }).click();
+  await reached(lateSend);
+  await openThread("지연 대화 B");
+  await transcript.getByText("B의 저장된 기록", { exact: true }).waitFor();
+  await box.fill("B에 쓰던 초안");
+  lateSend.release();
+  await answered(lateSend);
+  await settle();
+  assert.equal(await transcript.getByText("TS-LATE000001", { exact: true }).count(), 0, "A's request does not show in B");
+  assert.equal(await transcript.getByText("A에서 보낸 기획 요청", { exact: true }).count(), 0, "A's request text does not show in B");
+  assert.equal(await box.inputValue(), "B에 쓰던 초안", "A's late result leaves B's draft alone");
+  await openThread("지연 대화 A");
+  await transcript.getByText("TS-LATE000001", { exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "", "A's sent text is cleared from A's own draft");
+
+  // 4. A send from A fails after the user left: the error is A's, not B's.
+  await target.selectOption("agent:claude");
+  const failedSend = hold("project_chat_send", "v-a");
+  await box.fill("A에서 실패할 전송");
+  await box.press("Enter");
+  await reached(failedSend);
+  await openThread("지연 대화 B");
+  failedSend.release({ error: "A의 전송이 실패했습니다." });
+  await answered(failedSend);
+  await settle();
+  assert.equal(await root.getByText("A의 전송이 실패했습니다.", { exact: true }).count(), 0, "a left screen's error is not shown as B's failure");
+  assert.equal(await box.inputValue(), "B에 쓰던 초안");
+  await openThread("지연 대화 A");
+  await root.getByRole("alert").getByText("A의 전송이 실패했습니다.", { exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "A에서 실패할 전송", "a failed send keeps A's draft");
+  await root.locator(".pc-error").getByRole("button", { name: "닫기", exact: true }).click();
+
+  // 5. A's diff answers after B's: the shared changes panel keeps showing B's diff.
+  await openThread("지연 대화 B");
+  await changes.getByText("+v-b 변경", { exact: true }).waitFor();
+  const lateDiff = hold("project_chat_changes", "v-a");
+  await openThread("지연 대화 A");
+  await reached(lateDiff);
+  await openThread("지연 대화 B");
+  await changes.getByText("+v-b 변경", { exact: true }).waitFor();
+  lateDiff.release();
+  await answered(lateDiff);
+  await settle();
+  assert.equal(await changes.getByText("+v-a 변경", { exact: true }).count(), 0, "A's late diff does not replace B's");
+  await changes.getByText("+v-b 변경", { exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "B에 쓰던 초안");
+  await page.screenshot({ path: resolve(out, "13-view-state-guard.png") });
+  report.checks.push("Switching conversations with held replies: a live item that beats the initial read survives it, A's earlier read never replaces a newer A read, a late planner request from A neither shows in B nor clears B's draft (it shows in A and clears A's draft), a failed send from a left screen shows only back on A, and A's late diff does not replace B's in the shared changes panel.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
