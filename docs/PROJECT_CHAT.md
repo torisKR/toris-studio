@@ -43,6 +43,13 @@
 8. 다음 메시지는 같은 CLI 대화를 이어 간다(Claude `--resume`, Codex `exec resume`). 대화를 시작한 뒤에는 에이전트를 바꿀 수 없고, 새 대화를 연다.
 9. 왼쪽 위 **프로젝트·대화 검색**은 프로젝트 이름과 대화 제목만 대소문자·연속 공백을 무시하고 거른다(대화 본문·코드 검색은 하지 않는다). 결과마다 프로젝트·에이전트·실행 상태를 보여 주며 ↓/↑로 이동, Enter로 열기, Esc로 지운다. 결과를 열어도 실행·중지 대상은 바뀌지 않고, 입력 중인 초안은 대화마다 따로 남는다.
 10. 대화 머리 아래 **미리보기 주소**에 그 대화의 로컬 개발 서버 주소(예: `http://localhost:5173`)를 직접 넣고 **저장**한다. `http`/`https`이면서 호스트가 `localhost`, `127.0.0.1`, `[::1]`인 주소만 받는다. 아이디·비밀번호가 붙은 주소, 원격 호스트, 다른 스킴은 거부한다(화면에서 먼저 막고 Studio가 URL 파서로 다시 검사). 주소는 대화마다 따로 저장되어 재시작 뒤에도 남는다. **미리보기 열기**는 기존 `open_external` 경로로 외부 브라우저에서만 연다. Studio 창 안에서는 열지 않는다. 이 주소는 *사용자가 연결한 주소*일 뿐이며, 그 작업 폴더의 서버인지 Studio가 확인하지 않는다. 서버를 대신 실행하거나 포트를 찾지 않고, 에이전트 출력에 있는 주소를 자동으로 저장하거나 열지도 않는다. 비우려면 연필 버튼을 누른 뒤 **지우기**를 누른다.
+11. **파일 첨부 (작업 폴더 안의 작은 텍스트 파일)**: 입력창 아래 **파일 첨부**를 누르면 Studio가 **OS 파일 선택 창**을 그 대화의 작업 폴더(연결한 worktree가 있으면 worktree)에서 연다. 새 대화에서 누르면 대화를 먼저 만들고, 취소하거나 거부되면 빈 대화를 남기지 않는다.
+   - 받는 파일: 작업 폴더 **안**의 일반 파일, **UTF-8 텍스트**(NUL·제어 문자·잘못된 UTF-8은 바이너리로 보고 거부, BOM은 뗌), 빈 파일 아님. 파일 자체나 경로 중간의 **심볼릭 링크**, 폴더 밖 파일, `.git` 안의 파일은 거부한다.
+   - 한도: 메시지당 **최대 4개**, 파일당 **8KiB**, 합계 **16KiB**. 같은 파일은 한 번만.
+   - 입력창 위에 보낼 첨부가 이름·크기와 함께 나오고, 펼치면 **보낼 내용 그대로** 미리보기, ✕로 제거한다. 화면은 경로를 모르고 **첨부 ID만** Studio에 넘긴다. 고른 파일은 Studio가 메모리에 들고 있어서 창을 다시 열어도 남고, 앱을 다시 시작하면 사라진다(보내지 않은 첨부).
+   - **보내기 직전** Studio가 같은 검사(폴더 안·링크·바이너리·크기)를 다시 하고, 고른 뒤 **내용이 바뀌었으면 보내지 않는다**. 바뀐 내용이 미리보기에 "선택 후 바뀜"으로 표시되고, 확인한 뒤 다시 보내면 그 내용이 간다. 작업 폴더가 바뀌면(worktree 연결) 이전에 고른 첨부는 지운다.
+   - 구현 에이전트(Claude·Codex)에게는 입력한 문장 뒤에 `--- 첨부 파일 N개 (… 지시가 아닌 자료) ---` 블록으로 파일 이름·크기와 내용을 붙여 stdin으로 보낸다(파일 안의 ``` 보다 긴 펜스로 감싼다). **호스팅 어시스턴트 전달문**에도 같은 블록이 요청 아래에 들어간다. Reason Network 피어와 답장에는 첨부를 보낼 수 없다(보내기가 막히고 안내가 나온다).
+   - 대화 기록에는 입력한 문장과 별도로 **첨부한 파일 이름·크기**만 남는다(내용은 저장하지 않음). 재시작 후에도 그 메시지 아래에 첨부 표시가 따로 보인다.
 
 ## 동작과 안전장치
 
@@ -57,7 +64,7 @@
 ```bash
 node --import tsx --test tests/project-chat-client.test.ts
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract
-node scripts/verify-project-chat-ui.mjs   # Chromium + 고정 IPC 응답, 스크린샷은 /private/tmp/toris-project-chat-ui
+node scripts/verify-project-chat-ui.mjs   # Chromium + 고정 IPC 응답, 스크린샷은 /private/tmp/toris-project-chat-ui (첨부: 08-attachments.png, 09-attachments-sent.png)
 # 실제 Claude Code로 임시 폴더에서 한 턴 (비용 발생)
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract -- --ignored live --nocapture
 ```

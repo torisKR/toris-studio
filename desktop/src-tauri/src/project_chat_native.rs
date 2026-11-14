@@ -99,6 +99,16 @@ pub struct ThreadUpdateInput {
 pub struct SendInput {
     thread_id: String,
     text: String,
+    /// IDs of files picked with `project_chat_attach`; never paths.
+    #[serde(default)]
+    attachments: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DetachInput {
+    thread_id: String,
+    attachment_id: String,
 }
 
 #[derive(Deserialize)]
@@ -125,6 +135,9 @@ pub struct HostedInput {
     thread_id: String,
     assistant: HostedAssistant,
     text: String,
+    /// IDs of files picked with `project_chat_attach`, quoted in the prompt.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[tauri::command]
@@ -220,7 +233,11 @@ pub async fn project_chat_thread_get(
     if let Ok(snapshot) = network.cached().await {
         let _ = chat.sync_replies(&thread.id, &snapshot.messages);
     }
-    Ok(json!({"thread": thread, "items": chat.items(&thread.id)}))
+    Ok(json!({
+        "thread": thread,
+        "items": chat.items(&thread.id),
+        "attachments": chat.attachments(&thread.id),
+    }))
 }
 
 #[tauri::command]
@@ -486,14 +503,99 @@ pub async fn project_chat_send(
     // The folder must still be the one the user confirmed, not a swapped-in link:
     // the project folder, or the thread's worktree of the same repository.
     let folder = work_folder(project, thread.clone()).await?;
-    project_chat::start_turn(
+    let files = verify_attachments(&chat, &thread.id, &folder, &input.attachments).await?;
+    let turn = project_chat::Turn {
+        shown: text.to_owned(),
+        prompt: project_chat::with_attachments(text, &files),
+        attachments: project_chat::attachment_refs(&files),
+    };
+    let started = project_chat::start_turn_with(
         chat.inner().clone(),
-        thread,
+        thread.clone(),
         folder,
-        text.to_owned(),
+        turn,
         crate::agent_runtime::search_path(),
     )
+    .await?;
+    chat.consume_attachments(&thread.id, &input.attachments);
+    Ok(started)
+}
+
+/// Re-reads the picked files right before they are sent, off the async runtime.
+async fn verify_attachments(
+    chat: &Arc<ProjectChat>,
+    thread: &str,
+    folder: &str,
+    ids: &[String],
+) -> Result<Vec<project_chat::AttachmentFile>, String> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let (chat, thread, folder, ids) = (
+        chat.clone(),
+        thread.to_owned(),
+        folder.to_owned(),
+        ids.to_vec(),
+    );
+    tokio::task::spawn_blocking(move || chat.verify_attachments(&thread, &folder, &ids))
+        .await
+        .map_err(|_| "첨부 파일을 확인하지 못했습니다.".to_owned())?
+}
+
+/// Picks a small UTF-8 text file inside the thread's work folder in the OS
+/// dialog, checks it and keeps it for the thread's next message. The window
+/// gets an ID, the relative name and the text to preview; never a path it
+/// could send back.
+#[tauri::command]
+pub async fn project_chat_attach(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    input: ThreadInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let thread = chat.thread(&input.thread_id)?;
+        let project = chat.project(&thread.project_id)?;
+        let folder = project_chat::work_folder(&project, &thread)?;
+        if chat.attachments(&thread.id).len() >= project_chat::MAX_ATTACHMENTS {
+            return Err(format!(
+                "첨부는 메시지당 {}개까지입니다.",
+                project_chat::MAX_ATTACHMENTS
+            ));
+        }
+        let Some(picked) = app
+            .dialog()
+            .file()
+            .set_title("대화에 첨부할 텍스트 파일 선택 (작업 폴더 안 · 8KiB 이하)")
+            .set_directory(&folder)
+            .blocking_pick_file()
+        else {
+            return Ok(json!({"cancelled": true}));
+        };
+        let path = picked
+            .into_path()
+            .map_err(|_| "로컬 파일을 선택하세요.".to_owned())?;
+        let file = project_chat::read_attachment(&folder, &path)?;
+        let attachment = chat.stage_attachment(&thread.id, &folder, file)?;
+        Ok(json!({"cancelled": false, "attachment": attachment}))
+    })
     .await
+    .map_err(|_| "파일 선택 창을 열지 못했습니다.".to_owned())?
+}
+
+/// Drops a picked file from the thread's next message.
+#[tauri::command]
+pub async fn project_chat_detach(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    input: DetachInput,
+) -> Result<Vec<project_chat::Attachment>, String> {
+    crate::updater::authorize(&window)?;
+    let thread = chat.thread(&input.thread_id)?;
+    chat.remove_attachment(&thread.id, &input.attachment_id);
+    Ok(chat.attachments(&thread.id))
 }
 
 #[tauri::command]
@@ -615,11 +717,12 @@ pub async fn project_chat_hosted_request(
         .ok_or("Reason Network에 연결된 뒤에 요청을 만들 수 있습니다. Agent → Reason Network에서 연결을 확인하세요.")?;
     let code = project_chat::handoff_code();
     let folder = work_folder(project.clone(), thread.clone()).await?;
+    let files = verify_attachments(&chat, &thread.id, &folder, &input.attachments).await?;
     let folder = crate::reason_project::snapshot(Path::new(&folder));
     let prompt = project_chat::hosted_prompt(
         input.assistant,
         &project.name,
-        typed,
+        &project_chat::with_attachments(typed, &files),
         &folder,
         &studio,
         &code,
@@ -628,7 +731,9 @@ pub async fn project_chat_hosted_request(
     item.peer_name = Some(input.assistant.label().to_owned());
     item.code = Some(code);
     item.prompt = Some(prompt);
+    item.attachments = project_chat::attachment_refs(&files);
     chat.append(&thread.id, std::slice::from_ref(&item))?;
+    chat.consume_attachments(&thread.id, &input.attachments);
     if thread.title == "새 대화" {
         let _ = chat.update_thread(&thread.id, |t| {
             t.title = project_chat::title_from(typed);

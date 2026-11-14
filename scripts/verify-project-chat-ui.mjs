@@ -18,6 +18,12 @@ let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1
 const planFor = id => ({ threadId: id, projectFolder: project.folder, path: `${project.folder}-worktrees/${id}`, branch: `studio/${id}`, base: "89abcdef0123456789abcdef0123456789abcdef" });
 const worktree = { path: "/Users/qa/projects/pocket-app-wt", branch: "feature/login", base: "0123456789abcdef0123456789abcdef01234567", linkedAt: at(9) };
 const inboxMessage = { id: "m-free", from: "toris/grok-bot", fromName: "Grok Bot", text: "코드 없이 보낸 결제 기획\n1. 구독", createdAt: at(8), replyTo: null, video: null, requestError: null, jobId: null };
+// Attachments: the host keeps picked files per thread; the page only ever holds their IDs.
+const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const loginFile = { id: uuid(1), name: "src/Login.tsx", bytes: 58, text: "export function Login() {\n  return <form aria-label=\"로그인\" />;\n}\n", changed: false };
+const readmeFile = { id: uuid(2), name: "README.md", bytes: 12, text: "# pocket-app\n", changed: false };
+const planFile = { id: uuid(3), name: "docs/plan.md", bytes: 21, text: "## 결제\n- 정기 결제\n", changed: false };
+let pending = {}, attachReplies = [], sendRefusals = 0;
 const thread = (id, extra = {}) => ({ id, projectId: project.id, title: "새 대화", agent: "claude", mode: "edit", providerSession: null, createdAt: at(1), updatedAt: at(1), running: false, ...extra });
 const peers = [
   { id: "toris/grok@cloud", name: "Grok Bot", kind: "grok", machine: "cloud", cwd: null, branch: null, busy: false },
@@ -42,8 +48,8 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       if (!args.input.path) return { cancelled: true };
       if (args.input.path === "~/projects/admin-web") {
         projects = [...projects, adminProject];
-        threads = [{ id: "t9", projectId: adminProject.id, title: "로그인 화면", agent: "codex", mode: "edit", providerSession: null, createdAt: at(9), updatedAt: at(9), running: true }, ...threads];
-        items.t9 = [{ id: "a1", kind: "user", text: "관리자 로그인", at: at(9) }];
+        threads = [{ id: "t-admin", projectId: adminProject.id, title: "로그인 화면", agent: "codex", mode: "edit", providerSession: null, createdAt: at(9), updatedAt: at(9), running: true }, ...threads];
+        items["t-admin"] = [{ id: "a1", kind: "user", text: "관리자 로그인", at: at(9) }];
         return { cancelled: false, project: adminProject };
       }
       assert.deepEqual(args.input, { path: "~/projects/pocket-app" }, "the page sends only the typed path");
@@ -90,8 +96,31 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     case "project_chat_thread_delete":
       if (!deletable.delete(args.input.threadId)) { report.unexpected.push(command); throw new Error("unexpected: " + command); }
       threads = threads.filter(t => t.id !== args.input.threadId); return null;
-    case "project_chat_thread_get": return { thread: threads.find(t => t.id === args.input.threadId), items: items[args.input.threadId] ?? [] };
+    case "project_chat_thread_get": return { thread: threads.find(t => t.id === args.input.threadId), items: items[args.input.threadId] ?? [], attachments: pending[args.input.threadId] ?? [] };
+    case "project_chat_attach": {
+      assert.deepEqual(Object.keys(args.input), ["threadId"], "only the thread ID leaves the page; the host opens the file dialog");
+      const reply = attachReplies.shift();
+      if (reply === "cancel" || reply === "error") deletable.add(args.input.threadId);
+      if (reply === "cancel") return { cancelled: true };
+      if (reply === "error") throw new Error("이 대화의 작업 폴더 안에 있는 파일만 첨부할 수 있습니다.");
+      pending[args.input.threadId] = [...(pending[args.input.threadId] ?? []), reply];
+      return { cancelled: false, attachment: reply };
+    }
+    case "project_chat_detach":
+      pending[args.input.threadId] = (pending[args.input.threadId] ?? []).filter(a => a.id !== args.input.attachmentId);
+      return pending[args.input.threadId];
     case "project_chat_send":
+      if (args.input.attachments) {
+        assert.deepEqual(Object.keys(args.input).sort(), ["attachments", "text", "threadId"]);
+        assert.ok(args.input.attachments.every(id => /^[0-9a-f-]{36}$/.test(id)), "attachments travel as IDs, never paths or text");
+        if (sendRefusals-- > 0) {
+          // The file changed on disk after it was picked: the host keeps the new text and refuses once.
+          pending[args.input.threadId] = pending[args.input.threadId].map(a => ({ ...a, text: a.text + "// 수정됨\n", bytes: a.bytes + 13, changed: true }));
+          throw new Error("선택한 뒤 내용이 바뀐 첨부가 있습니다: src/Login.tsx. 바뀐 내용을 미리보기에서 확인한 뒤 다시 보내세요.");
+        }
+        items[args.input.threadId] = [...(items[args.input.threadId] ?? []), { id: "ua1", kind: "user", text: args.input.text, attachments: pending[args.input.threadId].map(a => ({ name: a.name, bytes: a.bytes })), at: at(9) }];
+        pending[args.input.threadId] = [];
+      }
       threads = threads.map(t => t.id === args.input.threadId ? { ...t, running: true, title: args.input.text.split("\n")[0].slice(0, 60), updatedAt: at(2) } : t);
       return threads.find(t => t.id === args.input.threadId);
     case "project_chat_thread_update":
@@ -114,6 +143,12 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       return [{ id: "rep1", kind: "peer_reply", text: "## 로그인 기획\n1. 이메일·비밀번호 입력\n2. **실패 시** 안내 문구\n<img src=x onerror=alert(1)>", peer: "Muse", messageId: "m-1", at: at(6) }];
     case "reason_network_refresh": return { state: "connected", version: "0.12.17", selfId: "toris/studio@mac", peers, messages: [inboxMessage], error: null };
     case "project_chat_hosted_request":
+      if (args.input.attachments) {
+        assert.deepEqual(args.input, { threadId: args.input.threadId, assistant: "muse", text: "이 파일로 결제 기획을 다듬어줘", attachments: [planFile.id] }, "the hosted prompt gets the same files by ID");
+        pending[args.input.threadId] = [];
+        items[args.input.threadId] = [...(items[args.input.threadId] ?? []), { id: "h2", kind: "hosted_request", text: args.input.text, peerName: "Muse", code: "TS-0000000002", prompt: "…", attachments: [{ name: planFile.name, bytes: planFile.bytes }], at: at(9) }];
+        return [{ id: "h2", kind: "hosted_request", text: args.input.text, peerName: "Muse", code: "TS-0000000002", prompt: "[Toris Studio 기획 요청 · TS-0000000002]\n--- 첨부 파일 1개 ---\n[첨부 1] docs/plan.md", attachments: [{ name: planFile.name, bytes: planFile.bytes }], at: at(9) }];
+      }
       assert.deepEqual(args.input, { threadId: "t1", assistant: "dots", text: "결제 화면을 기획해줘" }, "only the assistant kind and text leave the page");
       hostedPhase = true;
       return [{ id: "h1", kind: "hosted_request", text: args.input.text, peerName: "OpenAI Dots", code: "TS-ABCDEF1234", prompt: "[Toris Studio 기획 요청 · TS-ABCDEF1234]\nsend_message로 `toris/studio@mac`에게 보내 주세요.", at: at(7) }];
@@ -129,7 +164,7 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     }
     case "open_external": return null;
     case "project_chat_stop":
-      assert.deepEqual(args.input, { threadId: "t9" }, "stop reaches the thread opened from search");
+      assert.deepEqual(args.input, { threadId: "t-admin" }, "stop reaches the thread opened from search");
       return null;
     case "project_chat_remove_project":
       report.unexpected.push(command); throw new Error("unexpected: " + command);
@@ -311,12 +346,12 @@ try {
   assert.equal(await box.inputValue(), "", "t1's draft does not follow into t9");
   assert.equal(await root.getByText(/Codex이\(가\) 작업 중입니다/).count(), 1, "t9 shows as running");
   await emit({ threadId: "t1", kind: "items", items: [{ id: "late-t1", kind: "assistant", text: "t1에 늦게 온 답", at: at(9) }] });
-  await emit({ threadId: "t9", kind: "items", items: [{ id: "a2", kind: "assistant", text: "관리자 화면 작업 중", at: at(9) }] });
+  await emit({ threadId: "t-admin", kind: "items", items: [{ id: "a2", kind: "assistant", text: "관리자 화면 작업 중", at: at(9) }] });
   await root.getByText("관리자 화면 작업 중", { exact: true }).waitFor();
   assert.equal(await root.getByText("t1에 늦게 온 답").count(), 0, "another thread's events stay out of the opened thread");
   await root.getByRole("button", { name: "중지", exact: true }).click();
   await page.waitForTimeout(100);
-  assert.deepEqual(last("project_chat_stop").args, { input: { threadId: "t9" } });
+  assert.deepEqual(last("project_chat_stop").args, { input: { threadId: "t-admin" } });
   assert.equal(count("project_chat_send") + count("project_chat_thread_create"), 2, "opening results starts nothing");
   await hitList.getByRole("button").nth(1).click();
   await root.locator(".pc-title strong").getByText("로그인 화면을 만들어줘", { exact: true }).waitFor();
@@ -467,6 +502,73 @@ try {
   assert.deepEqual(leftovers, []);
   await page.screenshot({ path: resolve(out, "10-leftover-resolved.png") });
   report.checks.push("An isolated new conversation shows the host's planned folder, branch and base HEAD, creates only after the host confirms (refusal and cancel leave nothing), and leftovers from an interrupted creation are continued in a new thread or forgotten without deleting folders.");
+
+  // Attachments: picked in the host's OS dialog inside the work folder, previewed and removable,
+  // re-checked on send (a changed file needs another look), recorded on the message by name.
+  await root.getByRole("button", { name: "새 대화", exact: true }).click();
+  const attachButton = root.getByRole("button", { name: "파일 첨부", exact: true });
+  const pendingBox = root.getByLabel("보낼 첨부", { exact: true });
+  const threadsBefore = threads.length;
+  deletable.clear(); // the isolated-thread fixture marks every planned thread deletable; this scenario counts only its own
+  attachReplies = ["cancel", "error", loginFile, readmeFile];
+  await attachButton.click();
+  await page.waitForTimeout(150);
+  assert.equal(threads.length, threadsBefore, "a cancelled pick leaves no thread");
+  await attachButton.click();
+  await root.getByText("이 대화의 작업 폴더 안에 있는 파일만 첨부할 수 있습니다.").waitFor();
+  assert.equal(threads.length, threadsBefore, "a refused file leaves no thread");
+  assert.equal(deletable.size, 0);
+  await attachButton.click();
+  await pendingBox.getByText("src/Login.tsx", { exact: true }).waitFor();
+  const attachedId = last("project_chat_attach").args.input.threadId;
+  await attachButton.click();
+  await pendingBox.getByText("README.md", { exact: true }).waitFor();
+  await pendingBox.getByText(/첨부 2\/4 · 70B\/16KiB/).waitFor();
+  await pendingBox.getByText("src/Login.tsx", { exact: true }).click();
+  assert.match(await pendingBox.getByLabel("src/Login.tsx 미리보기", { exact: true }).textContent(), /aria-label="로그인"/, "the preview shows what will be sent");
+  await pendingBox.getByRole("button", { name: "README.md 첨부 제거", exact: true }).click();
+  await pendingBox.getByText("README.md", { exact: true }).waitFor({ state: "detached" });
+  assert.deepEqual(last("project_chat_detach").args, { input: { threadId: attachedId, attachmentId: readmeFile.id } });
+
+  await target.selectOption("toris/muse@cloud");
+  await root.getByText(/Reason Network 피어와 답장에는 첨부를 보낼 수 없습니다/).waitFor();
+  await box.fill("로그인 파일을 리뷰해줘");
+  assert.equal(await root.getByRole("button", { name: "보내기", exact: true }).isDisabled(), true, "no files to Reason Network peers");
+  assert.equal(await attachButton.isDisabled(), true);
+  await target.selectOption("agent:claude");
+  sendRefusals = 1;
+  await box.press("Enter");
+  await root.getByText(/선택한 뒤 내용이 바뀐 첨부가 있습니다/).waitFor();
+  await pendingBox.getByText("선택 후 바뀜 · 새 내용 확인", { exact: true }).waitFor();
+  assert.match(await pendingBox.getByLabel("src/Login.tsx 미리보기", { exact: true }).textContent(), /\/\/ 수정됨/, "the new text is previewed before sending again");
+  assert.equal(await box.inputValue(), "로그인 파일을 리뷰해줘", "a refused send keeps the draft");
+  await page.screenshot({ path: resolve(out, "08-attachments.png") });
+  await root.getByRole("button", { name: "보내기", exact: true }).click();
+  await pendingBox.waitFor({ state: "detached" });
+  assert.deepEqual(last("project_chat_send").args, { input: { threadId: attachedId, text: "로그인 파일을 리뷰해줘", attachments: [loginFile.id] } });
+  await emit({ threadId: attachedId, kind: "items", items: items[attachedId] });
+  const sentMessage = root.locator(".pc-msg.user").filter({ hasText: "로그인 파일을 리뷰해줘" });
+  await sentMessage.getByLabel("첨부한 파일", { exact: true }).getByText("src/Login.tsx", { exact: true }).waitFor();
+  assert.equal(await sentMessage.locator(".pc-bubble").textContent(), "로그인 파일을 리뷰해줘", "the file is marked apart from the typed text");
+
+  // The same files can go into a hosted assistant's prompt.
+  await target.selectOption("hosted:muse");
+  attachReplies = [planFile];
+  await attachButton.click();
+  await pendingBox.getByText("docs/plan.md", { exact: true }).waitFor();
+  await box.fill("이 파일로 결제 기획을 다듬어줘");
+  await root.getByRole("button", { name: "보내기", exact: true }).click();
+  await root.getByText("TS-0000000002", { exact: true }).waitFor();
+  await root.locator(".pc-msg.hosted").last().getByLabel("첨부한 파일", { exact: true }).getByText("docs/plan.md", { exact: true }).waitFor();
+  assert.equal(await pendingBox.count(), 0);
+
+  // After a reload the record still shows which files a message carried.
+  await root.getByRole("button", { name: "새 대화", exact: true }).click();
+  await root.locator(".pc-thread").filter({ hasText: "로그인 파일을 리뷰해줘" }).click();
+  await root.locator(".pc-msg.user").filter({ hasText: "로그인 파일을 리뷰해줘" }).getByText("src/Login.tsx", { exact: true }).waitFor();
+  await root.locator(".pc-msg.hosted").getByText("docs/plan.md", { exact: true }).waitFor();
+  await page.screenshot({ path: resolve(out, "09-attachments-sent.png") });
+  report.checks.push("Attachments: the host picks files (cancel/refusal leave no thread), the composer previews and removes them, Reason Network peers get none, a file changed after picking is refused with its new text shown, and sent files are recorded by name on the agent and hosted messages and shown again after reload.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
