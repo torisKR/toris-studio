@@ -9,6 +9,7 @@ import {
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
   type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread
 } from "./project-chat-client";
+import { ThreadPreview } from "./ThreadPreview";
 import "./ProjectChat.css";
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value);
@@ -180,8 +181,7 @@ export function ProjectChat({ active }: Props) {
   const textNow = useRef(text);
   const carryDraft = useRef(false);
   textNow.current = text;
-  // A layout effect swaps the draft in the same commit that opens the thread, so its input never
-  // shows empty (or the previous thread's text) for a frame.
+  // Layout effect: the swap lands in the same commit as the new thread, so no frame shows the wrong draft.
   useLayoutEffect(() => {
     const previous = draftKeyRef.current;
     if (previous === draftKey) return;
@@ -420,6 +420,7 @@ export function ProjectChat({ active }: Props) {
           {!started && <button type="button" className="social-button compact" disabled={busy} onClick={attachWorktree}><FolderOpen size={12} />{thread?.worktree ? "다른 worktree로 바꾸기" : "기존 worktree 연결"}</button>}
           {started && thread?.worktree && <span className="pc-workdir-fixed">대화 시작 후 고정</span>}
         </div>
+        {thread && <ThreadPreview key={thread.id} thread={thread} onSaved={upsert} />}
         {showInbox && thread && <div className="pc-inbox" aria-label="받은 메시지">
           <p className="pc-muted">Muse·Dots·Grok 같은 어시스턴트가 코드 없이 Studio로 보낸 기획을 이 대화에 붙입니다. 붙여도 자동으로 실행하지 않습니다.</p>
           {!unlinked.length && <p className="pc-muted">가져올 메시지가 없습니다.</p>}

@@ -4,9 +4,10 @@
 use serde_json::json;
 use std::path::Path;
 use toris_studio_desktop::project_chat::{
-    changes, handoff_code, hosted_prompt, normalize_claude, normalize_codex, strip_code,
-    title_from, tool_summary, turn_command, verify_worktree, work_folder, ChatAgent, ChatMode,
-    HostedAssistant, Item, ItemKind, ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL, MAX_RUNNING,
+    changes, handoff_code, hosted_prompt, normalize_claude, normalize_codex, preview_url,
+    strip_code, title_from, tool_summary, turn_command, verify_worktree, work_folder, ChatAgent,
+    ChatMode, HostedAssistant, Item, ItemKind, ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL,
+    MAX_RUNNING,
 };
 use toris_studio_desktop::reason_agents::{checked_folder, typed_path};
 use toris_studio_desktop::reason_network::Message;
@@ -25,6 +26,7 @@ fn thread(agent: ChatAgent, mode: ChatMode, session: Option<&str>) -> Thread {
         updated_at: "now".into(),
         running: false,
         worktree: None,
+        preview_url: None,
     }
 }
 
@@ -1150,4 +1152,88 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
             "hi from studio"
         );
     }
+}
+
+#[test]
+fn project_chat_preview_urls_are_loopback_http_only() {
+    for (raw, kept) in [
+        ("http://localhost:5173", "http://localhost:5173/"),
+        (
+            "  https://LOCALHOST:3000/app?x=1#top ",
+            "https://localhost:3000/app?x=1#top",
+        ),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080/"),
+        ("http://[::1]:4000/a", "http://[::1]:4000/a"),
+    ] {
+        assert_eq!(preview_url(raw).unwrap().as_deref(), Some(kept), "{raw}");
+    }
+    assert_eq!(preview_url("").unwrap(), None, "empty clears");
+    assert_eq!(preview_url("   ").unwrap(), None);
+    for raw in [
+        "localhost:5173",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ftp://localhost/",
+        "ws://localhost:5173/",
+        "http://user:pw@localhost:5173/",
+        "http://user@127.0.0.1/",
+        "http://example.com/",
+        "http://localhost.example.com/",
+        "http://127.0.0.2/",
+        "http://0.0.0.0:3000/",
+        "http://192.168.0.10:3000/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://localhost:5173/a b",
+        "http://localhost:5173/\nx",
+        "http://localhost:99999/",
+    ] {
+        assert!(preview_url(raw).is_err(), "{raw}");
+    }
+    assert!(preview_url(&format!("http://localhost/{}", "a".repeat(2048))).is_err());
+}
+
+#[test]
+fn project_chat_preview_url_is_stored_per_thread_and_survives_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let chat = ProjectChat::new(root.path().join("chat"));
+    let project = chat.add_project(FOLDER).unwrap();
+    let a = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+        .unwrap();
+    let b = chat
+        .create_thread(&project.id, ChatAgent::Codex, ChatMode::Plan)
+        .unwrap();
+    assert_eq!(a.preview_url, None);
+    let url = preview_url("http://localhost:5173").unwrap();
+    chat.update_thread(&a.id, |t| {
+        t.preview_url = url;
+        Ok(())
+    })
+    .unwrap();
+
+    let again = ProjectChat::new(root.path().join("chat"));
+    assert_eq!(
+        again.thread(&a.id).unwrap().preview_url.as_deref(),
+        Some("http://localhost:5173/")
+    );
+    assert_eq!(again.thread(&b.id).unwrap().preview_url, None, "per thread");
+    again
+        .update_thread(&a.id, |t| {
+            t.preview_url = preview_url("").unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(again.thread(&a.id).unwrap().preview_url, None, "cleared");
+
+    // A thread saved before this field existed still loads.
+    let old: Thread = serde_json::from_value(json!({
+        "id": "t1", "projectId": "p1", "title": "x", "agent": "claude", "mode": "edit",
+        "providerSession": null, "createdAt": "now", "updatedAt": "now"
+    }))
+    .unwrap();
+    assert_eq!(old.preview_url, None);
+    assert!(serde_json::to_value(&old)
+        .unwrap()
+        .get("previewUrl")
+        .is_none());
 }

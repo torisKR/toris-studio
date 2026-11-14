@@ -11,7 +11,7 @@ export type ItemKind = typeof ITEM_KINDS[number];
 export type Project = { id: string; name: string; folder: string; addedAt: string };
 /** An existing git worktree of the project a thread works in; fixed once the thread starts. */
 export type Worktree = { path: string; branch: string | null; base: string; linkedAt: string };
-export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null };
+export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null; previewUrl: string | null };
 export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; at: string };
 /** Hosted assistants reach Reason Network only through its MCP server and cannot be messaged by name. */
 export const HOSTED_ASSISTANTS = ["muse", "dots", "grok"] as const;
@@ -37,7 +37,21 @@ export function normalizeThread(value: unknown): Thread | null {
   const r = rec(value);
   if (!str(r.id) || !str(r.projectId) || !CHAT_AGENTS.includes(r.agent as ChatAgent) || (r.mode !== "plan" && r.mode !== "edit")) return null;
   return { id: str(r.id), projectId: str(r.projectId), title: str(r.title) || "새 대화", agent: r.agent as ChatAgent, mode: r.mode, providerSession: str(r.providerSession) || null,
-    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true, worktree: normalizeWorktree(r.worktree) };
+    createdAt: str(r.createdAt), updatedAt: str(r.updatedAt), running: r.running === true, worktree: normalizeWorktree(r.worktree), previewUrl: checkPreviewUrl(str(r.previewUrl)).url ?? null };
+}
+
+const PREVIEW_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export const PREVIEW_URL_ERROR = "미리보기 주소는 http(s)://localhost, 127.0.0.1, [::1] 로컬 주소만 쓸 수 있습니다.";
+/** Mirrors the host's check: loopback HTTP(S) only, no credentials; empty clears. The host decides. */
+export function checkPreviewUrl(raw: string): { url: string | null; error?: undefined } | { url?: undefined; error: string } {
+  const text = raw.trim();
+  if (!text) return { url: null };
+  // eslint-disable-next-line no-control-regex
+  if (new TextEncoder().encode(text).length > 2048 || /[\s\u0000-\u001f\u007f-\u009f]/.test(text)) return { error: PREVIEW_URL_ERROR };
+  let url: URL;
+  try { url = new URL(text); } catch { return { error: PREVIEW_URL_ERROR }; }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || !PREVIEW_HOSTS.has(url.hostname) || url.username || url.password) return { error: PREVIEW_URL_ERROR };
+  return { url: url.href };
 }
 export function normalizeItem(value: unknown): ChatItem | null {
   const r = rec(value);
@@ -124,6 +138,12 @@ export async function readThread(threadId: string, call: BridgeInvoke = nativeIn
 export async function updateThread(threadId: string, change: { mode?: ChatMode; agent?: ChatAgent; title?: string }, call: BridgeInvoke = nativeInvoke): Promise<Thread> {
   const thread = normalizeThread(await call("project_chat_thread_update", { input: { threadId, ...change } }));
   if (!thread) throw new Error("대화를 바꾸지 못했습니다.");
+  return thread;
+}
+/** Saves (or clears with "") the thread's user-typed preview address; nothing is opened. */
+export async function setThreadPreview(threadId: string, url: string, call: BridgeInvoke = nativeInvoke): Promise<Thread> {
+  const thread = normalizeThread(await call("project_chat_thread_preview", { input: { threadId, url } }));
+  if (!thread) throw new Error("미리보기 주소를 저장하지 못했습니다.");
   return thread;
 }
 export async function deleteThread(threadId: string, call: BridgeInvoke = nativeInvoke) {
