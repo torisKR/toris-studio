@@ -83,13 +83,27 @@ D에서 실제로 보내는 "다음 Enter"는 받는 쪽을 호스팅 기획자(
 
 ## 실행 기록
 
-준비 단계: 아직 실제 앱 QA를 실행하지 않았다. 16번(`feature/orphan-draft-recovery`)의 PR이 나온 뒤 그 head를 통합한 빌드로 실행하고 여기에 결과를 적는다.
+- **소스 head:** `11c060c` = #33 `c07f494`(통합) + #34 `698772c`(15번) + #35 `f79876c`(16번)을 이 브랜치에 일반 merge. 추적 파일 깨끗함.
+- **바이너리:** `Toris Studio QA.app/Contents/MacOS/toris-studio-desktop`, debug, sha256 `2f606beb88c20dca8ed5fd3b7d6dc5d6d007d017fba9cb744203814e5b369345`(빌드 08:33:51Z). 실행 전후 preflight로 같은 값을 확인했다.
+- **실행 환경:** 사용자의 MacBook(macOS 27.2.1), 입력 소스 2벌식. 실행할 때마다 `ps eww`로 `HOME=/tmp/toris-native-qa/home`, `TORIS_MOBILE_QA_NO_AUTOMATION=1`이 들어갔는지 확인했다. 설치 앱은 실행 중이 아니었고 건드리지 않았다. 1420 포트는 쓰지 않았다.
+- **QA 프로젝트:** `$QA/repos/qa-notes`(새 git 저장소, 커밋 2개). OS 확인 창 제약 때문에 QA `projects.json`에 직접 등록했다(위 "준비 중 확인한 실행 제약" 참고).
 
-| # | 결과 | 소스 head / 바이너리 | 증거 |
-|---|---|---|---|
-| A | 미실행 | | |
-| B | 미실행 | | |
-| C | 미실행 | | |
-| D | 미실행 | | |
-| E | 미실행 | | |
-| F | 미실행 | | |
+| # | 결과 | 관찰 |
+|---|---|---|
+| A 빌드↔소스 | **통과** | 위 head·sha256, debug. 세 번의 실행이 모두 같은 바이너리였다. |
+| B 재시작 초안 | **통과** | 대화 1(`한QA 초안 A (저장된 대화 1)`), 대화 2(`2 QA 대화 시작`), "새 대화"(`ㅊ QA 초안 C (새 대화)`)에 서로 다른 초안을 넣었다. Apple Event로 정상 종료한 뒤(08:39:57Z, PID 42855 소멸, QA 소켓 삭제) 같은 바이너리로 재실행(PID 56993)했고, 다시 한 번 종료·재실행(PID 62142)했다. 두 번 모두 세 초안이 각자 자리에 복원됐다. 재실행 후 앱의 자식 프로세스는 0개였고, 새 대화나 요청도 생기지 않았다(자동 전송·CLI 실행 없음). page reload나 tray 숨김은 재시작으로 세지 않았다. |
+| C 재시작 메타데이터 | **부분** | 미리보기 주소 `http://127.0.0.1:4719/qa`를 대화 2에 저장했다. 재시작 후 대화 2에만 "사용자가 연결한 주소 · 이 대화의 서버인지 확인하지 않음"과 함께 복원됐고, 대화 1에는 없었다(서버는 띄우지 않았고 "미리보기 열기"도 누르지 않았다). **Studio worktree 정보와 커밋 영수증은 미검증이다.** 둘 다 OS 확인 창(CFUserNotification)을 거쳐야 하는데 이 환경에서 그 창을 조작할 수 없었고, 기록을 파일로 꾸며 넣지도 않았다. 저장 계층의 재열기는 R의 `project_git_commit_receipt_survives_reopen`, `project_chat_stores_projects_threads_and_items`로만 확인했다(native 재시작의 대체가 아니다). |
+| D 한글 입력기 | **실패**(15번 회귀) | 실제 2벌식 입력기에 실제 키 이벤트(`g`→"ㅎ", `k`→"하", `s`→"한", 조합 중 밑줄)를 보냈다. 조합 중에 Enter를 누르자(08:35:40Z) 전송이 실행됐다. `project_chat_thread_create`로 새 대화가 생겼고, Muse 요청은 "Reason Network에 연결된 뒤…" 오류로 끝났으며, 입력창에는 "한"이 남았다. CLI는 실행되지 않았다. Shift+Enter는 줄바꿈만 넣었다(`한\n`, 통과). "조합 확정 뒤 다음 Enter는 1회 전송"은 앞의 실패로 대화가 이미 생긴 상태라 따로 판정하지 않았다(미판정). 원인 추정: WKWebView가 확정 Enter keydown을 keyCode 229가 아닌 값·`isComposing=false`로 보내 `isSendEnter`를 통과한다. 다만 이벤트 필드는 캡처하지 않아 **가설**이다. 15번 소유자에게 재현 절차·빌드 SHA·시각과 함께 넘겼다. 수정 후 같은 절차로 다시 시험해야 한다. |
+| E 단일 편집 창 | **통과** | PID 42855가 실행 중일 때(08:39:27Z) 같은 `.app`을 `open -n`으로 한 번 더 실행했다. 두 번째 프로세스(PID 55425)는 0.5~1초 안에 사라졌고 원래 PID 42855는 유지됐다. 전후 모두 QA 프로세스의 화면 창은 1개(창 번호 3923, 1380×900)였다. 접근성 트리에도 창 1개, 메시지 입력창 1개만 있었고, 입력 중이던 초안 C가 그대로 남아 있었다. 다중 창 동시 편집 안전성은 주장하지 않는다. |
+| F 증거 | **통과** | QA 창만 캡처했고(QA 프로젝트명·테스트 문장만 보임) 직접 확인했다. 로그는 `$QA/logs/`(run1~3, B, B2, E)에 있다. |
+
+### 증거
+
+![17 B 재시작 후 대화별 초안 복원](https://api.reasonmachines.com/media/pr-screenshots/b83b959a-9dff-47f8-bd71-368b9b7bf504/3a5d9a3a2a0aabab862cf84cb286117a/17-b-restart-drafts.jpg#w=1280&h=835)
+
+![17 C 재시작 후 미리보기 주소 복원 대화 2만](https://api.reasonmachines.com/media/pr-screenshots/b83b959a-9dff-47f8-bd71-368b9b7bf504/1ad94609917420b86d7383e34fa21f4f/17-b-restart-preview.jpg#w=1280&h=835)
+
+### 남은 일
+
+- 15번 수정이 push되면 같은 QA 절차(새 대화 → Muse → `g k s` → Enter)로 D를 다시 시험하고, 사용한 빌드 SHA와 결과를 이 표에 덧붙인다.
+- C의 worktree·커밋 영수증은 사람이 OS 확인 버튼을 눌러 줄 수 있을 때 실행한다.
