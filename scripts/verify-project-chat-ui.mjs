@@ -129,6 +129,8 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     case "project_chat_changes": {
       const linked = threads.find(t => t.id === args.input.threadId)?.worktree;
       if (linked) return { folder: linked.path, isRepo: true, branch: linked.branch, files: ["?? src/Checkout.tsx"], diff: "", truncated: false };
+      const own = projects.find(p => p.id === args.input.projectId) ?? project;
+      if (own.id !== project.id) return { folder: own.folder, isRepo: true, branch: "main", files: [], diff: "", truncated: false };
       return { folder: project.folder, isRepo: true, branch: "main", files: ["?? src/Login.tsx", " M README.md"], diff, truncated: false };
     }
     case "project_chat_ask_peer":
@@ -164,7 +166,9 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     }
     case "open_external": return null;
     case "project_chat_stop":
-      assert.deepEqual(args.input, { threadId: "t-admin" }, "stop reaches the thread opened from search");
+      if (args.input.threadId === "t-admin") return null; // the running thread opened from search
+      if (!String(args.input.threadId).startsWith("j-")) { report.unexpected.push(command); throw new Error("unexpected stop"); }
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, running: false, lastRun: { outcome: "stopped", startedAt: at(8), finishedAt: at(9) } } : t);
       return null;
     case "project_chat_remove_project":
       report.unexpected.push(command); throw new Error("unexpected: " + command);
@@ -569,6 +573,54 @@ try {
   await root.locator(".pc-msg.hosted").getByText("docs/plan.md", { exact: true }).waitFor();
   await page.screenshot({ path: resolve(out, "09-attachments-sent.png") });
   report.checks.push("Attachments: the host picks files (cancel/refusal leave no thread), the composer previews and removes them, Reason Network peers get none, a file changed after picking is refused with its new text shown, and sent files are recorded by name on the agent and hosted messages and shown again after reload.");
+
+  // Parallel jobs: threads running or finished across projects, with agent, branch and state;
+  // opening one switches project and thread, other threads' streamed items stay out, and a stop
+  // reaches only the thread asked. The host enforces the limits; the page only shows them.
+  const stopsBefore = count("project_chat_stop");
+  const web = { id: "p-web", name: "web-site", folder: "/Users/qa/projects/web-site", addedAt: at(0) };
+  const wt = (branch, dir) => ({ path: `${project.folder}-worktrees/${dir}`, branch, base: "89abcdef0123456789abcdef0123456789abcdef", linkedAt: at(3) });
+  projects = [project, web];
+  threads = [
+    ...threads.map(t => ({ ...t, running: false })),
+    thread("j-claude", { title: "로그인 화면 구현", running: true, updatedAt: at(9), worktree: wt("studio/aaaa1111", "aaaa1111") }),
+    thread("j-codex", { agent: "codex", title: "결제 API 연결", running: true, updatedAt: at(8), worktree: wt("studio/bbbb2222", "bbbb2222") }),
+    thread("j-done", { projectId: web.id, title: "랜딩 문구 정리", updatedAt: at(4), lastRun: { outcome: "done", startedAt: at(3), finishedAt: at(4) } }),
+    thread("j-failed", { agent: "codex", mode: "plan", title: "빌드 오류 조사", updatedAt: at(5), lastRun: { outcome: "failed", startedAt: at(4), finishedAt: at(5) } })
+  ];
+  items["j-done"] = [{ id: "jd1", kind: "user", text: "랜딩 문구를 짧게", at: at(3) }, { id: "jd2", kind: "result", text: "완료 · 12s", at: at(4) }];
+  await openSection(page, "제작");
+  await openSection(page, "프로젝트");
+  const jobs = root.getByRole("region", { name: "작업 현황" });
+  await jobs.getByText("2/4 실행 중", { exact: true }).waitFor();
+  const jobRow = title => jobs.getByRole("listitem").filter({ hasText: title });
+  for (const [title, meta, state] of [["로그인 화면 구현", "Claude · studio/aaaa1111", "실행 중"], ["결제 API 연결", "Codex · studio/bbbb2222", "실행 중"], ["랜딩 문구 정리", "Claude · 원본 폴더 · web-site", "완료"], ["빌드 오류 조사", "Codex · 원본 폴더", "실패"]]) {
+    await jobRow(title).getByText(meta, { exact: true }).waitFor();
+    await jobRow(title).getByText(state, { exact: true }).waitFor();
+  }
+  const order = await jobs.locator(".pc-job-title").allTextContents();
+  assert.deepEqual(order.slice(0, 2), ["로그인 화면 구현", "결제 API 연결"], "running jobs come first");
+  await page.screenshot({ path: resolve(out, "11-parallel-jobs.png") });
+  await jobRow("랜딩 문구 정리").getByRole("button", { name: /랜딩 문구 정리/ }).click();
+  await root.locator(".pc-title strong").getByText("랜딩 문구 정리", { exact: true }).waitFor();
+  await root.getByText("랜딩 문구를 짧게", { exact: true }).waitFor();
+  assert.equal(await root.getByRole("button", { name: "web-site", exact: true }).getAttribute("aria-current"), "true", "opening a job switches to its project");
+  await emit({ threadId: "j-claude", kind: "items", items: [{ id: "jc-leak", kind: "assistant", text: "다른 대화의 출력", at: at(9) }] });
+  await emit({ threadId: "j-done", kind: "items", items: [{ id: "jd3", kind: "notice", text: "이 대화의 새 알림", at: at(9) }] });
+  await root.getByText("이 대화의 새 알림", { exact: true }).waitFor();
+  assert.equal(await root.getByText("다른 대화의 출력", { exact: true }).count(), 0, "another thread's stream stays out of the open thread");
+  await emit({ threadId: "j-claude", kind: "state", running: false, thread: { ...threads.find(t => t.id === "j-claude"), running: false, lastRun: { outcome: "done", startedAt: at(8), finishedAt: at(9) } } });
+  await jobRow("로그인 화면 구현").getByText("완료", { exact: true }).waitFor();
+  await jobs.getByText("1/4 실행 중", { exact: true }).waitFor();
+  await jobRow("결제 API 연결").getByRole("button", { name: "결제 API 연결 중지", exact: true }).click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(calls.filter(c => c.command === "project_chat_stop").slice(stopsBefore).map(c => c.args.input), [{ threadId: "j-codex" }], "a stop names only its own thread");
+  await emit({ threadId: "j-codex", kind: "state", running: false, thread: threads.find(t => t.id === "j-codex") });
+  await jobRow("결제 API 연결").getByText("중지됨", { exact: true }).waitFor();
+  await jobs.getByText("0/4 실행 중", { exact: true }).waitFor();
+  assert.equal(await root.locator(".pc-title strong").textContent(), "랜딩 문구 정리", "stopping another job keeps the open thread");
+  await page.screenshot({ path: resolve(out, "12-parallel-jobs-after.png") });
+  report.checks.push("The jobs list shows running, done, failed and stopped threads across projects with agent and branch, opens one (switching project) without mixing another thread's stream, and stops only the thread asked.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
