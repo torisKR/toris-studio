@@ -393,6 +393,74 @@ fn project_git_refuses_paths_outside_the_list_links_and_bad_names() {
 }
 
 #[test]
+fn project_git_refuses_a_file_when_its_diff_cannot_be_read() {
+    let rig = rig();
+    fs::write(rig.wt.join("a.txt"), "a changed\n").unwrap();
+    fs::write(rig.wt.join("b.txt"), "b changed\n").unwrap();
+    // Only `git diff HEAD -- a.txt` fails: the committed blob of a.txt is gone,
+    // while status and hashing the current content still work.
+    let old = git(&rig.wt, &["rev-parse", "HEAD:a.txt"]).trim().to_owned();
+    let common = git(
+        &rig.wt,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    let loose = Path::new(common.trim())
+        .join("objects")
+        .join(&old[..2])
+        .join(&old[2..]);
+    let saved = fs::read(&loose).unwrap();
+    fs::remove_file(&loose).unwrap();
+    let before = (
+        head(&rig.wt),
+        status(&rig.wt),
+        git(&rig.wt, &["ls-files", "-s"]),
+        fs::read_to_string(rig.wt.join("a.txt")).unwrap(),
+    );
+
+    let r = review(&rig.chat, &rig.thread).unwrap();
+    assert!(r.blocked.is_none(), "{:?}", r.blocked);
+    let a = r.files.iter().find(|f| f.path == "a.txt").unwrap();
+    assert!(
+        a.refused.as_deref().is_some_and(|why| why.contains("diff")),
+        "a file whose diff could not be read is not pickable: {a:?}"
+    );
+    assert!(a.fingerprint.is_empty(), "{a:?}");
+    let b = r.files.iter().find(|f| f.path == "b.txt").unwrap();
+    assert!(b.refused.is_none(), "{b:?}");
+    assert!(b.diff.contains("+b changed"), "{}", b.diff);
+
+    // A forged pick with the right fingerprint is refused by the fresh review.
+    let id = git(&rig.wt, &["hash-object", "--no-filters", "a.txt"]);
+    let forged = CommitRequest {
+        thread_id: rig.thread.clone(),
+        head: r.head.clone(),
+        files: vec![PickedFile {
+            path: "a.txt".into(),
+            fingerprint: format!("100644:{}", id.trim()),
+        }],
+        message: "x".into(),
+    };
+    let err = commit(&rig.chat, &forged, |_| panic!("no dialog")).unwrap_err();
+    assert!(err.contains("a.txt") && err.contains("diff"), "{err}");
+    let after = (
+        head(&rig.wt),
+        status(&rig.wt),
+        git(&rig.wt, &["ls-files", "-s"]),
+        fs::read_to_string(rig.wt.join("a.txt")).unwrap(),
+    );
+    assert_eq!(before, after, "HEAD, index and files unchanged");
+
+    // The readable file can still be picked; once the object is back, it commits.
+    fs::write(&loose, saved).unwrap();
+    let r = review(&rig.chat, &rig.thread).unwrap();
+    assert!(r.files.iter().all(|f| f.refused.is_none()), "{:?}", r.files);
+    let done = commit(&rig.chat, &pick(&r, &["b.txt"], "b"), |_| true)
+        .unwrap()
+        .expect("committed");
+    assert_eq!(done.files, vec!["b.txt".to_owned()]);
+}
+
+#[test]
 fn project_git_refuses_a_running_agent_a_linked_worktree_and_the_project_folder() {
     let rig = rig();
     fs::write(rig.wt.join("a.txt"), "a changed\n").unwrap();
