@@ -2,7 +2,7 @@
 // production index and React application are otherwise unchanged.
 (() => {
   'use strict';
-  const expectedNavigation = ['SNS 관리', '콘텐츠', '제작', '게시', '운영'];
+  const expectedNavigation = ['프로젝트', 'SNS 관리', '콘텐츠', '제작', '게시', '운영'];
   const expectedReads = ['get_dashboard', 'ai_status', 'oauth_connections', 'analytics_dispatch:status', 'get_settings', 'get_scheduler_status', 'get_keychain_status', 'get_update_status', 'browser_runtime_status'];
   const nativeFixtures = __NATIVE_FIXTURES__;
   const failures = new Set();

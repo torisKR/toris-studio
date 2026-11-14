@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 
-const NAVIGATION: [&str; 5] = ["SNS 관리", "콘텐츠", "제작", "게시", "운영"];
+const NAVIGATION: [&str; 6] = ["프로젝트", "SNS 관리", "콘텐츠", "제작", "게시", "운영"];
 const READS: [&str; 9] = [
     "ai_status",
     "analytics_dispatch:status",
