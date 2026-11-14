@@ -23,6 +23,7 @@ let threads = [thread("t-a", "로그인 대화"), thread("t-b", "결제 대화")
 const plannerReply = { id: "rep1", kind: "peer_reply", text: "## 로그인 기획\n1. 이메일 입력", peer: "toris/muse@cloud", peerName: "Muse", messageId: "m-1", at: at(5) };
 const items = { "t-a": [{ id: "u1", kind: "user", text: "기획해줘", at: at(2) }, plannerReply], "t-b": [], "t-c": [], "t-x": [] };
 let sendFails = 0;
+let listFails = false, listEmpty = false;
 const held = [];
 const hold = threadId => { const h = { threadId, hit: false }; h.promise = new Promise(r => { h.release = r; }); held.push(h); return h; };
 const sends = () => calls.filter(c => c.command === "project_chat_send");
@@ -41,12 +42,17 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
 const page = await context.newPage();
 page.on("pageerror", error => report.errors.push(error.message));
-page.on("dialog", dialog => void dialog.accept());
+let dialogAnswer = true;
+const dialogs = [];
+page.on("dialog", dialog => { dialogs.push(dialog.message()); void (dialogAnswer ? dialog.accept() : dialog.dismiss()); });
 await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
   calls.push({ command, args });
   if (command === "get_dashboard") return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: "fixture" } };
   switch (command) {
-    case "project_chat_list": return { projects, threads };
+    case "project_chat_list":
+      if (listFails) throw new Error("대화 목록을 읽지 못했습니다.");
+      return listEmpty ? { projects: [], threads: [] } : { projects, threads };
+    case "copy_text": return null;
     case "project_chat_thread_get": return { thread: threads.find(t => t.id === args.input.threadId), items: items[args.input.threadId] ?? [], attachments: [] };
     case "project_chat_send": {
       assert.deepEqual(Object.keys(args.input).sort(), ["text", "threadId"], "only the thread and typed text are sent");
@@ -173,15 +179,50 @@ try {
   await page.screenshot({ path: resolve(out, "01-drafts-implement.png") });
   report.checks.push("'이 기획으로 구현' appends the plan after an existing draft and does not send.");
 
-  // 6. Enter with the IME composing and Shift+Enter do not send.
+  // 6. Enter with the IME composing and Shift+Enter do not send. Synthetic events in Chromium:
+  // this checks the composer's key handling for each order, not a real OS input method.
+  // Chromium order: the confirming Enter's keydown arrives while composing (isComposing, 229).
+  // WebKit order: compositionend first, then the confirming Enter's keydown with isComposing
+  // false but keyCode 229 — that Enter belongs to the IME, not to the composer.
+  const imeEnter = isComposing => box.evaluate((el, isComposing) => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, which: 229, bubbles: true, cancelable: true, isComposing })), isComposing);
+  const composition = type => box.evaluate((el, type) => el.dispatchEvent(new CompositionEvent(type, { data: "력", bubbles: true })), type);
   await box.fill("한글 입력");
   await box.focus();
+  await composition("compositionstart");
   await box.evaluate(el => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true })));
+  await imeEnter(true);
+  await composition("compositionend");
+  assert.equal(sends().length, sent, "Enter while composing (Chromium order) does not send");
+  await composition("compositionstart");
+  await composition("compositionend");
+  await imeEnter(false);
+  assert.equal(sends().length, sent, "the IME's confirming Enter after compositionend (WebKit order, keyCode 229) does not send");
   await box.press("Shift+Enter");
   await box.pressSequentially("둘째 줄");
   await expectBox("한글 입력\n둘째 줄", "Shift+Enter adds a line");
   assert.equal(sends().length, sent, "Enter while composing and Shift+Enter do not send");
-  report.checks.push("Enter during IME composition and Shift+Enter do not send.");
+  report.checks.push("Enter during IME composition (Chromium order), the IME's confirming Enter after compositionend (WebKit order, keyCode 229) and Shift+Enter do not send (synthetic events).");
+
+  // 6b. After the composition ends, a separate plain Enter sends exactly once, with the mixed text intact.
+  await open("결제 대화");
+  const mixed = "결제 화면 abc  띄어쓰기\n둘째 줄 한글";
+  await box.fill(mixed);
+  await box.focus();
+  await composition("compositionstart");
+  await composition("compositionend");
+  await imeEnter(false);
+  assert.equal(sends().length, sent, "the confirming Enter does not send");
+  await expectBox(mixed, "the confirming Enter keeps the text");
+  await box.press("Enter");
+  await until(() => sends().length === sent + 1, "the plain Enter sends");
+  await until(async () => await root.locator(".pc-composer .social-spin").count() === 0, "the send finishes");
+  assert.equal(sends().length, sent + 1, "one plain Enter sends exactly once");
+  assert.equal(sends().at(-1).args.input.text, mixed, "the sent text is exactly what was typed");
+  assert.equal(sends().at(-1).args.input.threadId, "t-b");
+  await expectBox("", "the sent draft is cleared");
+  await open("로그인 대화");
+  await expectBox("한글 입력\n둘째 줄", "another conversation's draft stays");
+  report.checks.push("After the composition ends, one plain Enter sends exactly once with mixed Korean/English/space text unchanged; other drafts stay.");
 
   // 7. Deleting a conversation drops only its draft.
   await open("알림 대화"); await box.fill("C 초안");
@@ -213,6 +254,99 @@ try {
   await box.fill("다시 저장");
   await until(async () => (await stored())?.includes("다시 저장"), "a new draft is saved again");
   report.checks.push("A broken stored value warns, starts empty and is replaced by the next draft.");
+
+  // 10. The open conversation disappears from the list (another run, or outside Studio): only the
+  // fixture's list loses it, then the screen is re-activated so the real reload() path runs.
+  // Before this change the screen showed "새 대화" with A's draft and Enter called
+  // project_chat_thread_create (a new conversation the user never picked).
+  await open("로그인 대화");
+  await box.fill("사라진 대화 초안");
+  const before10 = calls.length;
+  threads = threads.filter(t => t.id !== "t-a");
+  await openSection(page, "제작");
+  await openSection(page, "프로젝트");
+  await until(async () => await nav.locator("button.pc-thread", { hasText: "로그인 대화" }).count() === 0, "the list no longer has A");
+  assert.ok(calls.slice(before10).some(c => c.command === "project_chat_list"), "re-activating reloads the list");
+  const creates = () => calls.filter(c => c.command === "project_chat_thread_create").length;
+  const copies = () => calls.filter(c => c.command === "copy_text");
+  await root.locator(".pc-title strong", { hasText: "원래 대화를 찾을 수 없음" }).waitFor();
+  await expectBox("사라진 대화 초안", "the missing conversation's draft stays on screen");
+  const sentBefore = sends().length;
+  await box.press("Enter");
+  await root.getByText("원래 대화를 찾을 수 없어 보내지 않았습니다", { exact: false }).waitFor();
+  assert.ok(await root.getByRole("button", { name: "보내기", exact: true }).isDisabled(), "the send button is off");
+  for (const name of ["격리된 새 대화", "기존 worktree 연결", "파일 첨부"]) {
+    const button = root.getByRole("button", { name, exact: true });
+    assert.ok(await button.count() === 0 || await button.isDisabled(), `${name} cannot start a new conversation from a missing one`);
+  }
+  assert.equal(creates(), 0, "a send from a conversation that is gone never creates a new conversation");
+  assert.equal(sends().length, sentBefore, "and sends nothing");
+  await expectBox("사라진 대화 초안", "a refused send keeps the draft");
+  assert.ok((await stored()).includes("사라진 대화 초안"), "the draft stays on disk");
+  await root.getByRole("button", { name: "초안 복사", exact: true }).click();
+  await until(() => copies().length === 1, "the draft is copied");
+  assert.equal(copies()[0].args.text, "사라진 대화 초안", "the copy is the draft's text");
+  await root.getByText("복사만으로는 아무것도 보내지지 않습니다", { exact: false }).first().waitFor();
+  assert.equal(creates() + sends().length - sentBefore, 0, "copying sends nothing");
+  await page.screenshot({ path: resolve(out, "03-missing-conversation.png") });
+  report.checks.push("A conversation removed from the list (re-activation → reload()) shows '원래 대화를 찾을 수 없음' with its draft; Enter/보내기 create and send nothing (0 project_chat_thread_create, 0 project_chat_send); the draft can be copied and stays on disk.");
+
+  // (b) Reopen the page: the selection is gone, and the draft is listed for recovery, text hidden until opened.
+  await boot();
+  const recovery = nav.getByRole("region", { name: "찾을 수 없는 대화의 초안", exact: true });
+  await recovery.getByRole("button", { name: /찾을 수 없는 대화의 초안 1개/ }).click();
+  await recovery.getByText("pocket-app", { exact: true }).waitFor();
+  assert.equal(await recovery.getByText("사라진 대화 초안", { exact: true }).count(), 0, "the text is not shown until opened");
+  await recovery.getByRole("button", { name: "내용 보기", exact: true }).click();
+  await recovery.getByText("사라진 대화 초안", { exact: true }).waitFor();
+  assert.equal(await recovery.locator("pre").evaluate(el => el.children.length), 0, "the draft is plain text");
+  await page.screenshot({ path: resolve(out, "04-draft-recovery.png") });
+  await recovery.getByRole("button", { name: "복사", exact: true }).click();
+  await until(() => copies().length === 2 && copies()[1].args.text === "사라진 대화 초안", "the listed draft is copied");
+  assert.equal(creates(), 0); assert.equal(sends().length, sentBefore);
+  report.checks.push("After a reopen, the draft of a conversation that is not listed shows under '찾을 수 없는 대화의 초안', text only when opened (plain text), and can be copied without sending.");
+
+  // (c) A failed or empty list read removes no draft.
+  const snapshot = await stored();
+  listFails = true;
+  const listCalls = () => calls.filter(c => c.command === "project_chat_list").length;
+  const listsBefore = listCalls();
+  await page.reload({ waitUntil: "networkidle" });
+  await openSection(page, "프로젝트");
+  await until(() => listCalls() > listsBefore, "the list is read (and fails)");
+  await page.waitForTimeout(300);
+  assert.equal(await nav.getByRole("region", { name: "찾을 수 없는 대화의 초안", exact: true }).count(), 0, "a failed read flags nothing as missing");
+  assert.equal(await stored(), snapshot, "a failed list read keeps every draft");
+  listFails = false; listEmpty = true;
+  await page.reload({ waitUntil: "networkidle" });
+  await openSection(page, "프로젝트");
+  await until(async () => await nav.getByRole("region", { name: "찾을 수 없는 대화의 초안", exact: true }).count() === 1, "an empty list shows the drafts as not found");
+  await nav.getByRole("button", { name: /찾을 수 없는 대화의 초안 \d+개/ }).click();
+  await nav.getByText("확인되지 않은 프로젝트", { exact: true }).first().waitFor();
+  assert.equal(await nav.getByText("pocket-app", { exact: true }).count(), 0, "no project name is guessed");
+  assert.equal(await stored(), snapshot, "an empty list keeps every draft");
+  listEmpty = false;
+  report.checks.push("A failed list read and an empty list remove no draft; with no project metadata the project is shown as '확인되지 않은 프로젝트' (ID only).");
+
+  // (d) Discard: cancelling keeps it; confirming removes only that draft on this device.
+  await boot();
+  const panel = nav.getByRole("region", { name: "찾을 수 없는 대화의 초안", exact: true });
+  await panel.getByRole("button", { name: /찾을 수 없는 대화의 초안 1개/ }).click();
+  const unexpectedBefore = report.unexpected.length;
+  dialogAnswer = false;
+  await panel.getByRole("button", { name: "이 기기에서 지우기", exact: true }).click();
+  await until(() => dialogs.some(d => d.includes("이 기기에 저장된 이 초안만 지웁니다")), "a confirmation is asked");
+  assert.equal(await stored(), snapshot, "cancelling keeps the draft");
+  dialogAnswer = true;
+  await panel.getByRole("button", { name: "이 기기에서 지우기", exact: true }).click();
+  await until(async () => !(await stored()).includes("사라진 대화 초안"), "confirming removes the draft");
+  const kept = JSON.parse(snapshot).drafts; delete kept[JSON.stringify(["p-app", "t-a"])];
+  assert.deepEqual(JSON.parse(await stored()).drafts, kept, "only that draft is removed");
+  await until(async () => await nav.getByRole("region", { name: "찾을 수 없는 대화의 초안", exact: true }).count() === 0, "the list empties");
+  assert.equal(report.unexpected.length, unexpectedBefore, "no conversation or project is deleted");
+  assert.ok(!calls.some(c => c.command === "project_chat_thread_delete" && c.args.input.threadId === "t-a"));
+  assert.equal(creates(), 0); assert.equal(sends().length, sentBefore);
+  report.checks.push("Discarding asks first; cancel keeps the draft, confirm removes only that draft on this device; no conversation is created, sent or deleted.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
