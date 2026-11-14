@@ -59,6 +59,24 @@
    - 대화 기록에는 입력한 문장과 별도로 **첨부한 파일 이름·크기**만 남는다(내용은 저장하지 않음). 재시작 후에도 그 메시지 아래에 첨부 표시가 따로 보인다.
 12. **작업 현황 (병렬 작업)**: 왼쪽 위 **작업 현황**에 모든 프로젝트에서 실행 중이거나 한 턴을 마친 대화가 모인다. 각 줄은 에이전트(Claude·Codex), 브랜치(worktree가 없으면 "원본 폴더"), 다른 프로젝트면 그 이름, 상태(실행 중·완료·실패·중지됨)를 보여 주고, 머리글에 `실행 중/4`를 표시한다. 줄을 누르면 그 프로젝트와 대화로 이동하고, 실행 중인 줄의 중지 버튼은 그 대화만 멈춘다. 서로 다른 worktree의 Claude·Codex 대화는 동시에 돌 수 있다. 작업 분할, 에이전트끼리의 지시, 결과 병합은 자동으로 하지 않는다.
    - 마지막 턴의 결과(완료·실패·중지됨, 시작·종료 시각)는 대화에 `lastRun`으로 저장되어 재시작 후에도 남는다. 예전 대화는 이 필드 없이 읽힌다.
+13. **기획 요청별 답장 추적**: 한 대화에서 여러 기획 요청(피어·호스팅 어시스턴트)을 보낼 수 있고, 답장은 요청별로 짝지어진다. native가 판단한 **원 요청 item ID**를 기획 카드에 함께 저장한다(피어는 기존 `reply_to` + 보낸 피어, 호스팅은 대화 전달 코드로 연결). B의 답장이 먼저 와도 A는 계속 대기 중이며, 대화 위에 `남은 요청 N/M개`가 보인다.
+   - **받은 기획 가져오기**로 코드 없이 직접 붙인 기획은 **요청 연관 미확인**으로 표시되고 어떤 요청도 닫지 않는다. 이 정보가 없는 예전 기록에 연관을 꾸며 넣지 않는다.
+   - 전달문을 만들거나 복사한 것은 '전송·수신 완료'가 아니다. 전달 코드는 대화를 고르는 분류용이며 보낸 쪽의 신원을 증명하지 않는다.
+   - **기획 답장 확인** 버튼으로 현재 대화의 답장을 직접 다시 확인할 수 있고, 조회에 실패하면 그 오류를 보여 준다. 답장을 받거나 상태가 바뀌어도 CLI 실행·자동 답장·원 요청 재전송은 하지 않는다.
+14. **입력 초안 보존**: 입력창의 텍스트는 대화마다(프로젝트 ID + 대화 ID, 아직 만들지 않은 새 대화는 프로젝트별 키) **이 기기의 로컬 저장소에만** 저장되며, 입력 중에 "초안은 이 기기에만 저장됩니다"가 보인다. 다른 대화로 갔다 오거나 앱을 다시 열면 그 대화의 초안이 돌아온다. 복원만으로는 아무것도 보내지 않는다.
+   - 보내기에 성공하면 보낸 대화의 **보낸 텍스트만** 지운다. 보내는 동안 더 쓴 내용과 다른 대화의 초안은 남는다. 전송 실패·취소에는 그대로 둔다.
+   - **이 기획으로 구현**은 기존 초안을 덮어쓰지 않고 그 뒤에 이어붙인다.
+   - 텍스트만 저장한다. 첨부(파일 내용·ID), 답장 대상, 에이전트·모드는 초안으로 복원하지 않는다(첨부는 기존대로 다시 고르고 확인).
+   - 한도: 초안 하나는 전송 한도와 같은 **32KiB**, 전체 **256KiB**·200개. 넘거나 저장소를 쓸 수 없거나 손상됐으면 경고만 보이고 화면의 입력은 잃지 않는다. Studio에서 대화·프로젝트를 지우면 그 초안만 지운다.
+
+### 2차 안정화(9~14)에서 바뀐 동작·제한
+
+- **턴 시작 중 저장 실패(9)**: 턴 메타데이터나 첫 사용자 메시지를 저장하지 못하면 그 오류를 그대로 보여 주고, 띄운 CLI의 프로세스 그룹을 끝내고 자식 프로세스를 회수(최대 5초)한 뒤 실행 자리를 돌려준다. 저장하지 못한 프롬프트는 CLI stdin으로 보내지 않으며, 같은 대화에서 바로 다시 보낼 수 있다. 다른 대화의 프로세스는 건드리지 않는다.
+- **diff 조회 실패(10)**: 파일의 diff를 읽지 못하면(git 실패·시간 초과·읽기 오류) '변경 없음'으로 처리하지 않고 "diff를 읽지 못해 … 커밋하지 않습니다"라는 사유와 함께 선택할 수 없게 한다. 화면이 선택을 꾸며 보내도 native가 새 검토에서 다시 거부한다. 정상적인 빈 diff, 바이너리 안내, 잘림 표시와는 구분된다.
+- **대화 전환 중 늦은 응답(12)**: 기록 조회·기획 수신·전송 결과·diff 조회는 시작한 프로젝트/대화와 화면 세대를 기억하고, 그사이 화면이 바뀌었으면 현재 화면에 적용하지 않는다. 초기 조회보다 먼저 온 실시간 항목은 늦게 온 스냅샷 때문에 사라지지 않는다(item ID로 중복 제거). 떠난 대화의 오류나 초안 비우기는 그 대화에만 적용된다.
+- **선택 커밋 영수증(13)**: 7-1의 선택 커밋이 성공하면 git 결과에서 가져온 SHA·브랜치·worktree·파일 목록(50개까지 이름, 나머지는 개수)·index 갱신 여부가 대화 기록에 plain-text 알림("선택 커밋 완료")으로 남는다. 패널이나 대화를 다시 열거나 앱을 재시작해도 보인다. 취소·실패에는 영수증을 남기지 않는다. 커밋은 됐는데 영수증 저장만 실패하면 **커밋 성공과 기록 경고를 함께** 보여 주며, 커밋 실패로 바꾸거나 다시 커밋하지 않는다.
+- 바뀌지 않은 것: 프로젝트 폴더 확인(실제 경로·OS 확인), 같은 작업 폴더 편집 턴 직렬화, 동시 실행 4개 한도, Claude `claude-opus-5-5` · effort `medium` 고정, 전체 권한 플래그 금지, 받은 기획의 자동 구현 금지(**이 기획으로 구현**은 입력창만 채움).
+- 범위 밖: 커밋 직후 강제 종료까지 보장하는 무손실 journal, 전체 Git 이력 화면, 초안 클라우드 동기화·여러 창 동시 편집, 기획 요청 취소/만료 스케줄러. Studio 밖에서 지운 대화의 초안은 남는다.
 
 ## 동작과 안전장치
 
@@ -74,8 +92,12 @@
 node --import tsx --test tests/project-chat-client.test.ts
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_git_contract   # 임시 저장소에서 실제 선택 커밋
-node --import tsx --test tests/project-git-client.test.ts
+node --import tsx --test tests/project-git-client.test.ts tests/project-view-state.test.ts tests/project-drafts.test.ts
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test reason_network_contract --test ipc_acl_contract
+cargo check --manifest-path desktop/src-tauri/Cargo.toml   # 실제 Tauri native 경로 컴파일
 node scripts/verify-project-chat-ui.mjs   # Chromium + 고정 IPC 응답, 스크린샷은 /private/tmp/toris-project-chat-ui (첨부: 08-attachments.png, 09-attachments-sent.png)
+node scripts/verify-project-drafts-ui.mjs # 대화별 초안·재열기·전송 중 입력·저장 실패, 스크린샷은 /private/tmp/toris-project-drafts-ui
+node scripts/verify-reason-network-ui.mjs
 # 실제 Claude Code로 임시 폴더에서 한 턴 (비용 발생)
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract -- --ignored live --nocapture
 ```

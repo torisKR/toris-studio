@@ -362,6 +362,7 @@ try {
   await root.getByRole("button", { name: "보내기", exact: true }).click();
   await root.getByText("toris/muse@cloud에게 보냄").waitFor();
   assert.deepEqual(last("project_chat_ask_peer").args, { input: { threadId: "t1", peer: "toris/muse@cloud", text: "로그인 흐름을 기획해줘" } });
+  const turnsBeforePlan = count("project_chat_send");
   await root.getByText(/기획 답장을 기다리는 중/).waitFor();
   await root.getByText("로그인 기획", { exact: true }).waitFor({ timeout: 12000 });
   assert.equal(await root.locator("img").count(), 0, "planner markup stays text");
@@ -371,6 +372,7 @@ try {
   assert.match(prompt, /^아래는 Muse가 보낸 기획입니다/);
   assert.match(prompt, /1\. 이메일·비밀번호 입력/);
   assert.equal(await target.inputValue(), "agent:claude");
+  assert.equal(count("project_chat_send"), turnsBeforePlan, "a received plan and its prefill start no agent turn");
   await page.screenshot({ path: resolve(out, "03-planner-handoff.png") });
   report.checks.push("A planner request goes only to the chosen peer; its reply shows in the thread as text and '이 기획으로 구현' prefills the Claude prompt.");
 
@@ -915,6 +917,7 @@ try {
   await openThread("요청 추적");
   await root.locator("optgroup[label='기획 · Reason Network 연결 없음']").waitFor({ state: "attached" });
   const sendsBefore = count("reason_network_send");
+  const turnsBeforeReplies = count("project_chat_send");
   for (const [who, words] of [["hosted:muse", "로그인 기획 요청 R"], ["hosted:grok", "결제 기획 요청 R"]]) {
     await target.selectOption(who);
     await box.fill(words);
@@ -973,6 +976,7 @@ try {
   await checkBar.getByText(/기다리는 기획 요청이 없습니다 \(2개 중 남은 요청 0개\)/).waitFor();
   await museCard.getByText("답장 1개 받음").waitFor();
   assert.equal(count("reason_network_send"), sendsBefore, "receiving replies sends nothing");
+  assert.equal(count("project_chat_send"), turnsBeforeReplies, "received plans are never implemented automatically");
   await page.screenshot({ path: resolve(out, "15-request-tracking-done.png") });
   noPeers = false;
   report.checks.push("Planner requests are tracked one by one with no network peers: two hosted requests both wait (without claiming the prompt was sent), Grok's earlier answer closes only Grok's request (1/2 left), a failed manual check shows its error and recovers, a check answered after moving to another thread shows only on its own thread, a duplicate reply shows once, and a hand-filed message is marked 'request link unconfirmed'.");
