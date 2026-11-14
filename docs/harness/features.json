@@ -41,7 +41,7 @@
     "node --import tsx --test tests/project-chat-client.test.ts",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract",
     "node scripts/verify-project-chat-ui.mjs",
-    "node --import tsx --test tests/project-drafts.test.ts",
+    "node --import tsx --test tests/composer-keys.test.ts tests/project-drafts.test.ts",
     "node scripts/verify-project-drafts-ui.mjs"
    ],
    "mutants": [
