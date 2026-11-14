@@ -95,7 +95,7 @@ try{
  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`,{waitUntil:'networkidle'});
  const denied=await page.request.get(new URL(`/@fs/${credentialPath.replaceAll('\\','/')}`,page.url()).href);assert.equal(denied.status(),403);assert.ok(!(await denied.text()).includes(credentialSentinel));report.checks.push('Actual Vite worktree policy serves app and rejects an existing owned credential-path fixture outside allowed roots without exposing its content');
  const main=page.getByRole('navigation',{name:'주 메뉴',exact:true});
- assert.deepEqual(await main.getByRole('button').allTextContents(),['SNS 관리','콘텐츠','제작','게시','운영']);
+ assert.deepEqual(await main.getByRole('button').allTextContents(),['프로젝트','SNS 관리','콘텐츠','제작','게시','운영']);
  await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).waitFor();
  const platformSelect=page.locator('.sns-workspace-filters').getByLabel('플랫폼',{exact:false});assert.deepEqual(await platformSelect.locator('option').evaluateAll(options=>options.map(o=>o.value)),['all',...platforms]);
  await page.getByRole('heading',{name:'원본 수치와 콘텐츠별 성과',exact:true}).waitFor();

@@ -14,12 +14,13 @@ use crate::reason_network::Message;
 use crate::reason_pipeline::{plain_text, same_sender};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::process::Stdio;
 use std::{
     collections::HashMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Stdio,
     sync::{Arc, Mutex},
 };
 #[cfg(unix)]
@@ -168,11 +169,9 @@ pub fn cut(text: &str, limit: usize) -> String {
 }
 
 fn valid_id(id: &str) -> Result<(), String> {
-    (id.len() <= 64
-        && !id.is_empty()
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-    .then_some(())
-    .ok_or_else(|| "잘못된 ID입니다.".into())
+    (id.len() <= 64 && !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then_some(())
+        .ok_or_else(|| "잘못된 ID입니다.".into())
 }
 
 /// A thread title from its first message: one line, at most 60 characters.
@@ -347,8 +346,11 @@ pub fn normalize_claude(line: &Value, folder: &str) -> Normalized {
                     .filter(|text| !text.is_empty())
                     .unwrap_or(s(line, "subtype"));
                 out.items.push(
-                    Item::new(ItemKind::Error, cut(&format!("실패: {reason}"), MAX_ITEM_BYTES))
-                        .error(true),
+                    Item::new(
+                        ItemKind::Error,
+                        cut(&format!("실패: {reason}"), MAX_ITEM_BYTES),
+                    )
+                    .error(true),
                 );
             } else {
                 let parts: Vec<String> = ["완료".to_string()]
@@ -387,17 +389,23 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
             if let Some(code) = code.filter(|code| *code != 0) {
                 text.push_str(&format!("\n(종료 코드 {code})"));
             }
-            let mut result = Item::new(ItemKind::ToolResult, cut(text.trim(), MAX_TOOL_OUTPUT_BYTES))
-                .error(code.is_some_and(|code| code != 0));
+            let mut result = Item::new(
+                ItemKind::ToolResult,
+                cut(text.trim(), MAX_TOOL_OUTPUT_BYTES),
+            )
+            .error(code.is_some_and(|code| code != 0));
             result.tool_id = Some(cut(id, 120)).filter(|id| !id.is_empty());
             out.items.push(result);
         }
-        ("item.completed", "agent_message") if !s(&item, "text").trim().is_empty() => out
-            .items
-            .push(Item::new(ItemKind::Assistant, cut(s(&item, "text"), MAX_ITEM_BYTES))),
-        ("item.completed", "reasoning") if !s(&item, "text").trim().is_empty() => out
-            .items
-            .push(Item::new(ItemKind::Thinking, cut(s(&item, "text"), MAX_ITEM_BYTES))),
+        ("item.completed", "agent_message") if !s(&item, "text").trim().is_empty() => {
+            out.items.push(Item::new(
+                ItemKind::Assistant,
+                cut(s(&item, "text"), MAX_ITEM_BYTES),
+            ))
+        }
+        ("item.completed", "reasoning") if !s(&item, "text").trim().is_empty() => out.items.push(
+            Item::new(ItemKind::Thinking, cut(s(&item, "text"), MAX_ITEM_BYTES)),
+        ),
         ("item.completed", "file_change") => {
             let changes = item
                 .get("changes")
@@ -406,7 +414,11 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
                     changes
                         .iter()
                         .map(|change| {
-                            format!("{} {}", s(change, "kind"), relative(folder, s(change, "path")))
+                            format!(
+                                "{} {}",
+                                s(change, "kind"),
+                                relative(folder, s(change, "path"))
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -419,7 +431,10 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
         ("item.completed", "mcp_tool_call") => out.items.push(
             Item::new(
                 ItemKind::Tool,
-                cut(&format!("{}.{}", s(&item, "server"), s(&item, "tool")), MAX_SUMMARY_BYTES),
+                cut(
+                    &format!("{}.{}", s(&item, "server"), s(&item, "tool")),
+                    MAX_SUMMARY_BYTES,
+                ),
             )
             .tool("MCP", Some(id)),
         ),
@@ -443,7 +458,8 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
                 })
                 .unwrap_or_default();
             out.items.push(
-                Item::new(ItemKind::Tool, cut(&todos, MAX_SUMMARY_BYTES)).tool("TodoWrite", Some(id)),
+                Item::new(ItemKind::Tool, cut(&todos, MAX_SUMMARY_BYTES))
+                    .tool("TodoWrite", Some(id)),
             );
         }
         ("turn.completed", _) => {
@@ -452,7 +468,8 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
                 .and_then(Value::as_i64)
                 .map(|n| format!(" · 출력 {n} 토큰"))
                 .unwrap_or_default();
-            out.items.push(Item::new(ItemKind::Result, format!("완료{tokens}")));
+            out.items
+                .push(Item::new(ItemKind::Result, format!("완료{tokens}")));
         }
         ("turn.failed", _) | ("error", _) => {
             let message = line
@@ -460,8 +477,11 @@ pub fn normalize_codex(line: &Value, folder: &str) -> Normalized {
                 .and_then(Value::as_str)
                 .unwrap_or(s(line, "message"));
             out.items.push(
-                Item::new(ItemKind::Error, cut(&format!("실패: {message}"), MAX_ITEM_BYTES))
-                    .error(true),
+                Item::new(
+                    ItemKind::Error,
+                    cut(&format!("실패: {message}"), MAX_ITEM_BYTES),
+                )
+                .error(true),
             );
         }
         _ => {}
@@ -524,8 +544,15 @@ pub fn turn_command(thread: &Thread) -> TurnCommand {
                 args.push("resume".into());
             }
             args.extend(
-                ["--json", "--skip-git-repo-check", "-c", sandbox, "-c", "approval_policy=\"never\""]
-                    .map(str::to_owned),
+                [
+                    "--json",
+                    "--skip-git-repo-check",
+                    "-c",
+                    sandbox,
+                    "-c",
+                    "approval_policy=\"never\"",
+                ]
+                .map(str::to_owned),
             );
             if let Some(id) = resume {
                 args.push(id);
@@ -638,7 +665,9 @@ impl ProjectChat {
             return Ok(existing.clone());
         }
         if store.projects.len() >= MAX_PROJECTS {
-            return Err(format!("프로젝트는 {MAX_PROJECTS}개까지 추가할 수 있습니다."));
+            return Err(format!(
+                "프로젝트는 {MAX_PROJECTS}개까지 추가할 수 있습니다."
+            ));
         }
         let project = Project {
             id: uuid::Uuid::new_v4().to_string(),
@@ -886,10 +915,10 @@ impl ProjectChat {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Running turns
 
+#[cfg(unix)]
 const STDERR_TAIL: usize = 2 * 1024;
 
 pub fn find_cli(program: &str, path: &[PathBuf]) -> Option<PathBuf> {
@@ -950,7 +979,9 @@ pub async fn start_turn(
         Ok(())
     })?;
     let _ = chat.append(&thread.id, &[Item::new(ItemKind::User, prompt.clone())]);
-    chat.notify(json!({"threadId": thread.id, "kind": "state", "running": true, "thread": updated}));
+    chat.notify(
+        json!({"threadId": thread.id, "kind": "state", "running": true, "thread": updated}),
+    );
 
     let mut stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -971,7 +1002,9 @@ pub async fn start_turn(
             }
             let text = String::from_utf8_lossy(&buf).into_owned();
             let start = text.len().saturating_sub(STDERR_TAIL);
-            let start = (start..=text.len()).find(|i| text.is_char_boundary(*i)).unwrap_or(0);
+            let start = (start..=text.len())
+                .find(|i| text.is_char_boundary(*i))
+                .unwrap_or(0);
             text[start..].to_owned()
         });
         let mut finished = false;
@@ -1001,7 +1034,10 @@ pub async fn start_turn(
         let err = tail.await.unwrap_or_default();
         let was_stopped = chat.stopped(&id, false);
         if was_stopped {
-            let _ = chat.append(&id, &[Item::new(ItemKind::Notice, "사용자가 중지했습니다.")]);
+            let _ = chat.append(
+                &id,
+                &[Item::new(ItemKind::Notice, "사용자가 중지했습니다.")],
+            );
         } else if !finished {
             let _ = status;
             let reason = if err.trim().is_empty() {
@@ -1090,7 +1126,10 @@ fn git(folder: &str, args: &[&str]) -> Option<String> {
 
 /// Working-tree changes against HEAD, read-only. Untracked files are listed, not diffed.
 pub fn changes(folder: &str) -> Changes {
-    let Some(status) = git(folder, &["status", "--porcelain=v1", "--untracked-files=all"]) else {
+    let Some(status) = git(
+        folder,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    ) else {
         return Changes {
             is_repo: false,
             branch: None,
@@ -1106,11 +1145,7 @@ pub fn changes(folder: &str) -> Changes {
     Changes {
         is_repo: true,
         branch: crate::reason_agents::current_branch(Path::new(folder)),
-        files: status
-            .lines()
-            .take(500)
-            .map(|l| plain_text(l))
-            .collect(),
+        files: status.lines().take(500).map(|l| plain_text(l)).collect(),
         diff: if truncated {
             cut(&diff, MAX_DIFF_BYTES)
         } else {

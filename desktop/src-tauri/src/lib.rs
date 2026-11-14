@@ -64,15 +64,15 @@ pub mod ops_status;
 pub mod production;
 #[cfg(feature = "desktop")]
 mod production_native;
+pub mod project_chat;
+#[cfg(feature = "desktop")]
+mod project_chat_native;
 pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
 mod publication_native;
 pub mod publishing;
 pub mod publishing_adapters;
-pub mod project_chat;
-#[cfg(feature = "desktop")]
-mod project_chat_native;
 pub mod reason_agents;
 #[cfg(feature = "desktop")]
 mod reason_native;

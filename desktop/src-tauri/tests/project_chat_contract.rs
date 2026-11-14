@@ -54,7 +54,11 @@ fn project_chat_normalizes_claude_stream_json() {
         FOLDER,
     );
     let kinds: Vec<ItemKind> = turn.items.iter().map(|i| i.kind).collect();
-    assert_eq!(kinds, [ItemKind::Assistant, ItemKind::Tool], "empty thinking and blank text dropped");
+    assert_eq!(
+        kinds,
+        [ItemKind::Assistant, ItemKind::Tool],
+        "empty thinking and blank text dropped"
+    );
     assert_eq!(turn.items[1].text, "src/hello.txt");
     assert_eq!(turn.items[1].tool.as_deref(), Some("Write"));
     assert_eq!(turn.items[1].tool_id.as_deref(), Some("toolu_1"));
@@ -66,7 +70,11 @@ fn project_chat_normalizes_claude_stream_json() {
         ]}}),
         FOLDER,
     );
-    assert_eq!(result.items.len(), 1, "hook text in a user turn is not shown as the user");
+    assert_eq!(
+        result.items.len(),
+        1,
+        "hook text in a user turn is not shown as the user"
+    );
     assert_eq!(result.items[0].kind, ItemKind::ToolResult);
     assert!(result.items[0].is_error);
     assert_eq!(result.items[0].tool_id.as_deref(), Some("toolu_1"));
@@ -96,7 +104,10 @@ fn project_chat_normalizes_claude_stream_json() {
 
 #[test]
 fn project_chat_normalizes_codex_exec_json() {
-    let started = normalize_codex(&json!({"type":"thread.started","thread_id":"01a1-d816"}), FOLDER);
+    let started = normalize_codex(
+        &json!({"type":"thread.started","thread_id":"01a1-d816"}),
+        FOLDER,
+    );
     assert_eq!(started.session.as_deref(), Some("01a1-d816"));
 
     // Codex reports config warnings as error items before the turn; they are not failures.
@@ -131,14 +142,20 @@ fn project_chat_normalizes_codex_exec_json() {
         &json!({"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"ok"}}),
         FOLDER,
     );
-    assert_eq!((say.items[0].kind, say.items[0].text.as_str()), (ItemKind::Assistant, "ok"));
+    assert_eq!(
+        (say.items[0].kind, say.items[0].text.as_str()),
+        (ItemKind::Assistant, "ok")
+    );
 
     let done = normalize_codex(
         &json!({"type":"turn.completed","usage":{"input_tokens":63850,"output_tokens":41}}),
         FOLDER,
     );
     assert_eq!(done.items[0].text, "완료 · 출력 41 토큰");
-    let failed = normalize_codex(&json!({"type":"turn.failed","error":{"message":"quota"}}), FOLDER);
+    let failed = normalize_codex(
+        &json!({"type":"turn.failed","error":{"message":"quota"}}),
+        FOLDER,
+    );
     assert_eq!(failed.items[0].kind, ItemKind::Error);
 }
 
@@ -151,7 +168,9 @@ fn project_chat_turn_commands_pin_model_and_never_grant_full_access() {
     assert!(args.contains(&format!("--model {CLAUDE_MODEL}")));
     assert!(args.contains("--permission-mode acceptEdits"));
     assert!(!args.contains("--resume"));
-    assert!(claude.env.contains(&("CLAUDE_CODE_EFFORT_LEVEL", CLAUDE_EFFORT.to_owned())));
+    assert!(claude
+        .env
+        .contains(&("CLAUDE_CODE_EFFORT_LEVEL", CLAUDE_EFFORT.to_owned())));
     assert_eq!(CLAUDE_MODEL, "claude-opus-5-5");
     assert_eq!(CLAUDE_EFFORT, "medium");
 
@@ -164,12 +183,20 @@ fn project_chat_turn_commands_pin_model_and_never_grant_full_access() {
     assert_eq!(codex.program, "codex");
     assert_eq!(codex.args[0], "exec");
     assert_eq!(codex.args[1], "--json");
-    assert!(codex.args.contains(&"sandbox_mode=\"workspace-write\"".to_owned()));
-    assert_eq!(codex.args.last().map(String::as_str), Some("-"), "prompt comes from stdin");
+    assert!(codex
+        .args
+        .contains(&"sandbox_mode=\"workspace-write\"".to_owned()));
+    assert_eq!(
+        codex.args.last().map(String::as_str),
+        Some("-"),
+        "prompt comes from stdin"
+    );
 
     let resumed = turn_command(&thread(ChatAgent::Codex, ChatMode::Plan, Some("01a1")));
     assert_eq!(&resumed.args[..2], ["exec", "resume"]);
-    assert!(resumed.args.contains(&"sandbox_mode=\"read-only\"".to_owned()));
+    assert!(resumed
+        .args
+        .contains(&"sandbox_mode=\"read-only\"".to_owned()));
     let n = resumed.args.len();
     assert_eq!(&resumed.args[n - 2..], ["01a1", "-"]);
 
@@ -188,13 +215,23 @@ fn project_chat_turn_commands_pin_model_and_never_grant_full_access() {
 
 #[test]
 fn project_chat_summaries_and_titles_are_plain_and_capped() {
-    assert_eq!(tool_summary("Bash", &json!({"command":"pnpm test"}), FOLDER), "pnpm test");
     assert_eq!(
-        tool_summary("TodoWrite", &json!({"todos":[{"content":"a","status":"completed"},{"content":"b","status":"pending"}]}), FOLDER),
+        tool_summary("Bash", &json!({"command":"pnpm test"}), FOLDER),
+        "pnpm test"
+    );
+    assert_eq!(
+        tool_summary(
+            "TodoWrite",
+            &json!({"todos":[{"content":"a","status":"completed"},{"content":"b","status":"pending"}]}),
+            FOLDER
+        ),
         "[x] a\n[ ] b"
     );
     assert!(tool_summary("Other", &json!({"x":"y".repeat(5000)}), FOLDER).ends_with("…(잘림)"));
-    assert_eq!(title_from("\n  로그인 화면 만들어줘\n둘째 줄"), "로그인 화면 만들어줘");
+    assert_eq!(
+        title_from("\n  로그인 화면 만들어줘\n둘째 줄"),
+        "로그인 화면 만들어줘"
+    );
     assert_eq!(title_from("   "), "새 대화");
     assert_eq!(title_from(&"가".repeat(80)).chars().count(), 61);
     assert_eq!(title_from("a\u{202e}b"), "ab", "bidi controls stripped");
@@ -206,14 +243,34 @@ fn project_chat_stores_projects_threads_and_items() {
     let chat = ProjectChat::new(root.path().join("chat"));
     let project = chat.add_project("/Users/me/projects/app").unwrap();
     assert_eq!(project.name, "app");
-    assert_eq!(chat.add_project("/Users/me/projects/app").unwrap().id, project.id, "same folder, same project");
+    assert_eq!(
+        chat.add_project("/Users/me/projects/app").unwrap().id,
+        project.id,
+        "same folder, same project"
+    );
 
-    let t = chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit).unwrap();
-    assert!(chat.create_thread("missing", ChatAgent::Claude, ChatMode::Edit).is_err());
-    assert!(chat.create_thread("../x", ChatAgent::Claude, ChatMode::Edit).is_err());
-    chat.append(&t.id, &[Item::new(ItemKind::User, "안녕"), Item::new(ItemKind::Assistant, "네")]).unwrap();
+    let t = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+        .unwrap();
+    assert!(chat
+        .create_thread("missing", ChatAgent::Claude, ChatMode::Edit)
+        .is_err());
+    assert!(chat
+        .create_thread("../x", ChatAgent::Claude, ChatMode::Edit)
+        .is_err());
+    chat.append(
+        &t.id,
+        &[
+            Item::new(ItemKind::User, "안녕"),
+            Item::new(ItemKind::Assistant, "네"),
+        ],
+    )
+    .unwrap();
     let items = chat.items(&t.id);
-    assert_eq!(items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["안녕", "네"]);
+    assert_eq!(
+        items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+        ["안녕", "네"]
+    );
 
     let updated = chat
         .update_thread(&t.id, |thread| {
@@ -233,7 +290,10 @@ fn project_chat_stores_projects_threads_and_items() {
     assert!(chat.claim(&t.id, 43).is_err(), "one turn per thread");
     assert!(chat.projects().1[0].running);
     assert!(chat.delete_thread(&t.id).is_err(), "running thread kept");
-    assert!(chat.remove_project(&project.id).is_err(), "running project kept");
+    assert!(
+        chat.remove_project(&project.id).is_err(),
+        "running project kept"
+    );
     for n in 1..MAX_RUNNING {
         chat.claim(&format!("other-{n}"), 1).unwrap();
     }
@@ -245,7 +305,10 @@ fn project_chat_stores_projects_threads_and_items() {
 
     chat.remove_project(&project.id).unwrap();
     assert!(chat.projects().1.is_empty());
-    assert!(chat.items(&t.id).is_empty(), "items removed with the project");
+    assert!(
+        chat.items(&t.id).is_empty(),
+        "items removed with the project"
+    );
 }
 
 fn message(id: &str, from: &str, reply_to: Option<&str>) -> Message {
@@ -257,7 +320,9 @@ fn project_chat_links_only_replies_from_the_asked_planner() {
     let root = tempfile::tempdir().unwrap();
     let chat = ProjectChat::new(root.path().to_path_buf());
     let project = chat.add_project("/Users/me/projects/app").unwrap();
-    let t = chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan).unwrap();
+    let t = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan)
+        .unwrap();
     let mut request = Item::new(ItemKind::PeerRequest, "로그인 기획해줘");
     request.peer = Some("muse@mac".into());
     request.message_id = Some("sent-1".into());
@@ -273,7 +338,10 @@ fn project_chat_links_only_replies_from_the_asked_planner() {
     assert_eq!(fresh.len(), 1);
     assert_eq!(fresh[0].message_id.as_deref(), Some("m1"));
     assert_eq!(fresh[0].kind, ItemKind::PeerReply);
-    assert!(chat.sync_replies(&t.id, &mail).unwrap().is_empty(), "no duplicates");
+    assert!(
+        chat.sync_replies(&t.id, &mail).unwrap().is_empty(),
+        "no duplicates"
+    );
 }
 
 #[test]
@@ -287,7 +355,10 @@ fn project_chat_folders_follow_the_agent_rules() {
     }
     assert!(typed_path("relative/app").is_err());
     assert!(typed_path("~/x\u{0}").is_err());
-    assert_eq!(typed_path("~/projects/app").unwrap(), home.join("projects/app"));
+    assert_eq!(
+        typed_path("~/projects/app").unwrap(),
+        home.join("projects/app")
+    );
     let dir = tempfile::tempdir().unwrap();
     assert!(checked_folder(dir.path()).is_ok());
 }
@@ -391,7 +462,13 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         let sink = events.clone();
         *chat.emit.lock().unwrap() = Some(Arc::new(move |event| sink.lock().unwrap().push(event)));
         let folder = project.to_str().unwrap().to_owned();
-        Rig { dir, chat, events, folder, bin }
+        Rig {
+            dir,
+            chat,
+            events,
+            folder,
+            bin,
+        }
     }
 
     impl Rig {
@@ -416,33 +493,81 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
     async fn project_chat_turn_streams_items_and_resumes_the_conversation() {
         let rig = rig("ok");
         let project = rig.chat.add_project(&rig.folder).unwrap();
-        let t = rig.chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit).unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
         let prompt = "--model evil\n로그인 화면을 만들어줘";
-        let started = start_turn(rig.chat.clone(), t.clone(), rig.folder.clone(), prompt.into(), rig.path()).await.unwrap();
+        let started = start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            prompt.into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
         assert!(started.running);
         assert_eq!(started.title, "--model evil");
-        assert!(start_turn(rig.chat.clone(), t.clone(), rig.folder.clone(), "again".into(), rig.path()).await.is_err(), "one turn per thread");
+        assert!(
+            start_turn(
+                rig.chat.clone(),
+                t.clone(),
+                rig.folder.clone(),
+                "again".into(),
+                rig.path()
+            )
+            .await
+            .is_err(),
+            "one turn per thread"
+        );
         idle(&rig.chat, &t.id).await;
 
         assert_eq!(log(&rig, "stdin.txt"), prompt, "prompt only on stdin");
         let args = log(&rig, "args.txt");
-        assert!(!args.contains("evil") && args.contains("acceptEdits") && args.contains("claude-opus-5-5"));
-        assert_eq!(fs::canonicalize(log(&rig, "cwd.txt").trim()).unwrap(), fs::canonicalize(&rig.folder).unwrap());
+        assert!(
+            !args.contains("evil")
+                && args.contains("acceptEdits")
+                && args.contains("claude-opus-5-5")
+        );
+        assert_eq!(
+            fs::canonicalize(log(&rig, "cwd.txt").trim()).unwrap(),
+            fs::canonicalize(&rig.folder).unwrap()
+        );
         assert!(log(&rig, "env.txt").contains("CLAUDE_CODE_EFFORT_LEVEL=medium"));
 
         let items = rig.chat.items(&t.id);
         let kinds: Vec<ItemKind> = items.iter().map(|i| i.kind).collect();
-        assert_eq!(kinds, [ItemKind::User, ItemKind::Assistant, ItemKind::Tool, ItemKind::ToolResult, ItemKind::Result]);
+        assert_eq!(
+            kinds,
+            [
+                ItemKind::User,
+                ItemKind::Assistant,
+                ItemKind::Tool,
+                ItemKind::ToolResult,
+                ItemKind::Result
+            ]
+        );
         assert_eq!(items[2].text, "a.txt");
         let thread = rig.chat.thread(&t.id).unwrap();
         assert_eq!(thread.provider_session.as_deref(), Some("sess-1"));
         assert!(!thread.running);
         let events = rig.events.lock().unwrap().clone();
-        assert!(events.iter().any(|e| e["kind"] == "state" && e["running"] == true));
+        assert!(events
+            .iter()
+            .any(|e| e["kind"] == "state" && e["running"] == true));
         assert_eq!(events.last().unwrap()["running"], false);
 
         // The next turn resumes the CLI's own conversation.
-        start_turn(rig.chat.clone(), thread, rig.folder.clone(), "다음".into(), rig.path()).await.unwrap();
+        start_turn(
+            rig.chat.clone(),
+            thread,
+            rig.folder.clone(),
+            "다음".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
         idle(&rig.chat, &t.id).await;
         assert!(log(&rig, "args.txt").ends_with("--resume\nsess-1\n"));
     }
@@ -451,11 +576,25 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
     async fn project_chat_codex_turn_uses_its_sandbox_and_thread() {
         let rig = rig("ok");
         let project = rig.chat.add_project(&rig.folder).unwrap();
-        let t = rig.chat.create_thread(&project.id, ChatAgent::Codex, ChatMode::Plan).unwrap();
-        start_turn(rig.chat.clone(), t.clone(), rig.folder.clone(), "살펴봐".into(), rig.path()).await.unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Codex, ChatMode::Plan)
+            .unwrap();
+        start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            "살펴봐".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
         idle(&rig.chat, &t.id).await;
         assert!(log(&rig, "args.txt").contains("sandbox_mode=\"read-only\""));
-        assert_eq!(rig.chat.thread(&t.id).unwrap().provider_session.as_deref(), Some("th-9"));
+        assert_eq!(
+            rig.chat.thread(&t.id).unwrap().provider_session.as_deref(),
+            Some("th-9")
+        );
         let texts: Vec<String> = rig.chat.items(&t.id).into_iter().map(|i| i.text).collect();
         assert_eq!(texts, ["살펴봐", "ok", "완료 · 출력 5 토큰"]);
     }
@@ -465,8 +604,19 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         let crashed = rig("crash");
         let rig = &crashed;
         let project = rig.chat.add_project(&rig.folder).unwrap();
-        let t = rig.chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit).unwrap();
-        start_turn(rig.chat.clone(), t.clone(), rig.folder.clone(), "hi".into(), rig.path()).await.unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            "hi".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
         idle(&rig.chat, &t.id).await;
         let last = rig.chat.items(&t.id).pop().unwrap();
         assert_eq!(last.kind, ItemKind::Error);
@@ -475,8 +625,19 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         let hung = super::turns::rig("hang");
         let rig = &hung;
         let project = rig.chat.add_project(&rig.folder).unwrap();
-        let t = rig.chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit).unwrap();
-        start_turn(rig.chat.clone(), t.clone(), rig.folder.clone(), "hi".into(), rig.path()).await.unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            "hi".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while log(&rig, "pid.txt").is_empty() {
             assert!(Instant::now() < deadline);
@@ -486,11 +647,25 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         idle(&rig.chat, &t.id).await;
         let items = rig.chat.items(&t.id);
         assert_eq!(items.last().unwrap().text, "사용자가 중지했습니다.");
-        assert!(!items.iter().any(|i| i.kind == ItemKind::Error), "a stop is not a failure");
+        assert!(
+            !items.iter().any(|i| i.kind == ItemKind::Error),
+            "a stop is not a failure"
+        );
         let pid: i32 = log(&rig, "pid.txt").trim().parse().unwrap();
-        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the agent's process is gone");
+        assert_ne!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the agent's process is gone"
+        );
 
-        let missing = start_turn(rig.chat.clone(), t, rig.folder.clone(), "hi".into(), vec![rig.dir.path().join("none")]).await;
+        let missing = start_turn(
+            rig.chat.clone(),
+            t,
+            rig.folder.clone(),
+            "hi".into(),
+            vec![rig.dir.path().join("none")],
+        )
+        .await;
         assert!(missing.unwrap_err().contains("CLI를 찾지 못했습니다"));
     }
 
@@ -499,21 +674,49 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
     #[ignore]
     async fn live_claude_turn_in_a_scratch_project() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().canonicalize().unwrap().to_str().unwrap().to_owned();
+        let folder = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         let chat = Arc::new(ProjectChat::new(dir.path().join(".store")));
         let project = chat.add_project(&folder).unwrap();
-        let t = chat.create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit).unwrap();
-        start_turn(chat.clone(), t.clone(), folder.clone(), "Create hello.txt containing exactly: hi from studio. Then reply done.".into(),
-            toris_studio_desktop::agent_runtime::search_path()).await.unwrap();
+        let t = chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        start_turn(
+            chat.clone(),
+            t.clone(),
+            folder.clone(),
+            "Create hello.txt containing exactly: hi from studio. Then reply done.".into(),
+            toris_studio_desktop::agent_runtime::search_path(),
+        )
+        .await
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(240);
         while chat.is_running(&t.id) {
             assert!(Instant::now() < deadline);
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         for item in chat.items(&t.id) {
-            println!("{:?} {:?} {}", item.kind, item.tool, item.text.chars().take(160).collect::<String>());
+            println!(
+                "{:?} {:?} {}",
+                item.kind,
+                item.tool,
+                item.text.chars().take(160).collect::<String>()
+            );
         }
-        println!("session: {:?}", chat.thread(&t.id).unwrap().provider_session);
-        assert_eq!(fs::read_to_string(dir.path().join("hello.txt")).unwrap().trim(), "hi from studio");
+        println!(
+            "session: {:?}",
+            chat.thread(&t.id).unwrap().provider_session
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("hello.txt"))
+                .unwrap()
+                .trim(),
+            "hi from studio"
+        );
     }
 }

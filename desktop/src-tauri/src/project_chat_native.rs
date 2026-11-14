@@ -1,7 +1,9 @@
 //! Window commands for project chat. The webview supplies typed text and IDs;
 //! folders are confirmed in an OS dialog this process owns before they become
 //! projects, and every turn re-checks its folder before an agent starts there.
-use crate::project_chat::{self, ChatAgent, ChatMode, Item, ItemKind, ProjectChat, MAX_PROMPT_BYTES};
+use crate::project_chat::{
+    self, ChatAgent, ChatMode, Item, ItemKind, ProjectChat, MAX_PROMPT_BYTES,
+};
 use crate::reason_agents::{checked_folder, typed_path};
 use crate::reason_network::{ReasonNetwork, MAX_SEND_BYTES};
 use serde::Deserialize;
@@ -196,7 +198,10 @@ pub async fn project_chat_thread_update(
         if let Some(agent) = input.agent {
             if agent != thread.agent {
                 if thread.provider_session.is_some() || running {
-                    return Err("대화를 시작한 뒤에는 에이전트를 바꿀 수 없습니다. 새 대화를 여세요.".into());
+                    return Err(
+                        "대화를 시작한 뒤에는 에이전트를 바꿀 수 없습니다. 새 대화를 여세요."
+                            .into(),
+                    );
                 }
                 thread.agent = agent;
             }
@@ -262,7 +267,9 @@ pub async fn project_chat_send(
     let project = chat.project(&thread.project_id)?;
     // The folder must still be the one the user confirmed, not a swapped-in link.
     if checked_folder(Path::new(&project.folder)).ok().as_deref() != Some(project.folder.as_str()) {
-        return Err("프로젝트 폴더를 찾을 수 없거나 바뀌었습니다. 프로젝트를 다시 추가하세요.".into());
+        return Err(
+            "프로젝트 폴더를 찾을 수 없거나 바뀌었습니다. 프로젝트를 다시 추가하세요.".into(),
+        );
     }
     project_chat::start_turn(
         chat.inner().clone(),
