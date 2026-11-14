@@ -166,3 +166,21 @@
 .pc-leftovers li { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; min-width: 0; }
 .pc-leftovers li > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .pc-leftovers > p { display: flex; align-items: center; gap: 6px; }
+/* Attachments: files picked for the next message, and the ones a recorded message carried. */
+.pc-pending { padding: 8px 10px 0; display: grid; gap: 6px; }
+.pc-pending > p { margin: 0; font-size: 11px; }
+.pc-pending ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.pc-pending li { display: flex; align-items: flex-start; gap: 4px; border: 1px solid var(--social-line); border-radius: 8px; background: var(--social-panel); min-width: 0; }
+.pc-pending li.changed { border-color: color-mix(in srgb, #e0a030 70%, var(--social-line)); }
+.pc-pending details { flex: 1; min-width: 0; }
+.pc-pending summary { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer; font-size: 12px; color: var(--social-text); min-width: 0; }
+.pc-pending summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pc-pending summary small { color: var(--social-muted); flex: none; }
+.pc-pending summary em { font-style: normal; font-size: 11px; color: #e0a030; flex: none; }
+.pc-pending pre { margin: 0 8px 8px; max-height: 180px; overflow: auto; padding: 8px; border-radius: 6px; background: var(--social-inset); border: 1px solid var(--social-line); font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pc-pending li > .pc-icon { margin: 3px 4px 0 0; flex: none; }
+.pc-attach-note { margin: 4px 10px 0; font-size: 11px; }
+.pc-attached { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 85%; }
+.pc-msg.hosted .pc-attached { justify-content: flex-start; }
+.pc-attached li { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px dashed var(--social-line); border-radius: 999px; font-size: 11px; color: var(--social-muted); min-width: 0; }
+.pc-attached li span { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--social-text); }
