@@ -94,6 +94,9 @@ pub enum ItemKind {
     Result,
     PeerRequest,
     PeerReply,
+    /// A request handed to a hosted assistant (Muse, OpenAI Dots, Grok Bot)
+    /// as a prompt the user copies; its reply is recognized by `code`.
+    HostedRequest,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -114,6 +117,15 @@ pub struct Item {
     /// Network message ID: the request sent, or the reply received.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// Display name of the planner (the sender's name, or the hosted assistant asked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_name: Option<String>,
+    /// Handoff code a hosted assistant puts on its first line so Studio can file its reply here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// The prompt the user copies into the hosted assistant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     pub at: String,
 }
 
@@ -128,6 +140,9 @@ impl Item {
             is_error: false,
             peer: None,
             message_id: None,
+            peer_name: None,
+            code: None,
+            prompt: None,
             at: now(),
         }
     }
@@ -882,7 +897,9 @@ impl ProjectChat {
             .unwrap_or_default()
     }
 
-    /// Adds replies addressed to this thread's planner requests that it does not hold yet.
+    /// Adds planner replies this thread does not hold yet: answers to its
+    /// network requests from the peer asked, and messages from anyone that
+    /// carry one of its hosted-assistant handoff codes on their first line.
     pub fn sync_replies(&self, thread: &str, messages: &[Message]) -> Result<Vec<Item>, String> {
         let items = self.items(thread);
         let requests: Vec<(&str, &str)> = items
@@ -890,29 +907,147 @@ impl ProjectChat {
             .filter(|i| i.kind == ItemKind::PeerRequest)
             .filter_map(|i| Some((i.message_id.as_deref()?, i.peer.as_deref()?)))
             .collect();
+        let codes: Vec<&str> = items
+            .iter()
+            .filter(|i| i.kind == ItemKind::HostedRequest)
+            .filter_map(|i| i.code.as_deref())
+            .collect();
         let known: Vec<&str> = items
             .iter()
             .filter(|i| i.kind == ItemKind::PeerReply)
             .filter_map(|i| i.message_id.as_deref())
             .collect();
-        let fresh: Vec<Item> = messages
-            .iter()
-            .filter(|m| !known.contains(&m.id.as_str()))
-            .filter(|m| {
-                requests.iter().any(|(sent, peer)| {
-                    m.reply_to.as_deref() == Some(*sent) && same_sender(&m.from, peer)
-                })
-            })
-            .map(|m| {
-                let mut item = Item::new(ItemKind::PeerReply, cut(&m.text, MAX_ITEM_BYTES));
-                item.peer = Some(m.from_name.clone().unwrap_or_else(|| m.from.clone()));
-                item.message_id = Some(m.id.clone());
-                item
-            })
-            .collect();
+        let mut fresh: Vec<Item> = Vec::new();
+        for m in messages {
+            if known.contains(&m.id.as_str())
+                || fresh
+                    .iter()
+                    .any(|i| i.message_id.as_deref() == Some(m.id.as_str()))
+            {
+                continue;
+            }
+            let answered = requests.iter().any(|(sent, peer)| {
+                m.reply_to.as_deref() == Some(*sent) && same_sender(&m.from, peer)
+            });
+            let text = if answered {
+                Some(m.text.clone())
+            } else {
+                codes.iter().find_map(|code| strip_code(&m.text, code))
+            };
+            let Some(text) = text else { continue };
+            let mut item = Item::new(ItemKind::PeerReply, cut(&text, MAX_ITEM_BYTES));
+            // The address is what a reply goes back to; the name is only shown.
+            item.peer = Some(m.from.clone());
+            item.peer_name = Some(cut(m.from_name.as_deref().unwrap_or(&m.from), 120));
+            item.message_id = Some(m.id.clone());
+            fresh.push(item);
+        }
         self.append(thread, &fresh)?;
         Ok(fresh)
     }
+
+    /// Files one network message the user picked as a planner reply in `thread`.
+    /// Returns nothing when the thread already holds it.
+    pub fn link_message(&self, thread: &str, m: &Message) -> Result<Option<Item>, String> {
+        if self.reply_item(thread, &m.id).is_some() {
+            return Ok(None);
+        }
+        let mut item = Item::new(ItemKind::PeerReply, cut(&m.text, MAX_ITEM_BYTES));
+        item.peer = Some(m.from.clone());
+        item.peer_name = Some(cut(m.from_name.as_deref().unwrap_or(&m.from), 120));
+        item.message_id = Some(m.id.clone());
+        self.append(thread, std::slice::from_ref(&item))?;
+        Ok(Some(item))
+    }
+
+    /// The reply in `thread` with network message `id`, if it holds one.
+    pub fn reply_item(&self, thread: &str, id: &str) -> Option<Item> {
+        self.items(thread)
+            .into_iter()
+            .find(|i| i.kind == ItemKind::PeerReply && i.message_id.as_deref() == Some(id))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hosted assistants (Muse, OpenAI Dots, Grok Bot)
+//
+// They reach Reason Network through its MCP server with only list_team,
+// send_message and check_inbox, are not listed as peers and cannot be messaged
+// by name, so the user carries the request to them as a prompt. The prompt
+// asks them to send their plan to Studio's address with a handoff code on the
+// first line; only a message carrying a code a thread issued is filed there.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostedAssistant {
+    Muse,
+    Dots,
+    Grok,
+}
+
+impl HostedAssistant {
+    pub fn label(self) -> &'static str {
+        match self {
+            HostedAssistant::Muse => "Muse",
+            HostedAssistant::Dots => "OpenAI Dots",
+            HostedAssistant::Grok => "Grok Bot",
+        }
+    }
+}
+
+/// A fresh, unguessable code such as `TS-3F9A1C2E7B`.
+pub fn handoff_code() -> String {
+    let hex = uuid::Uuid::new_v4().simple().to_string().to_uppercase();
+    format!("TS-{}", &hex[..10])
+}
+
+/// The prompt the user pastes into a hosted assistant.
+pub fn hosted_prompt(
+    assistant: HostedAssistant,
+    project: &str,
+    request: &str,
+    snapshot: &str,
+    studio: &str,
+    code: &str,
+) -> String {
+    format!(
+        "[Toris Studio 기획 요청 · {code}]\n\
+{name}, 아래 앱 프로젝트의 기획을 맡아 주세요. 구현은 Toris Studio의 구현 에이전트(Claude Opus 5.5)가 합니다.\n\n\
+프로젝트: {project}\n\
+요청:\n{request}\n\n\
+--- 프로젝트 현황 (Studio가 폴더에서 읽은 자료) ---\n{snapshot}\n---\n\n\
+기획을 마치면 Reason Network의 send_message 도구로 `{studio}`에게 보내 주세요.\n\
+- 메시지 첫 줄은 정확히 `[{code}]` 로 시작해야 Studio가 이 대화에 붙입니다.\n\
+- 그 아래에 목표, 화면·기능 목록, 단계별 구현 순서, 완료 기준을 적어 주세요.\n\
+- Studio가 답장하면 check_inbox로 확인할 수 있습니다.",
+        name = assistant.label(),
+    )
+}
+
+/// The message text without its handoff line, when its first non-empty line
+/// carries `code` (any case, with or without brackets).
+pub fn strip_code(text: &str, code: &str) -> Option<String> {
+    let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
+    let first = lines.next()?;
+    // ASCII lowercasing keeps byte offsets, so the match can be cut from `first`.
+    let at = first
+        .to_ascii_lowercase()
+        .find(&code.to_ascii_lowercase())?;
+    let rest = format!("{}{}", &first[..at], &first[at + code.len()..]);
+    let rest = rest
+        .trim()
+        .trim_matches(|c: char| c == '[' || c == ']' || c == '·' || c == '-' || c == ':')
+        .trim()
+        .to_owned();
+    let body: Vec<&str> = lines.collect();
+    let mut out = String::new();
+    if !rest.is_empty() {
+        out.push_str(&rest);
+        out.push('\n');
+    }
+    out.push_str(body.join("\n").trim());
+    let out = out.trim().to_owned();
+    (!out.is_empty()).then_some(out)
 }
 
 // ---------------------------------------------------------------------------

@@ -5,12 +5,16 @@ export type ChatAgent = typeof CHAT_AGENTS[number];
 export type ChatMode = "plan" | "edit";
 export const AGENT_LABELS: Record<ChatAgent, string> = { claude: "Claude Opus 5.5 · medium", codex: "Codex" };
 export const MODE_LABELS: Record<ChatMode, string> = { plan: "기획 (읽기 전용)", edit: "편집 (파일 수정)" };
-export const ITEM_KINDS = ["user", "assistant", "thinking", "tool", "tool_result", "notice", "error", "result", "peer_request", "peer_reply"] as const;
+export const ITEM_KINDS = ["user", "assistant", "thinking", "tool", "tool_result", "notice", "error", "result", "peer_request", "peer_reply", "hosted_request"] as const;
 export type ItemKind = typeof ITEM_KINDS[number];
 
 export type Project = { id: string; name: string; folder: string; addedAt: string };
 export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean };
-export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; messageId?: string; at: string };
+export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; at: string };
+/** Hosted assistants reach Reason Network only through its MCP server and cannot be messaged by name. */
+export const HOSTED_ASSISTANTS = ["muse", "dots", "grok"] as const;
+export type HostedAssistant = typeof HOSTED_ASSISTANTS[number];
+export const HOSTED_LABELS: Record<HostedAssistant, string> = { muse: "Muse", dots: "OpenAI Dots", grok: "Grok Bot" };
 export type Changes = { isRepo: boolean; branch: string | null; files: string[]; diff: string; truncated: boolean };
 export type ChatEvent = { threadId: string; kind: "items"; items: ChatItem[] } | { threadId: string; kind: "state"; running: boolean; thread?: Thread };
 
@@ -38,6 +42,9 @@ export function normalizeItem(value: unknown): ChatItem | null {
   if (r.isError === true) item.isError = true;
   if (str(r.peer)) item.peer = str(r.peer);
   if (str(r.messageId)) item.messageId = str(r.messageId);
+  if (str(r.peerName)) item.peerName = str(r.peerName);
+  if (str(r.code)) item.code = str(r.code);
+  if (str(r.prompt)) item.prompt = str(r.prompt);
   return item;
 }
 const compact = <T,>(values: (T | null)[]) => values.filter((v): v is T => v !== null);
@@ -69,7 +76,7 @@ export function toRows(items: ChatItem[]): Row[] {
 
 /** The prompt that hands a planner's reply to the implementation agent. */
 export function implementationPrompt(reply: ChatItem): string {
-  return `아래는 ${reply.peer ?? "기획자"}가 보낸 기획입니다. 이 기획대로 이 프로젝트에 구현하고, 끝나면 바꾼 파일과 확인 방법을 정리해 주세요.\n\n--- 기획 ---\n${reply.text}\n---`;
+  return `아래는 ${reply.peerName ?? reply.peer ?? "기획자"}가 보낸 기획입니다. 이 기획대로 이 프로젝트에 구현하고, 끝나면 바꾼 파일과 확인 방법을 정리해 주세요.\n\n--- 기획 ---\n${reply.text}\n---`;
 }
 
 export type DiffLine = { kind: "add" | "del" | "hunk" | "file" | "ctx"; text: string };
@@ -125,10 +132,31 @@ export async function sendMessage(threadId: string, text: string, call: BridgeIn
 export async function stopTurn(threadId: string, call: BridgeInvoke = nativeInvoke) {
   await call("project_chat_stop", { input: { threadId } });
 }
-export async function askPeer(threadId: string, peer: string, text: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
+export async function askPeer(threadId: string, peer: string, text: string, call: BridgeInvoke = nativeInvoke, replyTo?: string): Promise<ChatItem[]> {
   if (!peer) throw new Error("기획을 맡길 에이전트를 고르세요.");
   if (!text.trim()) throw new Error("보낼 내용을 입력하세요.");
-  return compact(list(await call("project_chat_ask_peer", { input: { threadId, peer, text } })).map(normalizeItem));
+  const input = replyTo ? { threadId, peer, text, replyTo } : { threadId, peer, text };
+  return compact(list(await call("project_chat_ask_peer", { input })).map(normalizeItem));
+}
+/** Records a request for a hosted assistant; the returned item carries the prompt to copy into it. */
+export async function askHosted(threadId: string, assistant: HostedAssistant, text: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
+  if (!HOSTED_ASSISTANTS.includes(assistant)) throw new Error("기획을 맡길 어시스턴트를 고르세요.");
+  if (!text.trim()) throw new Error("기획 요청을 입력하세요.");
+  return compact(list(await call("project_chat_hosted_request", { input: { threadId, assistant, text } })).map(normalizeItem));
+}
+/** Files a message from Studio's Reason Network inbox in this thread; the host reads its sender and text. */
+export async function linkMessage(threadId: string, messageId: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
+  if (!messageId) throw new Error("가져올 메시지를 고르세요.");
+  return compact(list(await call("project_chat_link_message", { input: { threadId, messageId } })).map(normalizeItem));
+}
+/** A planner request is open while it has no reply after it. */
+export function awaitingPlanner(items: ChatItem[]): boolean {
+  let open = false;
+  for (const item of items) {
+    if (item.kind === "peer_request" || item.kind === "hosted_request") open = true;
+    else if (item.kind === "peer_reply") open = false;
+  }
+  return open;
 }
 export async function syncPeers(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
   return compact(list(await call("project_chat_sync_peers", { input: { threadId } })).map(normalizeItem));

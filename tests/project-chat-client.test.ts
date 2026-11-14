@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askPeer, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, toRows, type ChatItem
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, toRows, type ChatItem
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -77,4 +77,26 @@ test("events and diffs are parsed defensively", () => {
   const state = normalizeEvent({ threadId: "t1", kind: "state", running: false });
   assert.ok(state && state.kind === "state" && state.running === false);
   assert.deepEqual(diffLines("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-one\n+two\n same").map(l => l.kind), ["file", "ctx", "ctx", "hunk", "del", "add", "ctx"]);
+});
+
+test("hosted assistants get a prompt request; replies and pulls send only IDs and text", async () => {
+  const { calls, call } = recorder([item("h1", "hosted_request", { code: "TS-1", prompt: "p", peerName: "Muse" }), { id: "z", kind: "shell" }]);
+  const made = await askHosted("t1", "muse", "기획", call);
+  assert.deepEqual(made.map(i => [i.kind, i.code, i.prompt, i.peerName]), [["hosted_request", "TS-1", "p", "Muse"]]);
+  assert.deepEqual(calls[0], ["project_chat_hosted_request", { input: { threadId: "t1", assistant: "muse", text: "기획" } }]);
+  await assert.rejects(askHosted("t1", "claude" as never, "x", call));
+  await assert.rejects(askHosted("t1", "dots", "  ", call));
+  await askPeer("t1", "toris/chatgpt", "답", call, "m1");
+  assert.deepEqual(calls.at(-1), ["project_chat_ask_peer", { input: { threadId: "t1", peer: "toris/chatgpt", text: "답", replyTo: "m1" } }]);
+  await linkMessage("t1", "m9", call);
+  assert.deepEqual(calls.at(-1), ["project_chat_link_message", { input: { threadId: "t1", messageId: "m9" } }]);
+  await assert.rejects(linkMessage("t1", "", call));
+});
+
+test("a planner request stays open until a reply follows it", () => {
+  assert.equal(awaitingPlanner([]), false);
+  assert.equal(awaitingPlanner([item("a", "hosted_request")]), true);
+  assert.equal(awaitingPlanner([item("a", "hosted_request"), item("b", "peer_reply")]), false);
+  assert.equal(awaitingPlanner([item("a", "peer_request"), item("b", "peer_reply"), item("c", "peer_request")]), true);
+  assert.match(implementationPrompt(item("r", "peer_reply", { peer: "toris/chatgpt", peerName: "Dots" })), /^아래는 Dots가 보낸 기획/);
 });
