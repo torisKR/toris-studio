@@ -370,9 +370,53 @@ pub fn create_then(
     }
 }
 
+/// The folder path in the form git can use. On Windows a canonical path has
+/// the verbatim prefix (`\\?\C:\…`, `\\?\UNC\server\share\…`), which git
+/// for Windows misreads as `//?/C:/…` and cannot create. The prefix is only
+/// removed when the plain path names the very same folder: a drive or UNC
+/// path under the classic length limit whose parts Windows would not rewrite
+/// (no trailing dot or space, no device names such as `NUL`, no `/`).
+/// Any other verbatim path is refused; a path without the prefix is returned
+/// unchanged.
+pub fn git_path(path: &str) -> Option<String> {
+    let Some(rest) = path.strip_prefix(r"\\?\") else {
+        return Some(path.to_owned());
+    };
+    let (plain, parts) = if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        (format!(r"\\{unc}"), unc)
+    } else {
+        let bytes = rest.as_bytes();
+        if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || &bytes[1..3] != br":\" {
+            return None;
+        }
+        (rest.to_owned(), &rest[3..])
+    };
+    const DEVICES: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    let safe = |part: &str| {
+        let stem = part.split('.').next().unwrap_or("").trim_end();
+        let numbered = stem.len() == 4
+            && ["COM", "LPT"]
+                .iter()
+                .any(|p| stem.get(..3).is_some_and(|s| s.eq_ignore_ascii_case(p)))
+            && stem.as_bytes()[3].is_ascii_digit();
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && !part.ends_with(['.', ' '])
+            && !part.contains(['/', ':'])
+            && !numbered
+            && !DEVICES.iter().any(|d| stem.eq_ignore_ascii_case(d))
+    };
+    let trimmed = parts.strip_suffix('\\').unwrap_or(parts);
+    (plain.len() < 260 && (trimmed.is_empty() || trimmed.split('\\').all(safe))).then_some(plain)
+}
+
 /// `git worktree add -b <branch> <path> <base>` in the original checkout, with
 /// repository hooks turned off so nothing from the repository runs.
 fn worktree_add(plan: &WorktreePlan) -> Result<(), String> {
+    let path = git_path(&plan.path).ok_or(
+        "이 폴더 경로는 git에 그대로 넘길 수 없습니다. 더 짧거나 일반적인 이름의 폴더에서 프로젝트를 추가하세요.",
+    )?;
     let hooks = if cfg!(windows) {
         "core.hooksPath=NUL"
     } else {
@@ -382,7 +426,7 @@ fn worktree_add(plan: &WorktreePlan) -> Result<(), String> {
         .args(["-c", hooks, "-c", "core.quotepath=off"])
         .args(["worktree", "add", "--quiet", "-b"])
         .arg(&plan.branch)
-        .arg(&plan.path)
+        .arg(&path)
         .arg(&plan.base)
         .current_dir(&plan.project_folder)
         // Only the folder decides which repository git writes to.
