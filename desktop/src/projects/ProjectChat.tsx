@@ -234,7 +234,8 @@ export function ProjectChat({ active }: Props) {
     void readThread(threadId).then(data => { if (alive) { setItems(data.items); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
     return () => { alive = false; };
   }, [threadId]);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [items.length, threadId]);
+  // An empty thread shows its start screen from the top; only a transcript follows its end.
+  useEffect(() => { if (items.length) endRef.current?.scrollIntoView({ block: "end" }); else endRef.current?.parentElement?.scrollTo({ top: 0 }); }, [items.length, threadId]);
 
   // Planner replies arrive through Reason Network; check while a request is unanswered.
   const waitingPeer = useMemo(() => awaitingPlanner(items), [items]);
