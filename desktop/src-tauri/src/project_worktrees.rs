@@ -166,6 +166,26 @@ fn thread_tag(thread: &str) -> Result<String, String> {
         .ok_or_else(|| "대화 ID로 worktree 이름을 만들 수 없습니다.".into())
 }
 
+/// The folder and branch Studio creates for `thread_id` next to the project
+/// folder: `<parent>/<name>-worktrees/<tag>` and `studio/<tag>`. Used to plan a
+/// creation and later to recognize a thread's worktree as Studio's own.
+pub fn studio_target(project_folder: &str, thread_id: &str) -> Result<(PathBuf, String), String> {
+    let tag = thread_tag(thread_id)?;
+    let name = safe_part(
+        Path::new(project_folder)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("project"),
+    );
+    let parent = Path::new(project_folder)
+        .parent()
+        .ok_or("프로젝트 폴더의 상위 폴더가 없습니다.")?;
+    Ok((
+        parent.join(format!("{name}-worktrees")).join(&tag),
+        format!("{BRANCH_PREFIX}{tag}"),
+    ))
+}
+
 fn ensure_unstarted(chat: &ProjectChat, thread: &Thread) -> Result<(), String> {
     if !chat.items(&thread.id).is_empty()
         || thread.provider_session.is_some()
@@ -210,17 +230,10 @@ pub fn plan(chat: &ProjectChat, thread_id: &str) -> Result<WorktreePlan, String>
     let base = git_line(&folder, &["rev-parse", "--verify", "-q", "HEAD^{commit}"])
         .filter(|sha| matches!(sha.len(), 40 | 64) && sha.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or("저장소에 커밋이 없습니다. 첫 커밋을 만든 뒤 격리된 대화를 만들 수 있습니다.")?;
-    let tag = thread_tag(&thread.id)?;
-    let name = safe_part(
-        Path::new(&folder)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("project"),
-    );
-    let parent = Path::new(&folder)
+    let (path, branch) = studio_target(&folder, &thread.id)?;
+    let container = path
         .parent()
         .ok_or("프로젝트 폴더의 상위 폴더가 없습니다.")?;
-    let container = parent.join(format!("{name}-worktrees"));
     if let Ok(meta) = fs::symlink_metadata(&container) {
         if !meta.is_dir() {
             return Err(format!(
@@ -229,13 +242,11 @@ pub fn plan(chat: &ProjectChat, thread_id: &str) -> Result<WorktreePlan, String>
             ));
         }
     }
-    let path = container.join(&tag);
     let path_text = path
         .to_str()
         .filter(|p| !p.chars().any(char::is_control))
         .ok_or("폴더 경로에 사용할 수 없는 문자가 있습니다.")?
         .to_owned();
-    let branch = format!("{BRANCH_PREFIX}{tag}");
     git_line(&folder, &["check-ref-format", "--branch", &branch])
         .filter(|b| b == &branch)
         .ok_or("브랜치 이름을 만들지 못했습니다.")?;

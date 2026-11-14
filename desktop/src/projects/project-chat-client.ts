@@ -361,3 +361,81 @@ export function searchProjects(query: string, projects: Project[], threads: Thre
   }
   return { query: key, hits };
 }
+
+// ---------------------------------------------------------------------------
+// Reviewed, file-by-file commits in a worktree Studio created for a thread.
+
+export type CommitChange = "modified" | "added" | "deleted" | "typechange";
+/** A changed file the host listed; `fingerprint` is the content it reviewed (`<mode>:<blob>` or `deleted`). */
+export type CommitFile = { path: string; change: CommitChange; fingerprint: string; diff: string; truncated: boolean; refused: string | null };
+export type CommitReview = { threadId: string; folder: string; branch: string; head: string; files: CommitFile[]; blocked: string | null; more: boolean };
+export type CommitDone = { sha: string; branch: string; folder: string; files: string[]; indexUpdated: boolean };
+export const MAX_COMMIT_MESSAGE = 4000;
+export const MAX_COMMIT_FILES = 100;
+const CHANGES: CommitChange[] = ["modified", "added", "deleted", "typechange"];
+
+/** Only Studio-made worktrees (`studio/…` branches) can commit from Studio; the host checks this for real. */
+export function canCommitIn(thread: Thread | null): boolean {
+  return !!thread?.worktree?.branch?.startsWith("studio/");
+}
+export function normalizeCommitFile(value: unknown): CommitFile | null {
+  const r = rec(value);
+  if (!str(r.path)) return null;
+  const refused = str(r.refused) || null;
+  const fingerprint = str(r.fingerprint);
+  const valid = fingerprint === "deleted" || /^100(644|755):[0-9a-f]{40,64}$/i.test(fingerprint);
+  return { path: str(r.path), change: CHANGES.includes(r.change as CommitChange) ? r.change as CommitChange : "modified",
+    fingerprint: valid ? fingerprint : "", diff: str(r.diff), truncated: r.truncated === true,
+    refused: refused ?? (valid ? null : "이 파일은 커밋할 수 없습니다.") };
+}
+export function normalizeCommitReview(value: unknown): CommitReview | null {
+  const r = rec(value);
+  if (!str(r.threadId) || !str(r.folder).startsWith("/") || !str(r.branch) || !SHA.test(str(r.head))) return null;
+  return { threadId: str(r.threadId), folder: str(r.folder), branch: str(r.branch), head: str(r.head),
+    files: compact(list(r.files).map(normalizeCommitFile)), blocked: str(r.blocked) || null, more: r.more === true };
+}
+export function normalizeCommitDone(value: unknown): CommitDone | null {
+  const r = rec(value);
+  return SHA.test(str(r.sha)) && str(r.branch)
+    ? { sha: str(r.sha), branch: str(r.branch), folder: str(r.folder), files: list(r.files).map(str).filter(Boolean), indexUpdated: r.indexUpdated === true } : null;
+}
+/** Why a commit message cannot be used, or "" when it can. The host applies the same rules. */
+export function commitMessageProblem(text: string): string {
+  const message = text.replace(/\r\n/g, "\n").split("\n").map(l => l.replace(/\s+$/, "")).join("\n").trim();
+  if (!message) return "커밋 메시지(첫 줄)를 입력하세요.";
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(text.replace(/\r\n/g, "\n"))) return "커밋 메시지에 쓸 수 없는 제어 문자가 있습니다.";
+  if (new TextEncoder().encode(message).length > MAX_COMMIT_MESSAGE) return `커밋 메시지는 ${MAX_COMMIT_MESSAGE}바이트까지 쓸 수 있습니다.`;
+  return "";
+}
+/** Files that can be picked: listed, not refused, with a reviewed fingerprint, and nothing blocks the commit. */
+export function pickableFiles(review: CommitReview | null): CommitFile[] {
+  return review && !review.blocked ? review.files.filter(f => !f.refused && f.fingerprint) : [];
+}
+/** Changed files of the thread's Studio-made worktree with diffs, for picking. Read-only. */
+export async function reviewCommit(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<CommitReview> {
+  const review = normalizeCommitReview(await call("project_chat_commit_review", { input: { threadId } }));
+  if (!review) throw new Error("커밋할 변경 사항을 읽지 못했습니다.");
+  return review;
+}
+/** Sends the reviewed HEAD and the picked paths with the fingerprints shown; the host checks them again,
+ * asks in an OS dialog and commits only those files. Null when cancelled. Never pushes. */
+export async function commitFiles(review: CommitReview, paths: string[], message: string, call: BridgeInvoke = nativeInvoke): Promise<CommitDone | null> {
+  const problem = commitMessageProblem(message);
+  if (problem) throw new Error(problem);
+  if (review.blocked) throw new Error(review.blocked);
+  const unique = [...new Set(paths)];
+  if (!unique.length) throw new Error("커밋할 파일을 하나 이상 고르세요.");
+  if (unique.length > MAX_COMMIT_FILES) throw new Error(`한 번에 ${MAX_COMMIT_FILES}개 파일까지 커밋할 수 있습니다.`);
+  const pickable = new Map(pickableFiles(review).map(f => [f.path, f]));
+  const files = unique.map(path => {
+    const file = pickable.get(path);
+    if (!file) throw new Error(`${path}은(는) 커밋할 수 있는 변경 목록에 없습니다. 다시 검토하세요.`);
+    return { path, fingerprint: file.fingerprint };
+  });
+  const r = rec(await call("project_chat_commit", { input: { threadId: review.threadId, head: review.head, files, message } }));
+  if (r.cancelled !== false) return null;
+  const done = normalizeCommitDone(r.commit);
+  if (!done) throw new Error("커밋 결과를 확인하지 못했습니다. 변경 사항을 새로고침하세요.");
+  return done;
+}

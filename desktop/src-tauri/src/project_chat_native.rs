@@ -478,6 +478,51 @@ pub async fn project_chat_changes(
         .map_err(|_| "변경 사항을 읽지 못했습니다.".to_owned())
 }
 
+/// The changed files of a thread's Studio-made worktree with their diffs and
+/// fingerprints, for picking what to commit. Read-only.
+#[tauri::command]
+pub async fn project_chat_commit_review(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    input: ThreadInput,
+) -> Result<crate::project_git::CommitReview, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || crate::project_git::review(&chat, &input.thread_id))
+        .await
+        .map_err(|_| "커밋할 변경 사항을 읽지 못했습니다.".to_owned())?
+}
+
+/// Commits only the picked files of a thread's Studio-made worktree after an
+/// OS confirmation, if HEAD and every picked file are still as reviewed.
+/// Never pushes, merges or reverts.
+#[tauri::command]
+pub async fn project_chat_commit(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    input: crate::project_git::CommitRequest,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let done = crate::project_git::commit(&chat, &input, |plan| {
+            crate::reason_native::confirm(
+                &app,
+                "고른 파일을 이 브랜치에 커밋할까요?",
+                crate::project_git::confirm_message(plan),
+                "커밋",
+            )
+        })?;
+        Ok(match done {
+            Some(commit) => json!({"cancelled": false, "commit": commit}),
+            None => json!({"cancelled": true}),
+        })
+    })
+    .await
+    .map_err(|_| "커밋하지 못했습니다.".to_owned())?
+}
+
 #[tauri::command]
 pub async fn project_chat_send(
     window: tauri::WebviewWindow,
