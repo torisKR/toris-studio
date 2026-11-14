@@ -20,7 +20,7 @@
 //! arguments, no shell, repository hooks, fsmonitor, filters, textconv or
 //! signing programs, and with literal pathspecs, so nothing configured in the
 //! repository or written by an agent becomes a command.
-use crate::project_chat::{cut, work_folder, ProjectChat, Thread};
+use crate::project_chat::{cut, work_folder, Item, ItemKind, ProjectChat, Thread};
 use crate::reason_pipeline::plain_text;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -118,6 +118,10 @@ pub struct CommitDone {
     /// False when the commit landed but the worktree's index could not be
     /// updated for the committed files (`git status` may then list them).
     pub index_updated: bool,
+    /// Set when the commit landed but its receipt could not be stored in the
+    /// thread's history. The commit stands; it is never retried.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_warning: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -738,7 +742,47 @@ pub fn commit(
     if plan != planned {
         return Err("확인하는 동안 변경 사항이 바뀌었습니다. 다시 검토하세요.".into());
     }
-    write_commit(&plan).map(Some)
+    let mut done = write_commit(&plan)?;
+    // The receipt comes from git's own results, never from model output.
+    let receipt = Item::new(ItemKind::Notice, receipt_text(&done));
+    if let Err(e) = chat.append(&request.thread_id, &[receipt]) {
+        done.receipt_warning = Some(format!(
+            "커밋은 완료됐지만 이 대화 기록에 영수증을 남기지 못했습니다: {e}"
+        ));
+    }
+    Ok(Some(done))
+}
+
+/// The most files a receipt lists by name.
+const RECEIPT_FILES: usize = 50;
+
+/// Plain-text receipt of a commit Studio made, kept in the thread's history.
+pub fn receipt_text(done: &CommitDone) -> String {
+    let files: Vec<String> = done
+        .files
+        .iter()
+        .take(RECEIPT_FILES)
+        .map(|f| format!("  {}", cut(&plain_text(f), 300)))
+        .collect();
+    let more = done.files.len().saturating_sub(RECEIPT_FILES);
+    format!(
+        "선택 커밋 완료\n커밋: {}\n브랜치: {}\nworktree: {}\n파일 {}개:\n{}{}\nindex: {}",
+        done.sha,
+        plain_text(&done.branch),
+        plain_text(&done.folder),
+        done.files.len(),
+        files.join("\n"),
+        if more > 0 {
+            format!("\n  … 외 {more}개")
+        } else {
+            String::new()
+        },
+        if done.index_updated {
+            "고른 파일 갱신됨"
+        } else {
+            "갱신하지 못함 (git status에 커밋한 파일이 남아 보일 수 있음)"
+        },
+    )
 }
 
 /// One index record for `git update-index -z --index-info`.
@@ -860,5 +904,6 @@ fn write_commit(plan: &CommitPlan) -> Result<CommitDone, String> {
         folder: plan.folder.clone(),
         files: plan.files.iter().map(|f| f.path.clone()).collect(),
         index_updated,
+        receipt_warning: None,
     })
 }
