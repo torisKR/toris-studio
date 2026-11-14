@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
   addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
-  readThread, removeProject, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type Thread
+  readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread
 } from "./project-chat-client";
 import "./ProjectChat.css";
 
@@ -158,6 +158,9 @@ export function ProjectChat({ active }: Props) {
   const [error, setError] = useState("");
   const [showChanges, setShowChanges] = useState(true);
   const [changesKey, setChangesKey] = useState(0);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLUListElement>(null);
   const threadRef = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -166,6 +169,26 @@ export function ProjectChat({ active }: Props) {
   const project = projects.find(p => p.id === projectId) ?? null;
   const thread = threads.find(t => t.id === threadId) ?? null;
   const projectThreads = useMemo(() => threads.filter(t => t.projectId === projectId), [threads, projectId]);
+  const found = useMemo(() => searchProjects(query, projects, threads), [query, projects, threads]);
+
+  // Each thread (and each project's unsaved "새 대화") keeps its own draft, so opening another
+  // thread from the sidebar or search never carries half-typed text into it.
+  const draftKey = threadId ?? "new:" + (projectId ?? "");
+  const drafts = useRef(new Map<string, string>());
+  const draftKeyRef = useRef(draftKey);
+  const textNow = useRef(text);
+  const carryDraft = useRef(false);
+  textNow.current = text;
+  // A layout effect swaps the draft in the same commit that opens the thread, so its input never
+  // shows empty (or the previous thread's text) for a frame.
+  useLayoutEffect(() => {
+    const previous = draftKeyRef.current;
+    if (previous === draftKey) return;
+    draftKeyRef.current = draftKey;
+    if (carryDraft.current) { carryDraft.current = false; return; } // the new thread created by sending keeps its text
+    drafts.current.set(previous, textNow.current);
+    setText(drafts.current.get(draftKey) ?? "");
+  }, [draftKey]);
   const sortedPeers = useMemo(() => [...peers].sort((a, b) => Number(PLANNER.test(b.name)) - Number(PLANNER.test(a.name))), [peers]);
   const run = async (task: () => Promise<void>) => { setBusy(true); setError(""); try { await task(); } catch (cause) { setError(errorText(cause)); } finally { setBusy(false); } };
   const upsert = (next: Thread) => setThreads(current => sortThreads([next, ...current.filter(t => t.id !== next.id)]));
@@ -246,7 +269,28 @@ export function ProjectChat({ active }: Props) {
     if (threadId === t.id) setThreadId(null);
     setThreads(current => current.filter(x => x.id !== t.id));
   });
-  const newThread = () => { setThreadId(null); setTarget("agent"); setText(""); inputRef.current?.focus(); };
+  const newThread = () => { setThreadId(null); setTarget("agent"); inputRef.current?.focus(); };
+
+  // Search opens a project or thread only: it never stops, starts or retargets a run.
+  const openHit = (hit: SearchHit) => {
+    setProjectId(hit.project.id);
+    setThreadId(hit.kind === "thread" ? hit.thread.id : null);
+  };
+  const resultButtons = () => Array.from(resultsRef.current?.querySelectorAll<HTMLButtonElement>("button.pc-hit") ?? []);
+  const clearSearch = () => { setQuery(""); searchRef.current?.focus(); };
+  const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") { event.preventDefault(); setQuery(""); }
+    else if (event.key === "ArrowDown") { event.preventDefault(); resultButtons()[0]?.focus(); }
+    else if (event.key === "Enter" && found?.hits[0]) { event.preventDefault(); openHit(found.hits[0]); }
+  };
+  const onResultsKey = (event: KeyboardEvent<HTMLUListElement>) => {
+    const buttons = resultButtons();
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Escape") { event.preventDefault(); clearSearch(); }
+    else if (event.key === "ArrowDown") { event.preventDefault(); buttons[Math.min(at + 1, buttons.length - 1)]?.focus(); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); if (at <= 0) searchRef.current?.focus(); else buttons[at - 1]?.focus(); }
+  };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -254,7 +298,7 @@ export function ProjectChat({ active }: Props) {
     const message = text;
     void run(async () => {
       let current = thread;
-      if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); setThreadId(current.id); threadRef.current = current.id; }
+      if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); carryDraft.current = true; setThreadId(current.id); threadRef.current = current.id; }
       if (replyTo?.peer && replyTo.messageId) {
         const sent = await askPeer(current.id, replyTo.peer, message, undefined, replyTo.messageId);
         setItems(prev => mergeItems(prev, sent));
@@ -295,8 +339,31 @@ export function ProjectChat({ active }: Props) {
         <div><button type="submit" className="social-button compact primary" disabled={busy || !path.trim()}>추가</button>
           <button type="button" className="social-button compact" disabled={busy} onClick={() => void add(null)}><FolderOpen size={13} />폴더 선택</button></div>
       </form>}
-      {!projects.length && !adding && <p className="pc-muted pc-empty-side">앱 폴더를 추가하면 그 폴더에서 Claude Code·Codex와 채팅하며 기획·구현할 수 있습니다.</p>}
-      <ul className="pc-projects">{projects.map(p => <li key={p.id} className={p.id === projectId ? "active" : ""}>
+      <div className="pc-search" role="search">
+        <Search size={13} aria-hidden="true" />
+        <input ref={searchRef} type="text" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={onSearchKey}
+          placeholder="프로젝트·대화 제목 검색" aria-label="프로젝트·대화 검색" aria-controls="pc-search-results" spellCheck={false} />
+        {query && <button type="button" className="pc-icon" aria-label="검색 지우기" onClick={clearSearch}><X size={12} /></button>}
+      </div>
+      {!projects.length && !adding && !found && <p className="pc-muted pc-empty-side">앱 폴더를 추가하면 그 폴더에서 Claude Code·Codex와 채팅하며 기획·구현할 수 있습니다.</p>}
+      {found && <div className="pc-results">
+        <p className="pc-muted pc-empty-side" role="status">{!projects.length ? "아직 프로젝트가 없습니다. 먼저 앱 폴더를 추가하세요."
+          : found.hits.length ? `제목 검색 결과 ${found.hits.length}개 · ↓로 이동, Esc로 지우기` : `"${query.trim()}"와(과) 일치하는 프로젝트·대화가 없습니다.`}</p>
+        <ul id="pc-search-results" ref={resultsRef} className="pc-projects" aria-label="검색 결과" onKeyDown={onResultsKey}>{found.hits.map(hit => {
+          const current = hit.kind === "thread" ? hit.thread.id === threadId : hit.project.id === projectId && !threadId;
+          return <li key={hit.kind + ":" + (hit.kind === "thread" ? hit.thread.id : hit.project.id)}>
+            <button type="button" className={"pc-hit" + (current ? " active" : "")} aria-current={current ? "true" : undefined}
+              title={hit.kind === "project" ? hit.project.folder : hit.project.folder + " · " + hit.thread.title} onClick={() => openHit(hit)}>
+              {hit.kind === "project" ? <FolderOpen size={13} /> : hit.thread.running ? <LoaderCircle size={12} className="social-spin" aria-hidden="true" /> : <Bot size={12} />}
+              <span>{hit.kind === "project" ? hit.project.name : hit.thread.title}</span>
+              <small>{hit.kind === "project"
+                ? `프로젝트 · 대화 ${hit.threadCount}개${hit.running ? " · 실행 중" : ""}`
+                : `${hit.project.name} · ${hit.thread.agent === "claude" ? "Claude" : "Codex"} · ${hit.thread.running ? "실행 중" : "대기"}`}</small>
+            </button>
+          </li>;
+        })}</ul>
+      </div>}
+      {!found && <ul className="pc-projects">{projects.map(p => <li key={p.id} className={p.id === projectId ? "active" : ""}>
         <div className="pc-project-row">
           <button type="button" className="pc-project" aria-current={p.id === projectId ? "true" : undefined} title={p.folder} onClick={() => { setProjectId(p.id); setThreadId(null); }}><FolderOpen size={14} /><span>{p.name}</span></button>
           <button type="button" className="pc-icon subtle" aria-label={`${p.name} 목록에서 지우기`} onClick={() => void forget(p)}><X size={13} /></button>
@@ -311,7 +378,7 @@ export function ProjectChat({ active }: Props) {
             <button type="button" className="pc-icon subtle" aria-label={`${t.title} 대화 지우기`} disabled={t.running} onClick={() => void dropThread(t)}><Trash2 size={12} /></button>
           </li>)}
         </ul>}
-      </li>)}</ul>
+      </li>)}</ul>}
     </nav>
 
     <div className="pc-main">

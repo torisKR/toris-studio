@@ -13,6 +13,7 @@ const report = { adapter: "Chromium + explicit native IPC fixtures; no agent, mo
 const calls = [];
 const at = n => `2026-11-14T03:0${n}:00.000Z`;
 const project = { id: "p-app", name: "pocket-app", folder: "/Users/qa/projects/pocket-app", addedAt: at(0) };
+const adminProject = { id: "p-admin", name: "admin-web", folder: "/Users/qa/projects/admin-web", addedAt: at(9) };
 let projects = [], threads = [], items = {}, hostedPhase = false;
 const inboxMessage = { id: "m-free", from: "toris/grok-bot", fromName: "Grok Bot", text: "코드 없이 보낸 결제 기획\n1. 구독", createdAt: at(8), replyTo: null, video: null, requestError: null, jobId: null };
 const thread = (id, extra = {}) => ({ id, projectId: project.id, title: "새 대화", agent: "claude", mode: "edit", providerSession: null, createdAt: at(1), updatedAt: at(1), running: false, ...extra });
@@ -37,6 +38,12 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     case "project_chat_list": return { projects, threads };
     case "project_chat_add_project":
       if (!args.input.path) return { cancelled: true };
+      if (args.input.path === "~/projects/admin-web") {
+        projects = [...projects, adminProject];
+        threads = [{ id: "t9", projectId: adminProject.id, title: "로그인 화면", agent: "codex", mode: "edit", providerSession: null, createdAt: at(9), updatedAt: at(9), running: true }, ...threads];
+        items.t9 = [{ id: "a1", kind: "user", text: "관리자 로그인", at: at(9) }];
+        return { cancelled: false, project: adminProject };
+      }
       assert.deepEqual(args.input, { path: "~/projects/pocket-app" }, "the page sends only the typed path");
       projects = [project]; return { cancelled: false, project };
     case "project_chat_thread_create":
@@ -70,7 +77,10 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       assert.deepEqual(args.input, { threadId: "t1", messageId: "m-free" }, "only IDs leave the page");
       return [{ id: "rep3", kind: "peer_reply", text: inboxMessage.text, peer: inboxMessage.from, peerName: "Grok Bot", messageId: "m-free", at: at(8) }];
     case "copy_text": return null;
-    case "project_chat_stop": case "project_chat_remove_project": case "project_chat_thread_delete":
+    case "project_chat_stop":
+      assert.deepEqual(args.input, { threadId: "t9" }, "stop reaches the thread opened from search");
+      return null;
+    case "project_chat_remove_project": case "project_chat_thread_delete":
       report.unexpected.push(command); throw new Error("unexpected: " + command);
   }
   const shared = shellFixture(command, args);
@@ -101,6 +111,12 @@ try {
   await root.getByText("앱 폴더를 넣고 채팅으로 만드세요", { exact: true }).waitFor();
   await page.screenshot({ path: resolve(out, "01-empty.png") });
   report.checks.push("Projects is a top-level section with an empty state that explains adding an app folder.");
+  const search = root.getByLabel("프로젝트·대화 검색", { exact: true });
+  await search.fill("앱");
+  await root.getByText("아직 프로젝트가 없습니다. 먼저 앱 폴더를 추가하세요.", { exact: true }).waitFor();
+  await search.press("Escape");
+  assert.equal(await search.inputValue(), "");
+  report.checks.push("Searching with no projects says there are no projects (not 'no results'); Escape clears it.");
 
   // Folder picker cancelled: nothing added. Typed path: host confirms and adds.
   await root.getByRole("button", { name: "프로젝트 추가", exact: true }).first().click();
@@ -213,6 +229,55 @@ try {
   await inboxPanel.getByRole("button", { name: "이 대화에 붙이기", exact: true }).click();
   await root.locator(".pc-msg.peer-reply").getByText("Grok Bot의 기획", { exact: false }).waitFor();
   report.checks.push("An uncoded inbox message is filed in the thread only when the user picks it, by message ID.");
+
+  // Title search across projects: a draft in t1 stays with t1, a running thread opened from search gets the stop and its own events.
+  await box.fill("초안 유지");
+  await root.getByRole("button", { name: "프로젝트 추가", exact: true }).first().click();
+  await root.getByLabel("프로젝트 폴더 경로", { exact: true }).fill("~/projects/admin-web");
+  await root.getByRole("button", { name: "추가", exact: true }).click();
+  await root.getByText("admin-web에서 무엇을 만들까요?").waitFor();
+  assert.equal(await box.inputValue(), "", "the other project's new thread starts without t1's draft");
+  await search.fill("  로그인  ");
+  const hitList = root.getByRole("list", { name: "검색 결과", exact: true });
+  await hitList.getByRole("button").first().waitFor();
+  const hitTexts = await hitList.getByRole("button").allTextContents();
+  assert.equal(hitTexts.length, 2, hitTexts.join(" | "));
+  assert.match(hitTexts[0], /^로그인 화면admin-web · Codex · 실행 중$/);
+  assert.match(hitTexts[1], /^로그인 화면을 만들어줘pocket-app · Claude · 대기$/);
+  await root.getByText(/제목 검색 결과 2개/).waitFor();
+  await page.screenshot({ path: resolve(out, "06-search.png") });
+  await search.press("ArrowDown");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), hitTexts[0], "↓ moves into the results");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await root.locator(".pc-title strong").getByText("로그인 화면", { exact: true }).waitFor();
+  await root.getByText("관리자 로그인", { exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "", "t1's draft does not follow into t9");
+  assert.equal(await root.getByText(/Codex이\(가\) 작업 중입니다/).count(), 1, "t9 shows as running");
+  await emit({ threadId: "t1", kind: "items", items: [{ id: "late-t1", kind: "assistant", text: "t1에 늦게 온 답", at: at(9) }] });
+  await emit({ threadId: "t9", kind: "items", items: [{ id: "a2", kind: "assistant", text: "관리자 화면 작업 중", at: at(9) }] });
+  await root.getByText("관리자 화면 작업 중", { exact: true }).waitFor();
+  assert.equal(await root.getByText("t1에 늦게 온 답").count(), 0, "another thread's events stay out of the opened thread");
+  await root.getByRole("button", { name: "중지", exact: true }).click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(last("project_chat_stop").args, { input: { threadId: "t9" } });
+  assert.equal(count("project_chat_send") + count("project_chat_thread_create"), 2, "opening results starts nothing");
+  await hitList.getByRole("button").nth(1).click();
+  await root.locator(".pc-title strong").getByText("로그인 화면을 만들어줘", { exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "초안 유지", "t1 gets its own draft back");
+  await search.fill("ADMIN");
+  assert.deepEqual(await hitList.getByRole("button").allTextContents(), ["admin-web프로젝트 · 대화 1개 · 실행 중"], "case-insensitive project match");
+  await search.fill("없는 제목");
+  await root.getByText(/"없는 제목"와\(과\) 일치하는 프로젝트·대화가 없습니다\./).waitFor();
+  await search.fill("로그인");
+  await search.press("ArrowDown");
+  await page.keyboard.press("Escape");
+  assert.equal(await search.inputValue(), "", "Escape in the results clears the search");
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "프로젝트·대화 검색");
+  await root.getByRole("button", { name: "admin-web", exact: true }).waitFor();
+  assert.equal(await box.inputValue(), "초안 유지");
+  report.checks.push("Title search (case/space-insensitive, duplicate titles kept apart with project·agent·state) opens threads by keyboard without moving drafts, events or the stop target; no-results and no-projects read differently.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });

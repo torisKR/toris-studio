@@ -172,3 +172,35 @@ export function normalizeEvent(value: unknown): ChatEvent | null {
   if (r.kind === "state") return { threadId: str(r.threadId), kind: "state", running: r.running === true, thread: normalizeThread(r.thread) ?? undefined };
   return null;
 }
+
+export type SearchHit =
+  | { kind: "project"; project: Project; threadCount: number; running: boolean }
+  | { kind: "thread"; project: Project; thread: Thread };
+export type SearchResult = { query: string; hits: SearchHit[] } | null;
+
+/** Lowercased NFC text with runs of whitespace folded, so "Pocket  App" finds "pocket app" and NFD folder names match typed Korean. */
+export function searchKey(text: string): string {
+  return text.normalize("NFC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Filters project names and thread titles only (no message bodies or code). An empty query means
+ * "not searching" (null). Projects come first, then matching threads newest first; a thread whose
+ * project is unknown is dropped.
+ */
+export function searchProjects(query: string, projects: Project[], threads: Thread[]): SearchResult {
+  const key = searchKey(query);
+  if (!key) return null;
+  const byId = new Map(projects.map(p => [p.id, p]));
+  const hits: SearchHit[] = [];
+  for (const project of projects) {
+    if (!searchKey(project.name).includes(key)) continue;
+    const own = threads.filter(t => t.projectId === project.id);
+    hits.push({ kind: "project", project, threadCount: own.length, running: own.some(t => t.running) });
+  }
+  for (const thread of sortThreads(threads)) {
+    const project = byId.get(thread.projectId);
+    if (project && searchKey(thread.title).includes(key)) hits.push({ kind: "thread", project, thread });
+  }
+  return { query: key, hits };
+}
