@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DRAFT_CORRUPT, DRAFT_FULL, DRAFT_TOO_LONG, DRAFT_UNAVAILABLE, DRAFT_WRITE_FAILED, DRAFTS_STORAGE_KEY, DraftStore, MAX_DRAFT_BYTES, MAX_DRAFTS_BYTES,
-  draftSlot, joinDraft, type DraftStorage
+  draftSlot, joinDraft, missingDrafts, type DraftStorage
 } from "../desktop/src/projects/project-drafts";
 
 class Memory implements DraftStorage {
@@ -160,4 +160,61 @@ test("deleting a conversation or project clears only its drafts", () => {
   assert.deepEqual([reopened.get(b), reopened.get(fresh)], ["", ""]);
   assert.equal(reopened.get(other), "O");
   assert.equal(reopened.get(draftSlot("p2", "t-a")), "same id, other project");
+});
+
+test("missing conversations retain drafts until explicit discard", () => {
+  const storage = new Memory();
+  const store = new DraftStore(storage, clock);
+  store.set(a, "A 초안"); store.set(b, "B 초안"); store.set(fresh, "새 초안"); store.set(other, "다른 프로젝트");
+  // The list now shows p1 with only t-b, and no p2.
+  const projects = [{ id: "p1" }], threads = [{ id: "t-b", projectId: "p1" }];
+  const missing = missingDrafts(store.entries(), projects, threads);
+  assert.deepEqual(missing.map(d => d.slot).sort(), [a, other].sort());
+  assert.deepEqual(missing.find(d => d.slot === a), { slot: a, projectId: "p1", threadId: "t-a", text: "A 초안", at: missing.find(d => d.slot === a)!.at });
+  // Finding them changes nothing: every draft is still on screen and on disk, after a reopen too.
+  for (const s of [a, b, fresh, other]) assert.notEqual(store.get(s), "");
+  const reopened = new DraftStore(storage, clock);
+  assert.deepEqual(reopened.entries().map(d => d.slot).sort(), [a, b, fresh, other].sort());
+  // A thread with the same ID in another project is not this conversation.
+  assert.deepEqual(missingDrafts(store.entries(), [{ id: "p1" }, { id: "p2" }], [{ id: "t-a", projectId: "p2" }, { id: "t-b", projectId: "p1" }]).map(d => d.slot), [a]);
+  // The conversation already on screen is left out of the list.
+  assert.deepEqual(missingDrafts(store.entries(), projects, threads, a).map(d => d.slot), [other]);
+  // Only the user's discard removes it, and only that one.
+  assert.equal(store.discard(a), null);
+  assert.equal(store.get(a), "");
+  assert.deepEqual(new DraftStore(storage, clock).entries().map(d => d.slot).sort(), [b, fresh, other].sort());
+});
+
+test("an empty snapshot never erases drafts", () => {
+  const storage = new Memory();
+  const store = new DraftStore(storage, clock);
+  store.set(a, "A 초안"); store.set(other, "다른 프로젝트");
+  const saved = storage.getItem(DRAFTS_STORAGE_KEY);
+  // A failed or empty list read makes every draft "not found", but none is removed.
+  assert.equal(missingDrafts(store.entries(), [], []).length, 2);
+  assert.equal(storage.getItem(DRAFTS_STORAGE_KEY), saved);
+  assert.equal(store.get(a), "A 초안");
+  assert.equal(store.get(other), "다른 프로젝트");
+});
+
+test("discarding one draft keeps it when the device refuses the write", () => {
+  const storage = new Memory();
+  const store = new DraftStore(storage, clock);
+  store.set(a, "A 초안"); store.set(b, "B 초안");
+  storage.failWrites = true;
+  assert.equal(store.discard(a), DRAFT_WRITE_FAILED);
+  assert.equal(store.get(a), "A 초안", "still on screen");
+  storage.failWrites = false;
+  assert.deepEqual(new DraftStore(storage, clock).entries().map(d => d.slot).sort(), [a, b].sort(), "still on disk");
+  assert.equal(store.discard(a), null);
+  assert.equal(store.get(b), "B 초안", "only the chosen draft goes");
+  assert.deepEqual(new DraftStore(storage, clock).entries().map(d => d.slot), [b]);
+});
+
+test("entries are newest first and drafts with no storage can still be discarded from the screen", () => {
+  const store = new DraftStore(null, clock);
+  store.set(a, "먼저"); store.set(b, "나중");
+  assert.deepEqual(store.entries().map(d => d.slot), [b, a]);
+  assert.equal(store.discard(a), null);
+  assert.deepEqual(store.entries().map(d => d.slot), [b]);
 });

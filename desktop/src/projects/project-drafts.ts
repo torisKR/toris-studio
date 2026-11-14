@@ -39,6 +39,26 @@ function parseSlot(slot: string): [string, string | null] | null {
   return null;
 }
 
+/** A draft kept on this device, with the conversation it was typed for. */
+export type StoredDraft = { slot: string; projectId: string; threadId: string | null; text: string; at: number };
+
+/**
+ * Drafts whose conversation is not in the list shown now (a thread missing from its project, or a
+ * project missing from the list), newest first. Being missing from one list read is not proof that
+ * the conversation was deleted (a read can fail or come back empty), so this only finds them:
+ * nothing here removes a draft. `except` leaves out the conversation already on screen.
+ */
+export function missingDrafts(
+  drafts: StoredDraft[],
+  projects: ReadonlyArray<{ id: string }>,
+  threads: ReadonlyArray<{ id: string; projectId: string }>,
+  except: string | null = null
+): StoredDraft[] {
+  return drafts.filter(d => d.slot !== except && (d.threadId === null
+    ? !projects.some(p => p.id === d.projectId)
+    : !threads.some(t => t.id === d.threadId && t.projectId === d.projectId)));
+}
+
 /** A planner prompt added to a draft that already has text goes after it, never over it. */
 export function joinDraft(current: string, added: string): string {
   if (!current.trim()) return added;
@@ -104,6 +124,31 @@ export class DraftStore {
   note(slot: string): string | null { return this.#notes.get(slot) ?? this.#loadNote; }
 
   get(slot: string): string { return this.#drafts.get(slot)?.text ?? ""; }
+
+  /** Every draft this device holds now (saved or only on screen), newest first. */
+  entries(): StoredDraft[] {
+    const out: StoredDraft[] = [];
+    for (const [slot, entry] of this.#drafts) {
+      const key = parseSlot(slot);
+      if (key) out.push({ slot, projectId: key[0], threadId: key[1], text: entry.text, at: entry.at });
+    }
+    return out.sort((a, b) => b.at - a.at);
+  }
+
+  /**
+   * The user chose to throw away this one draft on this device. Only `slot` goes; if the device
+   * refuses the write, the draft stays (on screen and on disk) and the note says why.
+   */
+  discard(slot: string): string | null {
+    if (!this.#storage) { this.#drafts.delete(slot); this.#notes.delete(slot); return null; }
+    const next = new Map(this.#saved);
+    next.delete(slot);
+    const note = this.#write(next);
+    if (note) return note;
+    this.#drafts.delete(slot);
+    this.#notes.delete(slot);
+    return null;
+  }
 
   /** Keeps `text` as this conversation's draft and saves it if it fits. Returns the note, if any. */
   set(slot: string, text: string): string | null {
