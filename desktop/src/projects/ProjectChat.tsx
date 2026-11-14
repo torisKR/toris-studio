@@ -12,7 +12,8 @@ import {
 import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
 import { isSendEnter } from "./composer-keys";
-import { browserStorage, DRAFT_SAVED, DraftStore, draftSlot, joinDraft } from "./project-drafts";
+import { browserStorage, DRAFT_SAVED, DraftStore, draftSlot, joinDraft, missingDrafts } from "./project-drafts";
+import { COPIED_NOTE, copyDraft, DISCARD_CONFIRM, DraftRecovery } from "./DraftRecovery";
 import { ChangesPanel } from "./ChangesPanel";
 import "./ProjectChat.css";
 
@@ -209,6 +210,14 @@ export function ProjectChat({ active }: Props) {
 
   const project = projects.find(p => p.id === projectId) ?? null;
   const thread = threads.find(t => t.id === threadId) ?? null;
+  // The conversation shown is no longer in the list (another run or something outside Studio
+  // removed it, or the list read came back without it). Its draft stays, and nothing typed here
+  // is sent: a send would otherwise start a new conversation the user did not pick.
+  const missing = threadId !== null && !thread;
+  /** The host listed projects at least once, so "not in the list" means something. */
+  const [listed, setListed] = useState(false);
+  const [, setDraftsVersion] = useState(0);
+  const [missingNote, setMissingNote] = useState<{ slot: string; text: string } | null>(null);
   const projectThreads = useMemo(() => threads.filter(t => t.projectId === projectId), [threads, projectId]);
   const found = useMemo(() => searchProjects(query, projects, threads), [query, projects, threads]);
 
@@ -247,7 +256,7 @@ export function ProjectChat({ active }: Props) {
   const reload = useCallback(async () => {
     try {
       const data = await listProjects();
-      setProjects(data.projects); setThreads(data.threads);
+      setProjects(data.projects); setThreads(data.threads); setListed(true);
       setProjectId(current => current && data.projects.some(p => p.id === current) ? current : data.projects[0]?.id ?? null);
     } catch (cause) { setError(errorText(cause)); }
   }, []);
@@ -345,7 +354,7 @@ export function ProjectChat({ active }: Props) {
   // Before a thread starts it may move into an existing git worktree of the project; the host
   // picks the folder in an OS dialog, verifies it with git and asks for confirmation.
   const started = threadStarted(thread, items);
-  const attachWorktree = () => project && void run(async () => {
+  const attachWorktree = () => project && !missing && void run(async () => {
     let current = thread;
     const created = !current;
     if (!current) current = await createThread(project.id, newAgent, newMode);
@@ -384,7 +393,7 @@ export function ProjectChat({ active }: Props) {
   const loadLeftovers = useCallback(async () => { try { setLeftovers(await pendingWorktrees()); } catch { setLeftovers([]); } }, []);
   useEffect(() => { if (active) void loadLeftovers(); }, [active, loadLeftovers]);
   useEffect(() => { setPlan(current => current && current.plan.threadId === threadId ? current : null); }, [threadId]);
-  const isolate = () => project && void run(async () => {
+  const isolate = () => project && !missing && void run(async () => {
     let current = thread;
     const created = !current;
     if (!current) current = await createThread(project.id, newAgent, newMode);
@@ -422,7 +431,7 @@ export function ProjectChat({ active }: Props) {
   });
   const projectLeftovers = leftovers.filter(l => l.projectId === projectId);
   // Files come from the OS dialog in the host, inside this thread's work folder; the window keeps only IDs.
-  const attach = () => project && void run(async () => {
+  const attach = () => project && !missing && void run(async () => {
     let current = thread;
     const created = !current;
     if (!current) current = await createThread(project.id, newAgent, newMode);
@@ -442,6 +451,7 @@ export function ProjectChat({ active }: Props) {
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!project || !text.trim() || busy || thread?.running && target === "agent") return;
+    if (missing) { setError("원래 대화를 찾을 수 없어 보내지 않았습니다. 초안을 복사해 원하는 대화에서 직접 보내세요."); return; }
     if (attachments.length && !canAttach) { setError("첨부는 구현 에이전트나 호스팅 어시스턴트 전달문에만 넣을 수 있습니다. 첨부를 빼거나 받는 쪽을 바꾸세요."); return; }
     const message = text;
     const files = attachments;
@@ -560,6 +570,9 @@ export function ProjectChat({ active }: Props) {
           </li>)}
         </ul>}
       </li>)}</ul>}
+      {listed && <DraftRecovery drafts={missingDrafts(drafts.entries(), projects, threads, missing ? slot : null)}
+        projectName={id => projects.find(p => p.id === id)?.name ?? null}
+        onDiscard={s => { const refused = drafts.discard(s); setDraftsVersion(v => v + 1); return refused; }} />}
     </nav>
 
     <div className="pc-main">
@@ -569,7 +582,7 @@ export function ProjectChat({ active }: Props) {
         <button type="button" className="social-button primary" onClick={() => setAdding(true)}><FolderPlus size={16} />프로젝트 추가</button>
       </div> : <>
         <header className="pc-head">
-          <div className="pc-title"><strong>{thread?.title ?? "새 대화"}</strong><span title={project.folder}>{project.name} · {AGENT_LABELS[agent]}</span></div>
+          <div className="pc-title"><strong>{missing ? "원래 대화를 찾을 수 없음" : thread?.title ?? "새 대화"}</strong><span title={project.folder}>{project.name} · {AGENT_LABELS[agent]}</span></div>
           <div className="pc-head-actions">
             <div className="pc-segment" role="group" aria-label="모드">{(["plan", "edit"] as ChatMode[]).map(m =>
               <button key={m} type="button" aria-pressed={mode === m} disabled={busy || !!thread?.running} title={MODE_LABELS[m]} onClick={() => setMode(m)}>{m === "plan" ? "기획" : "편집"}</button>)}</div>
@@ -586,8 +599,8 @@ export function ProjectChat({ active }: Props) {
             <span title={thread.worktree.base}>기준 {thread.worktree.base.slice(0, 7)}</span>
             <span className="pc-workdir-origin" title={project.folder}>원본 {project.folder}</span>
           </> : <span title={project.folder}>작업 폴더: 원본 프로젝트 폴더 <code>{project.folder}</code></span>}
-          {!started && <button type="button" className="social-button compact" disabled={busy} onClick={attachWorktree}><FolderOpen size={12} />{thread?.worktree ? "다른 worktree로 바꾸기" : "기존 worktree 연결"}</button>}
-          {!started && !thread?.worktree && <button type="button" className="social-button compact" disabled={busy || !!plan} onClick={isolate}><GitBranchPlus size={12} />격리된 새 대화</button>}
+          {!started && <button type="button" className="social-button compact" disabled={busy || missing} onClick={attachWorktree}><FolderOpen size={12} />{thread?.worktree ? "다른 worktree로 바꾸기" : "기존 worktree 연결"}</button>}
+          {!started && !thread?.worktree && <button type="button" className="social-button compact" disabled={busy || !!plan || missing} onClick={isolate}><GitBranchPlus size={12} />격리된 새 대화</button>}
           {started && thread?.worktree && <span className="pc-workdir-fixed">대화 시작 후 고정</span>}
         </div>
         {thread && <ThreadPreview key={thread.id} thread={thread} onSaved={upsert} />}
@@ -648,6 +661,19 @@ export function ProjectChat({ active }: Props) {
         </div>
         {error && <p className="pc-error" role="alert"><CircleAlert size={14} />{error}<button type="button" className="pc-icon subtle" aria-label="닫기" onClick={() => setFailure(null)}><X size={12} /></button></p>}
         <form className="pc-composer" onSubmit={submit}>
+          {missing && slot && <div className="pc-missing" role="status">
+            <span><CircleAlert size={13} /> 원래 대화를 목록에서 찾을 수 없습니다. 삭제됐는지는 확인할 수 없어 초안을 그대로 둡니다. 여기서는 보내지 않으니 복사해 원하는 대화에서 직접 보내세요.</span>
+            <div className="pc-missing-actions">
+              <button type="button" className="social-button compact" disabled={!text} onClick={() => void copyDraft(text).then(() => setMissingNote({ slot, text: COPIED_NOTE })).catch(cause => setMissingNote({ slot, text: errorText(cause) }))}><Copy size={12} />초안 복사</button>
+              <button type="button" className="social-button compact" onClick={newThread}><MessageSquarePlus size={12} />새 대화 열기</button>
+              <button type="button" className="social-button compact" disabled={!drafts.get(slot)} onClick={() => {
+                if (!window.confirm(DISCARD_CONFIRM)) return;
+                const refused = drafts.discard(slot);
+                if (refused) setMissingNote({ slot, text: refused }); else { setMissingNote(null); setText(""); setDraftsVersion(v => v + 1); }
+              }}><Trash2 size={12} />이 기기의 초안만 지우기</button>
+            </div>
+            {missingNote?.slot === slot && <span role="status">{missingNote.text}</span>}
+          </div>}
           {replyTo && <div className="pc-replying" role="status"><Reply size={13} />{replyTo.peerName ?? replyTo.peer}에게 답장 · Reason Network로 보내며, 상대는 check_inbox로 받습니다
             <button type="button" className="pc-icon subtle" aria-label="답장 취소" onClick={() => setReplyTo(null)}><X size={12} /></button></div>}
           <PendingAttachments files={attachments} busy={busy} onRemove={detach} />
@@ -669,10 +695,10 @@ export function ProjectChat({ active }: Props) {
               </optgroup>
             </select>
             <button type="button" className="pc-icon" aria-label="Reason Network 에이전트 새로고침" onClick={() => void loadPeers()}><RefreshCw size={13} /></button>
-            <button type="button" className="social-button compact" disabled={busy || !canAttach || !!attachBlocked} onClick={attach}
+            <button type="button" className="social-button compact" disabled={busy || missing || !canAttach || !!attachBlocked} onClick={attach}
               title={!canAttach ? "구현 에이전트나 호스팅 어시스턴트에게 보낼 때만 첨부할 수 있습니다" : attachBlocked ?? "이 대화의 작업 폴더 안 UTF-8 텍스트 파일 (파일당 8KiB, 최대 4개·합계 16KiB)"}><Paperclip size={12} />파일 첨부</button>
             <span className="pc-hint">{replyTo ? "보낸 쪽에게만 답장" : target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : target.startsWith("hosted:") ? "전달문을 만들고, 코드가 붙은 답장을 이 대화에 표시" : "답장이 오면 이 대화에 표시"} · Enter 보내기{text && !draftNote ? " · " + DRAFT_SAVED : ""}</span>
-            <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !replyTo && !!thread?.running || !!attachments.length && !canAttach}>
+            <button type="submit" className="social-button primary compact" disabled={busy || missing || !text.trim() || target === "agent" && !replyTo && !!thread?.running || !!attachments.length && !canAttach}>
               {busy ? <LoaderCircle size={14} className="social-spin" /> : <Send size={14} />}보내기</button>
           </div>
         </form>
