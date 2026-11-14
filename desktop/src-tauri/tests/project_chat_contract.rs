@@ -564,8 +564,51 @@ fn project_chat_thread_works_in_its_linked_worktree() {
 mod new_worktrees {
     use super::*;
     use toris_studio_desktop::project_worktrees::{
-        create, create_then, forget, pending, plan, resume,
+        create, create_then, forget, git_path, pending, plan, resume,
     };
+
+    /// Windows canonical paths carry the verbatim prefix, which git for
+    /// Windows cannot use (`//?/C:/…: Invalid argument`). It is removed only
+    /// when the plain path names the same folder; otherwise git gets nothing.
+    #[test]
+    fn git_path_drops_the_windows_verbatim_prefix_only_when_it_is_the_same_folder() {
+        let ok = |from: &str, to: &str| assert_eq!(git_path(from).as_deref(), Some(to), "{from}");
+        ok(
+            r"\\?\C:\Users\runneradmin\AppData\Local\Temp\.tmpAb\app-worktrees\1c351e1f",
+            r"C:\Users\runneradmin\AppData\Local\Temp\.tmpAb\app-worktrees\1c351e1f",
+        );
+        ok(r"\\?\d:\프로젝트\app", r"d:\프로젝트\app");
+        ok(
+            r"\\?\UNC\server\share\app-worktrees\x",
+            r"\\server\share\app-worktrees\x",
+        );
+        ok(r"C:\plain\app", r"C:\plain\app");
+        ok(
+            "/Users/me/app-worktrees/1c351e1f",
+            "/Users/me/app-worktrees/1c351e1f",
+        );
+        for refused in [
+            r"\\?\C:\work\name.\x",
+            r"\\?\C:\work\name \x",
+            r"\\?\C:\work\NUL\x",
+            r"\\?\C:\work\com1.txt\x",
+            r"\\?\C:\work\a/b\x",
+            r"\\?\C:\work\..\x",
+            r"\\?\C:\work\\x",
+            r"\\?\Volume{0b1c}\work",
+            r"\\?\GLOBALROOT\Device\x",
+        ] {
+            assert_eq!(git_path(refused), None, "{refused}");
+        }
+        let long = format!(r"\\?\C:\{}", "a\\".repeat(130));
+        assert_eq!(git_path(&long), None, "over the classic length limit");
+        assert_eq!(git_path(r"\\?\C:\a\한글").as_deref(), Some(r"C:\a\한글"));
+        assert_eq!(
+            git_path(r"\\?\C:\a\a한").as_deref(),
+            Some(r"C:\a\a한"),
+            "no panic on multibyte names"
+        );
+    }
 
     fn rig(r: &Repos) -> (tempfile::TempDir, ProjectChat, String) {
         let store = tempfile::tempdir().unwrap();
