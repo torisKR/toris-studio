@@ -22,7 +22,7 @@ export type Attachment = { id: string; name: string; bytes: number; text: string
 export const MAX_ATTACHMENTS = 4;
 export const MAX_ATTACHMENT_BYTES = 8 * 1024;
 export const MAX_ATTACHMENTS_BYTES = 16 * 1024;
-export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; attachments?: AttachmentRef[]; at: string };
+export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; requestId?: string; unmatched?: boolean; attachments?: AttachmentRef[]; at: string };
 /** Hosted assistants reach Reason Network only through its MCP server and cannot be messaged by name. */
 export const HOSTED_ASSISTANTS = ["muse", "dots", "grok"] as const;
 export type HostedAssistant = typeof HOSTED_ASSISTANTS[number];
@@ -79,6 +79,8 @@ export function normalizeItem(value: unknown): ChatItem | null {
   if (str(r.peerName)) item.peerName = str(r.peerName);
   if (str(r.code)) item.code = str(r.code);
   if (str(r.prompt)) item.prompt = str(r.prompt);
+  if (str(r.requestId)) item.requestId = str(r.requestId);
+  if (r.unmatched === true) item.unmatched = true;
   const attached = compact(list(r.attachments).map(normalizeAttachmentRef));
   if (attached.length) item.attachments = attached;
   return item;
@@ -248,15 +250,50 @@ export async function linkMessage(threadId: string, messageId: string, call: Bri
   if (!messageId) throw new Error("가져올 메시지를 고르세요.");
   return compact(list(await call("project_chat_link_message", { input: { threadId, messageId } })).map(normalizeItem));
 }
-/** A planner request is open while it has no reply after it. */
-export function awaitingPlanner(items: ChatItem[]): boolean {
-  let open = false;
+/**
+ * A planner request and what Studio knows of its answer. `waiting`: no reply tied to it yet.
+ * `answered`: the host filed `replies` replies to it. `unknown`: an older record holds a reply
+ * after it that was saved without the request it answered, so whether this one was answered is
+ * not known (nothing is made up for it).
+ */
+export type PlannerRequestState = "waiting" | "answered" | "unknown";
+export type PlannerRequest = { id: string; kind: "peer_request" | "hosted_request"; name: string; text: string; code?: string; state: PlannerRequestState; replies: number };
+/** How a planner reply relates to a request: tied to one by the host, picked by hand with none
+ * found (`unmatched`), or an older record saved without that information (`legacy`). */
+export type ReplyLink = { kind: "request"; request: PlannerRequest | null } | { kind: "unmatched" } | { kind: "legacy" };
+
+/** Every planner request in `items`, in order, with its state. Only the request ID the host kept on
+ * a reply closes a request; the order of items never does. */
+export function plannerRequests(items: ChatItem[]): PlannerRequest[] {
+  const requests: PlannerRequest[] = [];
+  const legacyBefore = new Set<string>();
   for (const item of items) {
-    if (item.kind === "peer_request" || item.kind === "hosted_request") open = true;
-    else if (item.kind === "peer_reply") open = false;
+    if (item.kind === "peer_request" || item.kind === "hosted_request") {
+      requests.push({ id: item.id, kind: item.kind, name: item.peerName ?? item.peer ?? "기획 에이전트", text: item.text, ...(item.code ? { code: item.code } : {}), state: "waiting", replies: 0 });
+    } else if (item.kind === "peer_reply") {
+      if (item.requestId) {
+        const request = requests.find(r => r.id === item.requestId);
+        if (request) request.replies++;
+      } else if (!item.unmatched) requests.forEach(r => legacyBefore.add(r.id));
+    }
   }
-  return open;
+  for (const r of requests) r.state = r.replies ? "answered" : legacyBefore.has(r.id) ? "unknown" : "waiting";
+  return requests;
 }
+/** How many planner requests still wait for a reply. */
+export function openPlannerRequests(items: ChatItem[]): number {
+  return plannerRequests(items).filter(r => r.state === "waiting").length;
+}
+/** True while any planner request waits for a reply. */
+export function awaitingPlanner(items: ChatItem[]): boolean {
+  return openPlannerRequests(items) > 0;
+}
+export function replyLink(reply: ChatItem, requests: PlannerRequest[]): ReplyLink {
+  if (reply.requestId) return { kind: "request", request: requests.find(r => r.id === reply.requestId) ?? null };
+  return reply.unmatched ? { kind: "unmatched" } : { kind: "legacy" };
+}
+/** Asks the host to check Reason Network now and file this thread's new planner replies. A failed
+ * check is an error, never "no new replies". */
 export async function syncPeers(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
   return compact(list(await call("project_chat_sync_peers", { input: { threadId } })).map(normalizeItem));
 }

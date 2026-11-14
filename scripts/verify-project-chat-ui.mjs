@@ -59,6 +59,10 @@ const until = async (check, message, timeout = 5000) => {
 // late answer can be made to arrive after the screen moved on. release({ reply }) answers with
 // that value (a snapshot from when it was asked), release({ error }) fails, release() answers normally.
 const held = [];
+// Request tracking (r- threads): the network roster can be empty, and each sync answers from
+// `rSync` (fail: the host's check failed; deliver: replies to hand over once).
+let noPeers = false;
+const rSync = { fail: null, deliver: [] };
 const hold = (command, threadId) => {
   const h = { command, threadId, hit: false };
   h.promise = new Promise(resolve => { h.release = (outcome = {}) => resolve(outcome); });
@@ -191,10 +195,20 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       assert.equal(args.input.peer, "toris/muse@cloud");
       return [{ id: "req1", kind: "peer_request", text: args.input.text, peer: "toris/muse@cloud", messageId: "sent-1", at: at(5) }];
     case "project_chat_sync_peers":
-      if (hostedPhase) return [{ id: "rep2", kind: "peer_reply", text: "## 결제 기획\n1. 정기 결제", peer: "toris/chatgpt", peerName: "Dots", messageId: "m-dots", at: at(7) }];
-      return [{ id: "rep1", kind: "peer_reply", text: "## 로그인 기획\n1. 이메일·비밀번호 입력\n2. **실패 시** 안내 문구\n<img src=x onerror=alert(1)>", peer: "Muse", messageId: "m-1", at: at(6) }];
-    case "reason_network_refresh": return { state: "connected", version: "0.12.17", selfId: "toris/studio@mac", peers, messages: [inboxMessage], error: null };
+      if (String(args.input.threadId).startsWith("r-")) {
+        if (rSync.fail) throw new Error(rSync.fail);
+        return rSync.deliver.splice(0);
+      }
+      if (hostedPhase) return [{ id: "rep2", kind: "peer_reply", text: "## 결제 기획\n1. 정기 결제", peer: "toris/chatgpt", peerName: "Dots", messageId: "m-dots", requestId: "h1", at: at(7) }];
+      return [{ id: "rep1", kind: "peer_reply", text: "## 로그인 기획\n1. 이메일·비밀번호 입력\n2. **실패 시** 안내 문구\n<img src=x onerror=alert(1)>", peer: "Muse", messageId: "m-1", requestId: "req1", at: at(6) }];
+    case "reason_network_refresh": return { state: "connected", version: "0.12.17", selfId: "toris/studio@mac", peers: noPeers ? [] : peers, messages: [inboxMessage], error: null };
     case "project_chat_hosted_request":
+      if (String(args.input.threadId).startsWith("r-")) {
+        const muse = args.input.assistant === "muse";
+        const made = { id: "rq-" + args.input.assistant, kind: "hosted_request", text: args.input.text, peerName: muse ? "Muse" : "Grok Bot", code: muse ? "TS-MUSE000001" : "TS-GROK000001", prompt: "…", at: at(9) };
+        items[args.input.threadId] = [...(items[args.input.threadId] ?? []), made];
+        return [made];
+      }
       if (String(args.input.threadId).startsWith("v-")) {
         const made = { id: "vh-" + args.input.threadId, kind: "hosted_request", text: args.input.text, peerName: "Muse", code: "TS-LATE000001", prompt: "…", at: at(9) };
         items[args.input.threadId] = [...(items[args.input.threadId] ?? []), made];
@@ -211,7 +225,7 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       return [{ id: "h1", kind: "hosted_request", text: args.input.text, peerName: "OpenAI Dots", code: "TS-ABCDEF1234", prompt: "[Toris Studio 기획 요청 · TS-ABCDEF1234]\nsend_message로 `toris/studio@mac`에게 보내 주세요.", at: at(7) }];
     case "project_chat_link_message":
       assert.deepEqual(args.input, { threadId: "t1", messageId: "m-free" }, "only IDs leave the page");
-      return [{ id: "rep3", kind: "peer_reply", text: inboxMessage.text, peer: inboxMessage.from, peerName: "Grok Bot", messageId: "m-free", at: at(8) }];
+      return [{ id: "rep3", kind: "peer_reply", text: inboxMessage.text, peer: inboxMessage.from, peerName: "Grok Bot", messageId: "m-free", unmatched: true, at: at(8) }];
     case "copy_text": return null;
     case "project_chat_thread_preview": {
       assert.deepEqual(Object.keys(args.input).sort(), ["threadId", "url"], "only the thread ID and typed address leave the page");
@@ -359,7 +373,7 @@ try {
   await root.getByText("OpenAI Dots에게 기획 요청 ·").waitFor();
   await root.getByText("TS-ABCDEF1234", { exact: true }).waitFor();
   await root.getByRole("button", { name: "전달문 복사", exact: true }).click();
-  await root.getByText(/복사했습니다\. OpenAI Dots에 붙여넣으세요/).waitFor();
+  await root.getByText(/복사했습니다\. OpenAI Dots에 붙여넣어 보내세요\. 복사만으로는 보내지지 않습니다/).waitFor();
   assert.match(last("copy_text").args.text, /TS-ABCDEF1234/);
   assert.equal(count("reason_network_send"), 0, "nothing is sent for a hosted request");
   await root.getByText("결제 기획", { exact: true }).waitFor({ timeout: 12000 });
@@ -377,6 +391,7 @@ try {
   await inboxPanel.getByText(/코드 없이 보낸 결제 기획/).waitFor();
   await inboxPanel.getByRole("button", { name: "이 대화에 붙이기", exact: true }).click();
   await root.locator(".pc-msg.peer-reply").getByText("Grok Bot의 기획", { exact: false }).waitFor();
+  await root.locator(".pc-msg.peer-reply").last().getByText(/요청 연관 미확인/).waitFor();
   report.checks.push("An uncoded inbox message is filed in the thread only when the user picks it, by message ID.");
 
   // Title search across projects: a draft in t1 stays with t1, a running thread opened from search gets the stop and its own events.
@@ -833,6 +848,80 @@ try {
   assert.equal(await box.inputValue(), "B에 쓰던 초안");
   await page.screenshot({ path: resolve(out, "13-view-state-guard.png") });
   report.checks.push("Switching conversations with held replies: a live item that beats the initial read survives it, A's earlier read never replaces a newer A read, a late planner request from A neither shows in B nor clears B's draft (it shows in A and clears A's draft), a failed send from a left screen shows only back on A, and A's late diff does not replace B's in the shared changes panel.");
+
+  // Several planner requests tracked one by one: no network peers (hosted assistants only), two
+  // hosted requests, the second answered first, a failed manual check and its recovery, a
+  // duplicate delivery, and a check of one thread never shows on another.
+  noPeers = true;
+  threads = [...threads.filter(t => !t.id.startsWith("r-")), thread("r-a", { title: "요청 추적", updatedAt: at(9) })];
+  items["r-a"] = [];
+  await openSection(page, "제작");
+  await openSection(page, "프로젝트");
+  await root.getByRole("button", { name: "pocket-app", exact: true }).click();
+  await openThread("요청 추적");
+  await root.locator("optgroup[label='기획 · Reason Network 연결 없음']").waitFor({ state: "attached" });
+  const sendsBefore = count("reason_network_send");
+  for (const [who, words] of [["hosted:muse", "로그인 기획 요청 R"], ["hosted:grok", "결제 기획 요청 R"]]) {
+    await target.selectOption(who);
+    await box.fill(words);
+    await root.getByRole("button", { name: "보내기", exact: true }).click();
+    await transcript.getByText(words, { exact: true }).waitFor();
+  }
+  const museCard = transcript.locator(".pc-msg.hosted").filter({ hasText: "TS-MUSE000001" });
+  const grokCard = transcript.locator(".pc-msg.hosted").filter({ hasText: "TS-GROK000001" });
+  await museCard.getByText("답장 대기 · 전달문을 보냈는지는 Studio가 알 수 없습니다").waitFor();
+  await grokCard.getByText("답장 대기 · 전달문을 보냈는지는 Studio가 알 수 없습니다").waitFor();
+  const checkBar = root.getByLabel("기획 답장 확인", { exact: true });
+  await checkBar.getByText(/남은 요청 2\/2개/).waitFor();
+  assert.equal(count("reason_network_send"), sendsBefore, "a hosted request sends nothing");
+
+  // A failed check is shown, and changes nothing.
+  rSync.fail = "기획 답장을 확인하지 못했습니다(Reason Network): 연결이 끊겼습니다";
+  const checksBefore = count("project_chat_sync_peers");
+  await checkBar.getByRole("button", { name: "기획 답장 확인", exact: true }).click();
+  await checkBar.getByRole("alert").getByText(/연결이 끊겼습니다/).waitFor();
+  assert.ok(count("project_chat_sync_peers") > checksBefore, "the button asks the host now");
+  assert.deepEqual(last("project_chat_sync_peers").args, { input: { threadId: "r-a" } });
+  await checkBar.getByText(/남은 요청 2\/2개/).waitFor();
+
+  // Recovery: Grok (asked second) answers first; Muse's request still waits.
+  rSync.fail = null;
+  rSync.deliver = [{ id: "rr-g", kind: "peer_reply", text: "## 결제 기획안 R", peer: "toris/grok", peerName: "Grok Bot", messageId: "m-g", requestId: "rq-grok", at: at(9) }];
+  await checkBar.getByRole("button", { name: "기획 답장 확인", exact: true }).click();
+  await transcript.getByText("결제 기획안 R", { exact: true }).waitFor();
+  await until(async () => (await checkBar.getByRole("alert").count()) === 0, "a good check clears the error");
+  await checkBar.getByText(/남은 요청 1\/2개/).waitFor();
+  await grokCard.getByText("답장 1개 받음").waitFor();
+  await museCard.getByText("답장 대기 · 전달문을 보냈는지는 Studio가 알 수 없습니다").waitFor();
+  await transcript.locator(".pc-msg.peer-reply").filter({ hasText: "결제 기획안 R" }).getByText(/Grok Bot에게 보낸 요청 “결제 기획 요청 R”의 답장 · 전달 코드 TS-GROK000001로 분류/).waitFor();
+  await page.screenshot({ path: resolve(out, "14-request-tracking.png") });
+
+  // A check of this thread answered after the user moved away shows only back here.
+  const lateCheck = hold("project_chat_sync_peers", "r-a");
+  await checkBar.getByRole("button", { name: "기획 답장 확인", exact: true }).click();
+  await reached(lateCheck);
+  await openThread("지연 대화 B");
+  lateCheck.release({ error: "r-a 확인 실패" });
+  await answered(lateCheck);
+  await settle();
+  assert.equal(await root.getByText("r-a 확인 실패").count(), 0, "a check of another thread shows no error here");
+  await openThread("요청 추적");
+  await checkBar.getByRole("alert").getByText("r-a 확인 실패").waitFor();
+
+  // Duplicate delivery of Grok's reply plus Muse's answer: one row each, nothing left open.
+  rSync.deliver = [
+    { id: "rr-g", kind: "peer_reply", text: "## 결제 기획안 R", peer: "toris/grok", peerName: "Grok Bot", messageId: "m-g", requestId: "rq-grok", at: at(9) },
+    { id: "rr-m", kind: "peer_reply", text: "## 로그인 기획안 R", peer: "toris/muse", peerName: "Muse", messageId: "m-m", requestId: "rq-muse", at: at(9) }
+  ];
+  await checkBar.getByRole("button", { name: "기획 답장 확인", exact: true }).click();
+  await transcript.getByText("로그인 기획안 R", { exact: true }).waitFor();
+  assert.equal(await transcript.getByText("결제 기획안 R", { exact: true }).count(), 1, "a duplicate reply shows once");
+  await checkBar.getByText(/기다리는 기획 요청이 없습니다 \(2개 중 남은 요청 0개\)/).waitFor();
+  await museCard.getByText("답장 1개 받음").waitFor();
+  assert.equal(count("reason_network_send"), sendsBefore, "receiving replies sends nothing");
+  await page.screenshot({ path: resolve(out, "15-request-tracking-done.png") });
+  noPeers = false;
+  report.checks.push("Planner requests are tracked one by one with no network peers: two hosted requests both wait (without claiming the prompt was sent), Grok's earlier answer closes only Grok's request (1/2 left), a failed manual check shows its error and recovers, a check answered after moving to another thread shows only on its own thread, a duplicate reply shows once, and a hand-filed message is marked 'request link unconfirmed'.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
