@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, type ChatItem, type Project, type Thread
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -103,7 +103,7 @@ test("a planner request stays open until a reply follows it", () => {
 
 const proj = (id: string, name: string): Project => ({ id, name, folder: "/Users/me/" + name, addedAt: "" });
 const thr = (id: string, projectId: string, title: string, extra: Partial<Thread> = {}): Thread =>
-  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, worktree: null, ...extra });
+  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, worktree: null, previewUrl: null, ...extra });
 const searchFixture = () => ({
   projects: [proj("p1", "Pocket App"), proj("p2", "결제 서버"), proj("p3", "notes")],
   threads: [
@@ -185,10 +185,35 @@ test("changes are read from the thread's folder when a thread is open", async ()
 });
 
 test("a thread is started once it has items, a provider session or a running turn", () => {
-  const t = { id: "t1", projectId: "p1", title: "", agent: "claude" as const, mode: "edit" as const, providerSession: null, createdAt: "", updatedAt: "", running: false, worktree: null };
+  const t = { id: "t1", projectId: "p1", title: "", agent: "claude" as const, mode: "edit" as const, providerSession: null, createdAt: "", updatedAt: "", running: false, worktree: null, previewUrl: null };
   assert.equal(threadStarted(null, []), false);
   assert.equal(threadStarted(t, []), false);
   assert.equal(threadStarted(t, [item("i1", "hosted_request")]), true);
   assert.equal(threadStarted({ ...t, providerSession: "s" }, []), true);
   assert.equal(threadStarted({ ...t, running: true }, []), true);
+});
+
+test("preview addresses are loopback HTTP(S) only, parsed with a URL parser", () => {
+  assert.deepEqual(checkPreviewUrl("http://localhost:5173"), { url: "http://localhost:5173/" });
+  assert.deepEqual(checkPreviewUrl("  https://LOCALHOST:3000/app?x=1#top "), { url: "https://localhost:3000/app?x=1#top" });
+  assert.deepEqual(checkPreviewUrl("http://127.0.0.1:8080/"), { url: "http://127.0.0.1:8080/" });
+  assert.deepEqual(checkPreviewUrl("http://[::1]:4000/a"), { url: "http://[::1]:4000/a" });
+  assert.deepEqual(checkPreviewUrl("   "), { url: null }, "blank clears");
+  for (const raw of ["localhost:5173", "file:///etc/passwd", "javascript:alert(1)", "ftp://localhost/", "ws://localhost:5173/",
+    "http://user:pw@localhost:5173/", "http://user@127.0.0.1/", "http://example.com/", "http://localhost.example.com/", "http://127.0.0.2/",
+    "http://0.0.0.0:3000/", "http://192.168.0.10:3000/", "http://[::ffff:127.0.0.1]/", "http://localhost:5173/a b", "http://localhost:5173/\nx",
+    "http://localhost:99999/", "http://localhost/" + "a".repeat(2048)]) {
+    assert.deepEqual(checkPreviewUrl(raw), { error: PREVIEW_URL_ERROR }, raw);
+  }
+});
+
+test("a thread keeps only a valid preview address, and saving sends only the thread ID and typed text", async () => {
+  const base = { id: "t1", projectId: "p1", agent: "claude", mode: "edit" };
+  assert.equal(normalizeThread(base)?.previewUrl, null);
+  assert.equal(normalizeThread({ ...base, previewUrl: "http://localhost:5173/" })?.previewUrl, "http://localhost:5173/");
+  assert.equal(normalizeThread({ ...base, previewUrl: "https://evil.example/" })?.previewUrl, null, "a stored remote address is dropped");
+  const { calls, call } = recorder({ ...base, previewUrl: "http://127.0.0.1:3000/" });
+  const saved = await setThreadPreview("t1", "http://127.0.0.1:3000", call);
+  assert.equal(saved.previewUrl, "http://127.0.0.1:3000/");
+  assert.deepEqual(calls, [["project_chat_thread_preview", { input: { threadId: "t1", url: "http://127.0.0.1:3000" } }]]);
 });

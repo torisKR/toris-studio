@@ -29,6 +29,39 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 pub const MAX_PROJECTS: usize = 50;
 pub const MAX_THREADS: usize = 200;
 pub const MAX_PROMPT_BYTES: usize = 32 * 1024;
+pub const MAX_PREVIEW_URL_BYTES: usize = 2048;
+
+/// Checks a preview address the user typed. Only loopback HTTP(S) without
+/// credentials is kept; an empty value clears it. Returns the parsed URL.
+pub fn preview_url(raw: &str) -> Result<Option<String>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let invalid = || {
+        "미리보기 주소는 http(s)://localhost, 127.0.0.1, [::1] 로컬 주소만 쓸 수 있습니다."
+            .to_owned()
+    };
+    if raw.len() > MAX_PREVIEW_URL_BYTES || raw.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(invalid());
+    }
+    let url = url::Url::parse(raw).map_err(|_| invalid())?;
+    let loopback = match url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost",
+        Some(url::Host::Ipv4(address)) => address == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(address)) => address == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || !loopback
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(Some(url.to_string()))
+}
 pub const MAX_ITEMS: usize = 2_000;
 pub const MAX_RUNNING: usize = 4;
 const MAX_ITEM_BYTES: usize = 16 * 1024;
@@ -79,6 +112,10 @@ pub struct Thread {
     pub updated_at: String,
     #[serde(default)]
     pub running: bool,
+    /// A local address the user typed for this thread's preview. Studio never
+    /// checks that it is this thread's server and never opens it by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_url: Option<String>,
     /// The git worktree this thread works in instead of the project folder.
     /// Set before the first turn and fixed after it; absent in older stores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -779,6 +816,7 @@ impl ProjectChat {
             created_at: at.clone(),
             updated_at: at,
             running: false,
+            preview_url: None,
             worktree: None,
         };
         store.threads.push(thread.clone());
