@@ -70,6 +70,21 @@ test("commit sends the reviewed HEAD and the shown fingerprints of the picked fi
   assert.equal(refused.calls.length, 0, "nothing reaches the host when the page already knows it is refused");
 });
 
+test("a file whose diff the host could not read is refused even when it carries a fingerprint", async () => {
+  const why = "diff를 읽지 못해 변경 내용을 보여 줄 수 없어 커밋하지 않습니다: fatal: unable to read 0123";
+  const review = normalizeCommitReview({ ...rawReview, files: [
+    { path: "src/a.ts", change: "modified", fingerprint: "100644:" + blob, diff: "+a", truncated: false },
+    { path: "src/empty.ts", change: "modified", fingerprint: "100755:" + blob, diff: "", truncated: false },
+    { path: "src/unread.ts", change: "modified", fingerprint: "100644:" + blob, diff: "", truncated: false, refused: why }
+  ] }) as CommitReview;
+  const unread = review.files.find(f => f.path === "src/unread.ts");
+  assert.equal(unread?.refused, why, "the host's reason is kept for the panel");
+  assert.deepEqual(pickableFiles(review).map(f => f.path), ["src/a.ts", "src/empty.ts"], "a real empty diff stays pickable");
+  const forged = recorder({});
+  await assert.rejects(commitFiles(review, ["src/unread.ts"], "x", forged.call), /다시 검토/);
+  assert.equal(forged.calls.length, 0);
+});
+
 test("commit message rules match the host", () => {
   assert.equal(commitMessageProblem("feat: 로그인"), "");
   assert.equal(commitMessageProblem("제목\r\n\r\n본문\t들여쓰기"), "");
