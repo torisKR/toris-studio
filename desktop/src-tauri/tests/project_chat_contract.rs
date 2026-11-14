@@ -617,6 +617,12 @@ mod new_worktrees {
         (store, chat, project.id)
     }
 
+    /// A checked-out file's text; git for Windows may check out with CRLF
+    /// (`core.autocrlf`), which is the user's setting, not a different file.
+    fn checked_out(path: &Path) -> String {
+        std::fs::read_to_string(path).unwrap().replace("\r\n", "\n")
+    }
+
     fn head(dir: &str) -> String {
         git_in(Path::new(dir), &["rev-parse", "HEAD"])
     }
@@ -669,14 +675,8 @@ mod new_worktrees {
             p.branch
         );
         // Committed files only: nothing uncommitted is copied or stashed.
-        assert_eq!(
-            std::fs::read_to_string(Path::new(&wt.path).join("a.txt")).unwrap(),
-            "one\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(Path::new(&wt.path).join("b.txt")).unwrap(),
-            "base\n"
-        );
+        assert_eq!(checked_out(&Path::new(&wt.path).join("a.txt")), "one\n");
+        assert_eq!(checked_out(&Path::new(&wt.path).join("b.txt")), "base\n");
         assert!(!Path::new(&wt.path).join("mine.txt").exists());
         assert_eq!(git_in(Path::new(&wt.path), &["status", "--porcelain"]), "");
         assert_eq!(git_in(Path::new(&r.app), &["stash", "list"]), "");
