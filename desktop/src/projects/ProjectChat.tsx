@@ -5,10 +5,11 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, implementationPrompt, listProjects, MODE_LABELS, normalizeEvent, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
   type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
 } from "./project-chat-client";
+import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
 import { ChangesPanel } from "./ChangesPanel";
 import "./ProjectChat.css";
@@ -144,7 +145,8 @@ export function ProjectChat({ active }: Props) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [projectId, setProjectId] = useState<string | null>(() => { try { return localStorage.getItem("toris.projects.project"); } catch { return null; } });
   const [threadId, setThreadId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChatItem[]>([]);
+  // The rows on screen belong to one thread; a late answer for another thread never lands here.
+  const [transcript, setTranscript] = useState<Transcript>(EMPTY_TRANSCRIPT);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [text, setText] = useState("");
   const [target, setTarget] = useState<string>("agent");
@@ -157,7 +159,7 @@ export function ProjectChat({ active }: Props) {
   const [path, setPath] = useState("");
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [failure, setFailure] = useState<Failure>(null);
   const [showChanges, setShowChanges] = useState(true);
   const [changesKey, setChangesKey] = useState(0);
   const [query, setQuery] = useState("");
@@ -167,6 +169,15 @@ export function ProjectChat({ active }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   threadRef.current = threadId;
+  // Which screen is shown, so async work can tell whether the screen it started from is still open.
+  const view = useRef<ViewTracker | null>(null);
+  view.current ??= new ViewTracker({ projectId, threadId });
+  view.current.show({ projectId, threadId });
+  const tracker = view.current;
+  /** Show `id` now, before React renders it, so work that follows counts as that thread's. */
+  const focus = (id: string | null) => { threadRef.current = id; tracker.show({ projectId, threadId: id }); };
+  const items = itemsFor(transcript, threadId);
+  const addTo = (id: string, incoming: ChatItem[]) => setTranscript(t => addItems(t, threadRef.current, id, incoming));
 
   const project = projects.find(p => p.id === projectId) ?? null;
   const thread = threads.find(t => t.id === threadId) ?? null;
@@ -191,7 +202,16 @@ export function ProjectChat({ active }: Props) {
     setText(drafts.current.get(draftKey) ?? "");
   }, [draftKey]);
   const sortedPeers = useMemo(() => [...peers].sort((a, b) => Number(PLANNER.test(b.name)) - Number(PLANNER.test(a.name))), [peers]);
-  const run = async (task: () => Promise<void>) => { setBusy(true); setError(""); try { await task(); } catch (cause) { setError(errorText(cause)); } finally { setBusy(false); } };
+  const error = failureText(failure, draftKey);
+  /** An error of the screen shown now. */
+  const setError = (text: string) => setFailure(text ? { key: tracker.key, text } : null);
+  // A task's error belongs to the conversation it worked for (`owner`, which a send moves to the
+  // thread it creates); it shows only there, never on a screen opened while it ran.
+  const run = async (task: (owner: { ticket: Ticket }) => Promise<void>) => {
+    const owner = { ticket: tracker.ticket() };
+    setBusy(true); setFailure(null);
+    try { await task(owner); } catch (cause) { setFailure({ key: owner.ticket.key, text: errorText(cause) }); } finally { setBusy(false); }
+  };
   const upsert = (next: Thread) => setThreads(current => sortThreads([next, ...current.filter(t => t.id !== next.id)]));
 
   const reload = useCallback(async () => {
@@ -219,7 +239,7 @@ export function ProjectChat({ active }: Props) {
     void listen("project-chat-event", ({ payload }) => {
       const event = normalizeEvent(payload);
       if (!alive || !event) return;
-      if (event.kind === "items") { if (event.threadId === threadRef.current) setItems(current => mergeItems(current, event.items)); }
+      if (event.kind === "items") setTranscript(t => addItems(t, threadRef.current, event.threadId, event.items));
       else {
         setThreads(current => sortThreads(current.map(t => t.id === event.threadId ? { ...(event.thread ?? t), running: event.running } : t)));
         if (!event.running && event.threadId === threadRef.current) setChangesKey(k => k + 1);
@@ -229,13 +249,16 @@ export function ProjectChat({ active }: Props) {
   }, [active]);
 
   useEffect(() => {
-    // Start empty so a switch never shows the previous thread's rows; items streamed
-    // for this thread while it loads are kept alongside the stored ones.
-    setItems([]); setAttachments([]);
+    // A switch never shows the previous thread's rows (they belong to that thread); items streamed
+    // for this thread while it loads are kept after the stored ones. A read answered after its
+    // screen was left, even if the thread was opened again since, is dropped for the newer read.
+    setAttachments([]);
     if (!threadId) return;
-    let alive = true;
-    void readThread(threadId).then(data => { if (alive) { setItems(current => mergeItems(data.items, current)); setAttachments(data.attachments); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
-    return () => { alive = false; };
+    const ticket = tracker.ticket();
+    void readThread(threadId).then(data => {
+      if (!tracker.fresh(ticket)) return;
+      setTranscript(t => applySnapshot(t, threadRef.current, threadId, data.items)); setAttachments(data.attachments); upsert(data.thread);
+    }).catch(cause => { if (tracker.fresh(ticket)) setError(errorText(cause)); });
   }, [threadId]);
   // An empty thread shows its start screen from the top; only a transcript follows its end.
   useEffect(() => { if (items.length) endRef.current?.scrollIntoView({ block: "end" }); else endRef.current?.parentElement?.scrollTo({ top: 0 }); }, [items.length, threadId]);
@@ -246,13 +269,13 @@ export function ProjectChat({ active }: Props) {
   const linked = useMemo(() => new Set(items.filter(i => i.kind === "peer_reply").map(i => i.messageId)), [items]);
   const unlinked = useMemo(() => inbox.filter(m => !linked.has(m.id)).slice(-20).reverse(), [inbox, linked]);
   const pull = (m: ReasonMessage) => thread && void run(async () => {
-    const added = await linkMessage(thread.id, m.id);
-    setItems(prev => mergeItems(prev, added));
-    setShowInbox(false);
+    const id = thread.id;
+    addTo(id, await linkMessage(id, m.id));
+    if (tracker.showing(id)) setShowInbox(false);
   });
   useEffect(() => {
     if (!active || !threadId || !waitingPeer) return;
-    const timer = window.setInterval(() => { void syncPeers(threadId).then(fresh => fresh.length && setItems(current => mergeItems(current, fresh))).catch(() => {}); }, 8000);
+    const timer = window.setInterval(() => { void syncPeers(threadId).then(fresh => fresh.length && addTo(threadId, fresh)).catch(() => {}); }, 8000);
     return () => window.clearInterval(timer);
   }, [active, threadId, waitingPeer]);
 
@@ -283,7 +306,7 @@ export function ProjectChat({ active }: Props) {
     if (!current) current = await createThread(project.id, newAgent, newMode);
     const linked = await linkWorktree(current.id, null).catch(async cause => { if (created) await deleteThread(current.id).catch(() => {}); throw cause; });
     if (!linked) { if (created) await deleteThread(current.id).catch(() => {}); return; }
-    upsert(linked); setThreadId(linked.id); threadRef.current = linked.id; setChangesKey(k => k + 1);
+    upsert(linked); setThreadId(linked.id); focus(linked.id); setChangesKey(k => k + 1);
     setAttachments([]); // the host drops files picked from the previous folder
   });
   const newThread = () => { setThreadId(null); setTarget("agent"); inputRef.current?.focus(); };
@@ -322,7 +345,7 @@ export function ProjectChat({ active }: Props) {
     if (!current) current = await createThread(project.id, newAgent, newMode);
     try {
       const next = await planWorktree(current.id);
-      if (created) { upsert(current); setThreadId(current.id); threadRef.current = current.id; }
+      if (created) { upsert(current); setThreadId(current.id); focus(current.id); }
       setPlan({ plan: next, created });
     } catch (cause) { if (created) await deleteThread(current.id).catch(() => {}); throw cause; }
   });
@@ -331,20 +354,20 @@ export function ProjectChat({ active }: Props) {
     if (!shown.created) return;
     await deleteThread(shown.plan.threadId).catch(() => {});
     setThreads(current => current.filter(t => t.id !== shown.plan.threadId));
-    if (threadRef.current === shown.plan.threadId) { setThreadId(null); threadRef.current = null; }
+    if (threadRef.current === shown.plan.threadId) { setThreadId(null); focus(null); }
   };
   const confirmPlan = () => plan && void run(async () => {
     try {
       const made = await createWorktree(plan.plan.threadId);
       if (!made) return;
-      setPlan(null); upsert(made); setThreadId(made.id); threadRef.current = made.id; setChangesKey(k => k + 1);
+      setPlan(null); upsert(made); setThreadId(made.id); focus(made.id); setChangesKey(k => k + 1);
     } finally { void loadLeftovers(); }
   });
   const continueLeftover = (left: PendingWorktree) => project && void run(async () => {
     const fresh = await createThread(left.projectId, newAgent, newMode);
     const linked = await resumeWorktree(left.id, fresh.id).catch(async cause => { await deleteThread(fresh.id).catch(() => {}); throw cause; });
     if (!linked) { await deleteThread(fresh.id).catch(() => {}); return; }
-    upsert(linked); setThreadId(linked.id); threadRef.current = linked.id; setChangesKey(k => k + 1);
+    upsert(linked); setThreadId(linked.id); focus(linked.id); setChangesKey(k => k + 1);
     await loadLeftovers();
   });
   const forgetLeftover = (left: PendingWorktree) => void run(async () => {
@@ -360,10 +383,14 @@ export function ProjectChat({ active }: Props) {
     if (!current) current = await createThread(project.id, newAgent, newMode);
     const picked = await attachFile(current.id, attachments).catch(async cause => { if (created) await deleteThread(current.id).catch(() => {}); throw cause; });
     if (!picked) { if (created) await deleteThread(current.id).catch(() => {}); return; }
-    if (created) { upsert(current); setThreadId(current.id); threadRef.current = current.id; }
-    setAttachments(prev => [...prev.filter(a => a.id !== picked.id), picked]);
+    if (created) { upsert(current); setThreadId(current.id); focus(current.id); }
+    if (tracker.showing(current.id)) setAttachments(prev => [...prev.filter(a => a.id !== picked.id), picked]);
   });
-  const detach = (file: Attachment) => thread && void run(async () => setAttachments(await detachFile(thread.id, file.id)));
+  const detach = (file: Attachment) => thread && void run(async () => {
+    const id = thread.id;
+    const left = await detachFile(id, file.id);
+    if (tracker.showing(id)) setAttachments(left);
+  });
   const canAttach = attachmentsAllowed(target, !!replyTo);
   const attachBlocked = attachmentBlock(attachments);
 
@@ -373,28 +400,27 @@ export function ProjectChat({ active }: Props) {
     if (attachments.length && !canAttach) { setError("첨부는 구현 에이전트나 호스팅 어시스턴트 전달문에만 넣을 수 있습니다. 첨부를 빼거나 받는 쪽을 바꾸세요."); return; }
     const message = text;
     const files = attachments;
-    void run(async () => {
+    void run(async owner => {
       let current = thread;
-      if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); carryDraft.current = true; setThreadId(current.id); threadRef.current = current.id; }
+      if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); carryDraft.current = true; setThreadId(current.id); focus(current.id); }
+      const id = current.id;
+      owner.ticket = tracker.ticket(); // a failure from here on is this conversation's
+      // The user may open another conversation while this one sends: its result, cleared draft,
+      // attachments and reply target stay with this conversation and never touch the one shown.
+      const here = () => tracker.showing(id);
       if (replyTo?.peer && replyTo.messageId) {
-        const sent = await askPeer(current.id, replyTo.peer, message, undefined, replyTo.messageId);
-        setItems(prev => mergeItems(prev, sent));
-        setReplyTo(null);
+        addTo(id, await askPeer(id, replyTo.peer, message, undefined, replyTo.messageId));
+        if (here()) setReplyTo(null);
       } else if (target === "agent" || target.startsWith("hosted:")) {
-        const id = current.id;
         // A refused send (a file changed or no longer passes the checks) shows the host's current preview.
-        const refresh = async (cause: unknown) => { if (files.length) await readThread(id).then(data => setAttachments(data.attachments)).catch(() => {}); throw cause; };
+        const refresh = async (cause: unknown) => { if (files.length) await readThread(id).then(data => { if (here()) setAttachments(data.attachments); }).catch(() => {}); throw cause; };
         if (target === "agent") upsert(await sendMessage(id, message, undefined, files).catch(refresh));
-        else {
-          const made = await askHosted(id, target.slice(7) as HostedAssistant, message, undefined, files).catch(refresh);
-          setItems(prev => mergeItems(prev, made));
-        }
-        setAttachments([]);
+        else addTo(id, await askHosted(id, target.slice(7) as HostedAssistant, message, undefined, files).catch(refresh));
+        if (here()) setAttachments([]);
       } else {
-        const sent = await askPeer(current.id, target, message);
-        setItems(prev => mergeItems(prev, sent));
+        addTo(id, await askPeer(id, target, message));
       }
-      setText("");
+      if (here()) setText(""); else drafts.current.set(id, "");
     });
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -402,9 +428,12 @@ export function ProjectChat({ active }: Props) {
   };
   const answer = (reply: ChatItem) => { setReplyTo(reply); inputRef.current?.focus(); };
   const implement = (reply: ChatItem) => void run(async () => {
+    const key = tracker.key;
     setReplyTo(null);
     setTarget("agent");
     if (thread && thread.mode !== "edit") upsert(await updateThread(thread.id, { mode: "edit" }));
+    // The prompt goes into the draft of the conversation it was asked in, even if another is open now.
+    if (!tracker.showing(key)) { drafts.current.set(key, implementationPrompt(reply)); return; }
     setText(implementationPrompt(reply));
     inputRef.current?.focus();
   });
@@ -414,7 +443,7 @@ export function ProjectChat({ active }: Props) {
   const rows = useMemo(() => toRows(items), [items]);
   const jobs = useMemo(() => jobRows(threads, projects), [threads, projects]);
   const runningCount = useMemo(() => threads.filter(t => t.running).length, [threads]);
-  const openJob = (job: Job) => { setProjectId(job.thread.projectId); setThreadId(job.thread.id); threadRef.current = job.thread.id; };
+  const openJob = (job: Job) => { setProjectId(job.thread.projectId); setThreadId(job.thread.id); focus(job.thread.id); };
 
   return <section className={"pc-root" + (showChanges && project ? " with-changes" : "")} aria-label="프로젝트 채팅">
     <nav className="pc-sidebar" aria-label="프로젝트">
@@ -554,7 +583,7 @@ export function ProjectChat({ active }: Props) {
           {waitingPeer && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />기획 답장을 기다리는 중입니다 (Reason Network, 8초마다 확인)</div>}
           <div ref={endRef} />
         </div>
-        {error && <p className="pc-error" role="alert"><CircleAlert size={14} />{error}<button type="button" className="pc-icon subtle" aria-label="닫기" onClick={() => setError("")}><X size={12} /></button></p>}
+        {error && <p className="pc-error" role="alert"><CircleAlert size={14} />{error}<button type="button" className="pc-icon subtle" aria-label="닫기" onClick={() => setFailure(null)}><X size={12} /></button></p>}
         <form className="pc-composer" onSubmit={submit}>
           {replyTo && <div className="pc-replying" role="status"><Reply size={13} />{replyTo.peerName ?? replyTo.peer}에게 답장 · Reason Network로 보내며, 상대는 check_inbox로 받습니다
             <button type="button" className="pc-icon subtle" aria-label="답장 취소" onClick={() => setReplyTo(null)}><X size={12} /></button></div>}
