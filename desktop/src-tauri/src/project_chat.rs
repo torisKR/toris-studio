@@ -676,6 +676,11 @@ impl ProjectChat {
             .join("project-chat")
     }
 
+    /// The folder this store keeps its files in.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
         self.store.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -1384,7 +1389,7 @@ pub struct Changes {
     pub truncated: bool,
 }
 
-fn git(folder: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn git(folder: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["-c", "core.quotepath=off", "--no-optional-locks"])
         .args(args)
@@ -1440,23 +1445,23 @@ pub fn changes(folder: &str) -> Changes {
     }
 }
 
-fn git_line(folder: &str, args: &[&str]) -> Option<String> {
+pub(crate) fn git_line(folder: &str, args: &[&str]) -> Option<String> {
     git(folder, args)
         .map(|out| out.trim().to_owned())
         .filter(|line| !line.is_empty() && !line.contains('\n'))
 }
 
-fn canonical(path: &str) -> Option<PathBuf> {
+pub(crate) fn canonical(path: &str) -> Option<PathBuf> {
     Path::new(path).canonicalize().ok()
 }
 
-fn head_branch(folder: &str) -> Option<String> {
+pub(crate) fn head_branch(folder: &str) -> Option<String> {
     git_line(folder, &["symbolic-ref", "--short", "-q", "HEAD"])
         .filter(|name| name.len() <= 200 && !name.chars().any(char::is_control))
 }
 
 /// The repository's shared git directory, as git itself reports it for `folder`.
-fn common_dir(folder: &str) -> Option<PathBuf> {
+pub(crate) fn common_dir(folder: &str) -> Option<PathBuf> {
     let dir = git_line(
         folder,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],

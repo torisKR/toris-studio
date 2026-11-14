@@ -156,3 +156,13 @@
 .pc-preview-form input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--social-line); border-radius: 6px; background: var(--social-panel); color: var(--social-text); font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .pc-preview-form input:focus { outline: 0; border-color: var(--social-accent); }
 .pc-preview-error { flex-basis: 100%; color: #ff9b9b; }
+.pc-plan, .pc-leftovers { flex-shrink: 0; margin: 8px 16px 0; padding: 10px 12px; border: 1px solid var(--social-line); border-radius: 10px; font-size: 12px; display: grid; gap: 8px; min-width: 0; }
+.pc-plan p, .pc-leftovers p { margin: 0; }
+.pc-plan dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+.pc-plan dt { color: var(--social-muted); }
+.pc-plan dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.pc-plan-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pc-leftovers ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pc-leftovers li { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; min-width: 0; }
+.pc-leftovers li > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.pc-leftovers > p { display: flex; align-items: center; gap: 6px; }

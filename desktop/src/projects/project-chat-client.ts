@@ -202,6 +202,48 @@ export async function linkWorktree(threadId: string, path: string | null, call: 
   if (!thread?.worktree) throw new Error("worktree를 연결하지 못했습니다.");
   return thread;
 }
+/** What the host would create for an isolated thread: names come from the thread ID, the base from the committed HEAD. */
+export type WorktreePlan = { threadId: string; projectFolder: string; path: string; branch: string; base: string };
+/** A creation that did not finish; `state` and `guidance` are read from disk by the host. */
+export type PendingWorktree = { id: string; projectId: string; threadId: string; path: string; branch: string; base: string; startedAt: string; state: "ready" | "missing" | "unknown"; guidance: string };
+const SHA = /^[0-9a-f]{40,64}$/i;
+export function normalizePlan(value: unknown): WorktreePlan | null {
+  const r = rec(value);
+  return str(r.path).startsWith("/") && str(r.projectFolder).startsWith("/") && str(r.branch) && SHA.test(str(r.base))
+    ? { threadId: str(r.threadId), projectFolder: str(r.projectFolder), path: str(r.path), branch: str(r.branch), base: str(r.base) } : null;
+}
+export function normalizePending(value: unknown): PendingWorktree | null {
+  const r = rec(value);
+  const state = r.state === "ready" || r.state === "missing" ? r.state : "unknown";
+  return str(r.id) && str(r.projectId) && str(r.path).startsWith("/") && str(r.branch)
+    ? { id: str(r.id), projectId: str(r.projectId), threadId: str(r.threadId), path: str(r.path), branch: str(r.branch), base: str(r.base), startedAt: str(r.startedAt), state, guidance: str(r.guidance) } : null;
+}
+export async function planWorktree(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<WorktreePlan> {
+  const plan = normalizePlan(await call("project_chat_worktree_plan", { input: { threadId } }));
+  if (!plan) throw new Error("새 worktree 계획을 읽지 못했습니다.");
+  return plan;
+}
+function linkedThread(value: unknown): Thread | null {
+  const r = rec(value);
+  if (r.cancelled !== false) return null;
+  const thread = normalizeThread(r.thread);
+  if (!thread?.worktree) throw new Error("worktree를 연결하지 못했습니다.");
+  return thread;
+}
+/** Only the thread ID leaves the page; the host plans again, asks in an OS dialog and creates. Null when cancelled. */
+export async function createWorktree(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<Thread | null> {
+  return linkedThread(await call("project_chat_create_worktree", { input: { threadId } }));
+}
+export async function pendingWorktrees(call: BridgeInvoke = nativeInvoke): Promise<PendingWorktree[]> {
+  return compact(list(await call("project_chat_worktree_pending")).map(normalizePending));
+}
+export async function resumeWorktree(recordId: string, threadId: string, call: BridgeInvoke = nativeInvoke): Promise<Thread | null> {
+  return linkedThread(await call("project_chat_worktree_resume", { input: { recordId, threadId } }));
+}
+/** Forgets the record only; the folder and branch stay. */
+export async function forgetWorktree(recordId: string, call: BridgeInvoke = nativeInvoke): Promise<void> {
+  await call("project_chat_worktree_forget", { input: { recordId } });
+}
 /** Changes in the folder a thread works in (its worktree), or the project folder without a thread. */
 export async function readChanges(projectId: string, call: BridgeInvoke = nativeInvoke, threadId?: string): Promise<Changes> {
   const r = rec(await call("project_chat_changes", { input: threadId ? { projectId, threadId } : { projectId } }));
