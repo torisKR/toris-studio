@@ -11,6 +11,7 @@ import {
 } from "./project-chat-client";
 import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
+import { browserStorage, DRAFT_SAVED, DraftStore, draftSlot, joinDraft } from "./project-drafts";
 import { ChangesPanel } from "./ChangesPanel";
 import "./ProjectChat.css";
 
@@ -172,7 +173,9 @@ export function ProjectChat({ active }: Props) {
   // The rows on screen belong to one thread; a late answer for another thread never lands here.
   const [transcript, setTranscript] = useState<Transcript>(EMPTY_TRANSCRIPT);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [text, setText] = useState("");
+  // Drafts: one per conversation (project + thread, or the project's new conversation), kept on this device.
+  const [drafts] = useState(() => new DraftStore(browserStorage()));
+  const [text, setText] = useState(() => projectId ? drafts.get(draftSlot(projectId, null)) : "");
   const [target, setTarget] = useState<string>("agent");
   const [newAgent, setNewAgent] = useState<ChatAgent>("claude");
   const [newMode, setNewMode] = useState<ChatMode>("edit");
@@ -209,22 +212,24 @@ export function ProjectChat({ active }: Props) {
   const found = useMemo(() => searchProjects(query, projects, threads), [query, projects, threads]);
 
   // Each thread (and each project's unsaved "새 대화") keeps its own draft, so opening another
-  // thread from the sidebar or search never carries half-typed text into it.
+  // thread from the sidebar or search never carries half-typed text into it, and a reopened
+  // page brings each draft back. Restoring a draft never sends it.
   const draftKey = threadId ?? "new:" + (projectId ?? "");
-  const drafts = useRef(new Map<string, string>());
-  const draftKeyRef = useRef(draftKey);
-  const textNow = useRef(text);
+  const slot = projectId ? draftSlot(projectId, threadId) : null;
+  const slotRef = useRef(slot);
   const carryDraft = useRef(false);
-  textNow.current = text;
+  /** The user's own typing (or a suggestion they picked): shown and kept as this conversation's draft. */
+  const edit = (value: string) => { setText(value); if (slotRef.current) drafts.set(slotRef.current, value); };
   // Layout effect: the swap lands in the same commit as the new thread, so no frame shows the wrong draft.
   useLayoutEffect(() => {
-    const previous = draftKeyRef.current;
-    if (previous === draftKey) return;
-    draftKeyRef.current = draftKey;
-    if (carryDraft.current) { carryDraft.current = false; return; } // the new thread created by sending keeps its text
-    drafts.current.set(previous, textNow.current);
-    setText(drafts.current.get(draftKey) ?? "");
-  }, [draftKey]);
+    const previous = slotRef.current;
+    if (previous === slot) return;
+    slotRef.current = slot;
+    // The new thread created by sending keeps its text, and the draft moves with it.
+    if (carryDraft.current) { carryDraft.current = false; if (previous && slot) drafts.move(previous, slot); return; }
+    setText(slot ? drafts.get(slot) : "");
+  }, [slot]);
+  const draftNote = slot ? drafts.note(slot) : null;
   const sortedPeers = useMemo(() => [...peers].sort((a, b) => Number(PLANNER.test(b.name)) - Number(PLANNER.test(a.name))), [peers]);
   const error = failureText(failure, draftKey);
   /** An error of the screen shown now. */
@@ -325,12 +330,14 @@ export function ProjectChat({ active }: Props) {
   const forget = (p: Project) => run(async () => {
     if (!window.confirm(`"${p.name}"을(를) 목록에서 지울까요? 폴더와 파일은 그대로 남고, 이 프로젝트의 대화 기록만 지워집니다.`)) return;
     await removeProject(p.id);
+    drafts.removeProject(p.id);
     if (projectId === p.id) { setProjectId(null); setThreadId(null); }
     await reload();
   });
   const dropThread = (t: Thread) => run(async () => {
     if (!window.confirm(`"${t.title}" 대화를 지울까요?`)) return;
     await deleteThread(t.id);
+    drafts.removeThread(t.projectId, t.id);
     if (threadId === t.id) setThreadId(null);
     setThreads(current => current.filter(x => x.id !== t.id));
   });
@@ -439,7 +446,9 @@ export function ProjectChat({ active }: Props) {
     const files = attachments;
     void run(async owner => {
       let current = thread;
-      if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); carryDraft.current = true; setThreadId(current.id); focus(current.id); }
+      // The new conversation's draft becomes the thread's now, so a send that finishes before the
+      // next render still finds (and clears) it there.
+      if (!current) { current = await createThread(project.id, newAgent, newMode); drafts.move(draftSlot(project.id, null), draftSlot(project.id, current.id)); upsert(current); carryDraft.current = true; setThreadId(current.id); focus(current.id); }
       const id = current.id;
       owner.ticket = tracker.ticket(); // a failure from here on is this conversation's
       // The user may open another conversation while this one sends: its result, cleared draft,
@@ -457,7 +466,8 @@ export function ProjectChat({ active }: Props) {
       } else {
         addTo(id, await askPeer(id, target, message));
       }
-      if (here()) setText(""); else drafts.current.set(id, "");
+      // Only the text that was sent leaves the draft: anything typed since stays.
+      if (drafts.clearSent(draftSlot(project.id, id), message) && here()) setText("");
     });
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -466,12 +476,17 @@ export function ProjectChat({ active }: Props) {
   const answer = (reply: ChatItem) => { setReplyTo(reply); inputRef.current?.focus(); };
   const implement = (reply: ChatItem) => void run(async () => {
     const key = tracker.key;
+    const asked = slotRef.current;
     setReplyTo(null);
     setTarget("agent");
     if (thread && thread.mode !== "edit") upsert(await updateThread(thread.id, { mode: "edit" }));
-    // The prompt goes into the draft of the conversation it was asked in, even if another is open now.
-    if (!tracker.showing(key)) { drafts.current.set(key, implementationPrompt(reply)); return; }
-    setText(implementationPrompt(reply));
+    // The prompt goes into the draft of the conversation it was asked in, even if another is open
+    // now, after any text already there: it never replaces a draft.
+    if (!asked) return;
+    const merged = joinDraft(drafts.get(asked), implementationPrompt(reply));
+    drafts.set(asked, merged);
+    if (!tracker.showing(key)) return;
+    setText(merged);
     inputRef.current?.focus();
   });
   const setMode = (mode: ChatMode) => thread ? void run(async () => upsert(await updateThread(thread.id, { mode }))) : setNewMode(mode);
@@ -610,9 +625,9 @@ export function ProjectChat({ active }: Props) {
           {!items.length && <div className="pc-empty">
             <p><strong>{project.name}</strong>에서 무엇을 만들까요?</p>
             <ul>
-              <li><button type="button" onClick={() => setText("이 프로젝트 구조를 살펴보고 다음에 만들 기능을 기획해줘.")}>프로젝트를 살펴보고 다음 기능 기획</button></li>
-              <li><button type="button" onClick={() => setText("README와 설정을 확인하고 앱을 실행하는 방법을 알려줘.")}>실행 방법 확인</button></li>
-              <li><button type="button" onClick={() => setText("테스트를 실행하고 실패하는 것을 고쳐줘.")}>테스트 실행 후 실패 수정</button></li>
+              <li><button type="button" onClick={() => edit(joinDraft(text, "이 프로젝트 구조를 살펴보고 다음에 만들 기능을 기획해줘."))}>프로젝트를 살펴보고 다음 기능 기획</button></li>
+              <li><button type="button" onClick={() => edit(joinDraft(text, "README와 설정을 확인하고 앱을 실행하는 방법을 알려줘."))}>실행 방법 확인</button></li>
+              <li><button type="button" onClick={() => edit(joinDraft(text, "테스트를 실행하고 실패하는 것을 고쳐줘."))}>테스트 실행 후 실패 수정</button></li>
             </ul>
           </div>}
           {rows.map(row => row.type === "tool" ? <ToolRow key={row.call.id} call={row.call} result={row.result} /> : <ItemRow key={row.item.id} item={row.item} requests={requests} onImplement={implement} onReply={answer} />)}
@@ -635,7 +650,8 @@ export function ProjectChat({ active }: Props) {
             <button type="button" className="pc-icon subtle" aria-label="답장 취소" onClick={() => setReplyTo(null)}><X size={12} /></button></div>}
           <PendingAttachments files={attachments} busy={busy} onRemove={detach} />
           {!!attachments.length && !canAttach && <p className="pc-muted pc-attach-note" role="status">Reason Network 피어와 답장에는 첨부를 보낼 수 없습니다. 첨부를 빼거나 구현 에이전트·호스팅 어시스턴트를 고르세요.</p>}
-          <textarea ref={inputRef} value={text} onChange={event => setText(event.target.value)} onKeyDown={onKey} rows={3}
+          {draftNote && <p className="pc-muted pc-attach-note" role="status"><CircleAlert size={12} /> {draftNote}</p>}
+          <textarea ref={inputRef} value={text} onChange={event => edit(event.target.value)} onKeyDown={onKey} rows={3}
             placeholder={replyTo ? "답장 내용을 입력하세요" : target.startsWith("hosted:") ? "어시스턴트에게 맡길 기획 요청을 입력하세요 (전달문을 만들어 드립니다)" : target === "agent" ? (mode === "plan" ? "질문하거나 기획을 요청하세요 (파일은 바꾸지 않습니다)" : "만들거나 고칠 내용을 입력하세요") : "기획자에게 보낼 요청을 입력하세요"} aria-label="메시지" />
           <div className="pc-composer-bar">
             <select value={target === "agent" ? "agent:" + agent : target} aria-label="받는 에이전트" disabled={busy || !!replyTo}
@@ -653,7 +669,7 @@ export function ProjectChat({ active }: Props) {
             <button type="button" className="pc-icon" aria-label="Reason Network 에이전트 새로고침" onClick={() => void loadPeers()}><RefreshCw size={13} /></button>
             <button type="button" className="social-button compact" disabled={busy || !canAttach || !!attachBlocked} onClick={attach}
               title={!canAttach ? "구현 에이전트나 호스팅 어시스턴트에게 보낼 때만 첨부할 수 있습니다" : attachBlocked ?? "이 대화의 작업 폴더 안 UTF-8 텍스트 파일 (파일당 8KiB, 최대 4개·합계 16KiB)"}><Paperclip size={12} />파일 첨부</button>
-            <span className="pc-hint">{replyTo ? "보낸 쪽에게만 답장" : target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : target.startsWith("hosted:") ? "전달문을 만들고, 코드가 붙은 답장을 이 대화에 표시" : "답장이 오면 이 대화에 표시"} · Enter 보내기</span>
+            <span className="pc-hint">{replyTo ? "보낸 쪽에게만 답장" : target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : target.startsWith("hosted:") ? "전달문을 만들고, 코드가 붙은 답장을 이 대화에 표시" : "답장이 오면 이 대화에 표시"} · Enter 보내기{text && !draftNote ? " · " + DRAFT_SAVED : ""}</span>
             <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !replyTo && !!thread?.running || !!attachments.length && !canAttach}>
               {busy ? <LoaderCircle size={14} className="social-spin" /> : <Send size={14} />}보내기</button>
           </div>
