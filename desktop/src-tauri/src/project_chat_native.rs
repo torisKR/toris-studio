@@ -561,3 +561,26 @@ pub async fn project_chat_sync_peers(
     let snapshot = network.refresh().await;
     chat.sync_replies(&input.thread_id, &snapshot.messages)
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreviewInput {
+    thread_id: String,
+    url: String,
+}
+
+/// Stores (or clears, with an empty URL) the user-typed loopback preview
+/// address of one thread. Nothing is opened, fetched or started here.
+#[tauri::command]
+pub async fn project_chat_thread_preview(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    input: PreviewInput,
+) -> Result<project_chat::Thread, String> {
+    crate::updater::authorize(&window)?;
+    let url = project_chat::preview_url(&input.url)?;
+    chat.update_thread(&input.thread_id, |thread| {
+        thread.preview_url = url;
+        Ok(())
+    })
+}

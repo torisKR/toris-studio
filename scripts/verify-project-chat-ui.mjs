@@ -95,6 +95,13 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       assert.deepEqual(args.input, { threadId: "t1", messageId: "m-free" }, "only IDs leave the page");
       return [{ id: "rep3", kind: "peer_reply", text: inboxMessage.text, peer: inboxMessage.from, peerName: "Grok Bot", messageId: "m-free", at: at(8) }];
     case "copy_text": return null;
+    case "project_chat_thread_preview": {
+      assert.deepEqual(Object.keys(args.input).sort(), ["threadId", "url"], "only the thread ID and typed address leave the page");
+      const url = args.input.url ? new URL(args.input.url).href : null;
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, previewUrl: url } : t);
+      return threads.find(t => t.id === args.input.threadId);
+    }
+    case "open_external": return null;
     case "project_chat_stop":
       assert.deepEqual(args.input, { threadId: "t9" }, "stop reaches the thread opened from search");
       return null;
@@ -301,8 +308,64 @@ try {
   assert.equal(await box.inputValue(), "초안 유지");
   report.checks.push("Title search (case/space-insensitive, duplicate titles kept apart with project·agent·state) opens threads by keyboard without moving drafts, events or the stop target; no-results and no-projects read differently.");
 
+  // Per-thread preview address: typed and confirmed by the user, loopback only, opened only in the external browser.
+  const preview = root.getByRole("group", { name: "미리보기 주소", exact: true });
+  await preview.getByText(/로컬 미리보기 주소가 없습니다/).waitFor();
+  await preview.getByRole("button", { name: "미리보기 주소 연결", exact: true }).click();
+  const previewInput = preview.getByLabel("미리보기 주소 입력", { exact: true });
+  for (const bad of ["http://example.com:3000", "javascript:alert(1)", "http://user:pw@localhost:5173", "localhost:5173"]) {
+    await previewInput.fill(bad);
+    await preview.getByRole("button", { name: "저장", exact: true }).click();
+    await preview.getByRole("alert").getByText(/로컬 주소만 쓸 수 있습니다/).waitFor();
+  }
+  assert.equal(count("project_chat_thread_preview"), 0, "rejected addresses never reach the host");
+  await previewInput.fill("http://localhost:5173");
+  await previewInput.press("Enter");
+  await preview.getByText("http://localhost:5173/", { exact: true }).waitFor();
+  await preview.getByText("사용자가 연결한 주소 · 이 대화의 서버인지 확인하지 않음", { exact: true }).waitFor();
+  assert.deepEqual(last("project_chat_thread_preview").args, { input: { threadId: "t1", url: "http://localhost:5173/" } });
+  assert.equal(count("open_external"), 0, "saving opens nothing");
+  await preview.getByRole("button", { name: "미리보기 열기", exact: true }).click();
+  await page.waitForTimeout(100);
+  assert.deepEqual(last("open_external").args, { url: "http://localhost:5173/" }, "the saved address goes to the native opener");
+  assert.equal(count("open_external"), 1);
+  assert.equal(page.url().startsWith("http://127.0.0.1:"), true, "the app window did not navigate");
+  assert.equal(await page.locator("iframe, webview").count(), 0, "nothing is embedded");
+  await page.screenshot({ path: resolve(out, "07-preview.png") });
+  // An agent mentioning a server address changes and opens nothing.
+  await emit({ threadId: "t1", kind: "items", items: [{ id: "srv", kind: "assistant", text: "개발 서버: http://localhost:3000 을 열어 보세요", at: at(9) }] });
+  await root.getByText(/개발 서버: http:\/\/localhost:3000/).waitFor();
+  assert.equal(count("open_external"), 1, "agent output is never opened");
+  assert.equal(count("project_chat_thread_preview"), 1, "agent output never sets the address");
+  // Isolated per thread: t9 has none, and a half-typed edit there does not follow back to t1.
+  await search.fill("로그인");
+  await hitList.getByRole("button").first().click();
+  await root.locator(".pc-title strong").getByText("로그인 화면", { exact: true }).waitFor();
+  await preview.getByText(/로컬 미리보기 주소가 없습니다/).waitFor();
+  await preview.getByRole("button", { name: "미리보기 주소 연결", exact: true }).click();
+  await previewInput.fill("http://127.0.0.1:9");
+  await hitList.getByRole("button").nth(1).click();
+  await root.locator(".pc-title strong").getByText("로그인 화면을 만들어줘", { exact: true }).waitFor();
+  await preview.getByText("http://localhost:5173/", { exact: true }).waitFor();
+  assert.equal(await previewInput.count(), 0, "t9's unsaved edit stays with t9");
+  assert.equal(count("project_chat_thread_preview"), 1);
+  // Restored after a restart: the host's stored thread brings the address back.
+  await page.reload({ waitUntil: "networkidle" });
+  await openSection(page, "프로젝트");
+  await root.getByLabel("프로젝트·대화 검색", { exact: true }).fill("로그인 화면을");
+  await root.getByRole("list", { name: "검색 결과", exact: true }).getByRole("button").first().click();
+  await root.locator(".pc-title strong").getByText("로그인 화면을 만들어줘", { exact: true }).waitFor();
+  await preview.getByText("http://localhost:5173/", { exact: true }).waitFor();
+  // Clearing sends an empty address.
+  await preview.getByRole("button", { name: "미리보기 주소 바꾸기", exact: true }).click();
+  await preview.getByRole("button", { name: "지우기", exact: true }).click();
+  await preview.getByText(/로컬 미리보기 주소가 없습니다/).waitFor();
+  assert.deepEqual(last("project_chat_thread_preview").args, { input: { threadId: "t1", url: "" } });
+  report.checks.push("A thread's preview address is typed and saved by the user (remote, credentialed and non-HTTP addresses rejected before the host), labelled as user-linked, opened only through open_external, kept per thread across a reload, and never set or opened from agent output.");
+
   // A new conversation moves into an existing git worktree before it starts; the host picks,
   // verifies and confirms. Cancelled or refused links leave no empty thread behind.
+  await root.getByLabel("프로젝트·대화 검색", { exact: true }).fill("");
   await root.getByRole("button", { name: "새 대화", exact: true }).click();
   const linkButton = workdir.getByRole("button", { name: "기존 worktree 연결", exact: true });
   const before = threads.length;
