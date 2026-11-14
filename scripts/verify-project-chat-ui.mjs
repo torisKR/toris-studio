@@ -14,7 +14,8 @@ const calls = [];
 const at = n => `2026-11-14T03:0${n}:00.000Z`;
 const project = { id: "p-app", name: "pocket-app", folder: "/Users/qa/projects/pocket-app", addedAt: at(0) };
 const adminProject = { id: "p-admin", name: "admin-web", folder: "/Users/qa/projects/admin-web", addedAt: at(9) };
-let projects = [], threads = [], items = {}, hostedPhase = false;
+let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set();
+const worktree = { path: "/Users/qa/projects/pocket-app-wt", branch: "feature/login", base: "0123456789abcdef0123456789abcdef01234567", linkedAt: at(9) };
 const inboxMessage = { id: "m-free", from: "toris/grok-bot", fromName: "Grok Bot", text: "코드 없이 보낸 결제 기획\n1. 구독", createdAt: at(8), replyTo: null, video: null, requestError: null, jobId: null };
 const thread = (id, extra = {}) => ({ id, projectId: project.id, title: "새 대화", agent: "claude", mode: "edit", providerSession: null, createdAt: at(1), updatedAt: at(1), running: false, ...extra });
 const peers = [
@@ -46,18 +47,35 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       }
       assert.deepEqual(args.input, { path: "~/projects/pocket-app" }, "the page sends only the typed path");
       projects = [project]; return { cancelled: false, project };
-    case "project_chat_thread_create":
+    case "project_chat_thread_create": {
       assert.deepEqual(args.input, { projectId: project.id, agent: "claude", mode: "edit" });
-      threads = [thread("t1"), ...threads]; items.t1 = []; return threads[0];
+      const id = "t" + nextThread++;
+      threads = [thread(id), ...threads]; items[id] = []; return threads[0];
+    }
+    case "project_chat_link_worktree": {
+      assert.deepEqual(Object.keys(args.input), ["threadId"], "only the thread ID leaves the page; the host picks the folder");
+      const reply = linkReplies.shift();
+      if (reply === "cancel" || reply === "error") deletable.add(args.input.threadId);
+      if (reply === "cancel") return { cancelled: true };
+      if (reply === "error") throw new Error("선택한 폴더는 이 프로젝트와 다른 Git 저장소입니다.");
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, worktree } : t);
+      return { cancelled: false, thread: threads.find(t => t.id === args.input.threadId) };
+    }
+    case "project_chat_thread_delete":
+      if (!deletable.delete(args.input.threadId)) { report.unexpected.push(command); throw new Error("unexpected: " + command); }
+      threads = threads.filter(t => t.id !== args.input.threadId); return null;
     case "project_chat_thread_get": return { thread: threads.find(t => t.id === args.input.threadId), items: items[args.input.threadId] ?? [] };
     case "project_chat_send":
-      assert.equal(args.input.threadId, "t1");
-      threads = threads.map(t => t.id === "t1" ? { ...t, running: true, title: args.input.text.split("\n")[0].slice(0, 60), updatedAt: at(2) } : t);
-      return threads.find(t => t.id === "t1");
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, running: true, title: args.input.text.split("\n")[0].slice(0, 60), updatedAt: at(2) } : t);
+      return threads.find(t => t.id === args.input.threadId);
     case "project_chat_thread_update":
       threads = threads.map(t => t.id === args.input.threadId ? { ...t, ...("mode" in args.input ? { mode: args.input.mode } : {}) } : t);
       return threads.find(t => t.id === args.input.threadId);
-    case "project_chat_changes": return { isRepo: true, branch: "main", files: ["?? src/Login.tsx", " M README.md"], diff, truncated: false };
+    case "project_chat_changes": {
+      const linked = threads.find(t => t.id === args.input.threadId)?.worktree;
+      if (linked) return { folder: linked.path, isRepo: true, branch: linked.branch, files: ["?? src/Checkout.tsx"], diff: "", truncated: false };
+      return { folder: project.folder, isRepo: true, branch: "main", files: ["?? src/Login.tsx", " M README.md"], diff, truncated: false };
+    }
     case "project_chat_ask_peer":
       if (args.input.replyTo) {
         assert.deepEqual(args.input, { threadId: "t1", peer: "toris/chatgpt", text: "결제도 넣어줘", replyTo: "m-dots" }, "a reply goes to the planner's own address");
@@ -80,7 +98,7 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
     case "project_chat_stop":
       assert.deepEqual(args.input, { threadId: "t9" }, "stop reaches the thread opened from search");
       return null;
-    case "project_chat_remove_project": case "project_chat_thread_delete":
+    case "project_chat_remove_project":
       report.unexpected.push(command); throw new Error("unexpected: " + command);
   }
   const shared = shellFixture(command, args);
@@ -129,6 +147,10 @@ try {
   await root.getByRole("button", { name: "pocket-app", exact: true }).waitFor();
   await root.getByText("pocket-app에서 무엇을 만들까요?").waitFor();
   report.checks.push("Cancelled picker adds nothing; a typed path goes to the host as-is and the project opens.");
+
+  const workdir = root.getByLabel("작업 폴더", { exact: true });
+  await workdir.getByText(/원본 프로젝트 폴더/).waitFor();
+  assert.equal(await workdir.getByRole("button", { name: "기존 worktree 연결", exact: true }).isVisible(), true, "a new conversation can pick a worktree");
 
   // Composer: hosted assistants (copy a prompt) come first, then network peers; the default target is Claude Opus 5.5.
   const target = root.getByLabel("받는 에이전트", { exact: true });
@@ -278,6 +300,38 @@ try {
   await root.getByRole("button", { name: "admin-web", exact: true }).waitFor();
   assert.equal(await box.inputValue(), "초안 유지");
   report.checks.push("Title search (case/space-insensitive, duplicate titles kept apart with project·agent·state) opens threads by keyboard without moving drafts, events or the stop target; no-results and no-projects read differently.");
+
+  // A new conversation moves into an existing git worktree before it starts; the host picks,
+  // verifies and confirms. Cancelled or refused links leave no empty thread behind.
+  await root.getByRole("button", { name: "새 대화", exact: true }).click();
+  const linkButton = workdir.getByRole("button", { name: "기존 worktree 연결", exact: true });
+  const before = threads.length;
+  linkReplies = ["cancel", "error", "ok"];
+  await linkButton.click();
+  await page.waitForTimeout(150);
+  assert.equal(threads.length, before, "a cancelled pick leaves no thread");
+  await linkButton.click();
+  await root.getByText("선택한 폴더는 이 프로젝트와 다른 Git 저장소입니다.").waitFor();
+  assert.equal(threads.length, before, "a refused folder leaves no thread");
+  assert.equal(deletable.size, 0);
+  await linkButton.click();
+  await workdir.getByText("feature/login", { exact: true }).waitFor();
+  await workdir.getByText("pocket-app-wt", { exact: true }).waitFor();
+  await workdir.getByText("원본 /Users/qa/projects/pocket-app", { exact: true }).waitFor();
+  await workdir.getByText("기준 0123456", { exact: true }).waitFor();
+  const linkedId = last("project_chat_link_worktree").args.input.threadId;
+  await changes.getByText("src/Checkout.tsx", { exact: true }).waitFor();
+  await changes.getByText("worktree: " + worktree.path, { exact: true }).waitFor();
+  assert.deepEqual(last("project_chat_changes").args, { input: { projectId: project.id, threadId: linkedId } }, "changes come from the thread's folder");
+  await page.screenshot({ path: resolve(out, "06-worktree-linked.png") });
+  await target.selectOption("agent:claude");
+  await box.fill("결제 화면을 구현해줘");
+  await box.press("Enter");
+  await workdir.getByText("대화 시작 후 고정", { exact: true }).waitFor();
+  assert.deepEqual(last("project_chat_send").args, { input: { threadId: linkedId, text: "결제 화면을 구현해줘" } });
+  assert.equal(await workdir.getByRole("button").count(), 0, "the folder cannot change after the first message");
+  await page.screenshot({ path: resolve(out, "07-worktree-fixed.png") });
+  report.checks.push("A new conversation links an existing worktree via the host (cancel and refusal leave nothing), shows original vs. work folder and branch, reads changes there, and fixes it after the first message.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
