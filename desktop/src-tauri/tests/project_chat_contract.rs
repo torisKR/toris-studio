@@ -561,6 +561,288 @@ fn project_chat_thread_works_in_its_linked_worktree() {
     assert_eq!(r.original(), before, "the original checkout is untouched");
 }
 
+mod new_worktrees {
+    use super::*;
+    use toris_studio_desktop::project_worktrees::{
+        create, create_then, forget, pending, plan, resume,
+    };
+
+    fn rig(r: &Repos) -> (tempfile::TempDir, ProjectChat, String) {
+        let store = tempfile::tempdir().unwrap();
+        let chat = ProjectChat::new(store.path().join("chat"));
+        let project = chat.add_project(&r.app).unwrap();
+        (store, chat, project.id)
+    }
+
+    fn head(dir: &str) -> String {
+        git_in(Path::new(dir), &["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn project_chat_creates_a_branch_and_worktree_from_the_committed_head() {
+        let r = repos();
+        let before = r.original();
+        let (_store, chat, project) = rig(&r);
+        let t = chat
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let tag: String =
+            t.id.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .take(8)
+                .collect();
+
+        let p = plan(&chat, &t.id).unwrap();
+        assert_eq!(p.project_folder, r.app);
+        assert_eq!(
+            p.path,
+            r.root.join("app-worktrees").join(&tag).to_str().unwrap()
+        );
+        assert_eq!(p.branch, format!("studio/{tag}"));
+        assert_eq!(p.base, head(&r.app));
+
+        // Cancelling the OS confirmation creates nothing.
+        assert_eq!(create(&chat, &t.id, |_| false).unwrap(), None);
+        assert!(!Path::new(&p.path).exists());
+        assert!(pending(&chat).is_empty());
+
+        // A second click while the first is still in its dialog is refused.
+        let made = create(&chat, &t.id, |shown| {
+            assert_eq!(shown, &p, "the confirmation names exactly what is created");
+            let twice = create(&chat, &t.id, |_| true).unwrap_err();
+            assert!(twice.contains("이미 만드는 중"), "{twice}");
+            true
+        })
+        .unwrap()
+        .unwrap();
+        let wt = made.worktree.clone().unwrap();
+        assert_eq!(
+            (wt.path.as_str(), wt.branch.as_deref(), wt.base.as_str()),
+            (p.path.as_str(), Some(p.branch.as_str()), p.base.as_str())
+        );
+        assert_eq!(head(&wt.path), p.base);
+        assert_eq!(
+            git_in(Path::new(&wt.path), &["symbolic-ref", "--short", "HEAD"]),
+            p.branch
+        );
+        // Committed files only: nothing uncommitted is copied or stashed.
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&wt.path).join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&wt.path).join("b.txt")).unwrap(),
+            "base\n"
+        );
+        assert!(!Path::new(&wt.path).join("mine.txt").exists());
+        assert_eq!(git_in(Path::new(&wt.path), &["status", "--porcelain"]), "");
+        assert_eq!(git_in(Path::new(&r.app), &["stash", "list"]), "");
+        assert_eq!(
+            work_folder(&chat.project(&project).unwrap(), &made).unwrap(),
+            wt.path
+        );
+        assert!(
+            pending(&chat).is_empty(),
+            "a finished creation leaves no record"
+        );
+
+        // Clicking again after it finished does not make a second one.
+        assert!(create(&chat, &t.id, |_| true)
+            .unwrap_err()
+            .contains("이미 worktree가 연결"));
+        // Restart: the thread still works in it.
+        let again = ProjectChat::new(chat.root().to_path_buf());
+        assert_eq!(again.thread(&t.id).unwrap().worktree, Some(wt));
+        assert_eq!(r.original(), before, "the original checkout is untouched");
+        assert_eq!(
+            git_in(Path::new(&r.app), &["symbolic-ref", "--short", "HEAD"]),
+            "main"
+        );
+    }
+
+    #[test]
+    fn project_chat_new_worktree_never_overwrites_and_explains_refusals() {
+        let r = repos();
+        let before = r.original();
+        let (_store, chat, project) = rig(&r);
+        let t = chat
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let p = plan(&chat, &t.id).unwrap();
+
+        // An existing folder at the planned path stays as it is.
+        std::fs::create_dir_all(&p.path).unwrap();
+        std::fs::write(Path::new(&p.path).join("keep.txt"), "mine").unwrap();
+        let err = create(&chat, &t.id, |_| true).unwrap_err();
+        assert!(err.contains("이미 있습니다"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&p.path).join("keep.txt")).unwrap(),
+            "mine"
+        );
+        std::fs::remove_dir_all(&p.path).unwrap();
+
+        // An existing branch is not moved.
+        git_in(Path::new(&r.app), &["branch", &p.branch, "HEAD"]);
+        assert!(create(&chat, &t.id, |_| true)
+            .unwrap_err()
+            .contains("브랜치"));
+        git_in(Path::new(&r.app), &["branch", "-D", &p.branch]);
+
+        // A started thread cannot move into a new folder.
+        chat.append(&t.id, &[Item::new(ItemKind::User, "hi")])
+            .unwrap();
+        assert!(plan(&chat, &t.id).unwrap_err().contains("시작한 뒤"));
+
+        // Not a git repository, and a repository without commits.
+        for (name, init, reason) in [
+            ("plain", false, "Git 저장소가 아닙니다"),
+            ("empty", true, "커밋이 없습니다"),
+        ] {
+            let dir = r.root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            if init {
+                git_in(&dir, &["init", "-q", "-b", "main"]);
+            }
+            let p = chat.add_project(&checked_folder(&dir).unwrap()).unwrap();
+            let t = chat
+                .create_thread(&p.id, ChatAgent::Claude, ChatMode::Edit)
+                .unwrap();
+            let err = create(&chat, &t.id, |_| true).unwrap_err();
+            assert!(err.contains(reason), "{name}: {err}");
+            assert!(!r.root.join(format!("{name}-worktrees")).exists());
+        }
+        assert!(pending(&chat).is_empty());
+        assert_eq!(r.original(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_chat_failed_worktree_creation_changes_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let r = repos();
+        let before = r.original();
+        let (_store, chat, project) = rig(&r);
+        let t = chat
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let p = plan(&chat, &t.id).unwrap();
+        let container = r.root.join("app-worktrees");
+        std::fs::create_dir_all(&container).unwrap();
+        std::fs::set_permissions(&container, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let err = create(&chat, &t.id, |_| true).unwrap_err();
+        std::fs::set_permissions(&container, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.contains("worktree를 만들"), "{err}");
+        assert!(!Path::new(&p.path).exists());
+        let branch_left = std::process::Command::new("git")
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{}", p.branch),
+            ])
+            .current_dir(&r.app)
+            .status()
+            .unwrap()
+            .success();
+        if branch_left {
+            // git kept the branch: the record stays, so it can be explained.
+            assert_eq!(pending(&chat).len(), 1);
+            assert_eq!(pending(&chat)[0].state, "missing");
+        } else {
+            assert!(err.contains("아무것도 바뀌지 않았습니다"), "{err}");
+            assert!(pending(&chat).is_empty());
+        }
+        assert_eq!(chat.thread(&t.id).unwrap().worktree, None);
+        assert_eq!(r.original(), before);
+    }
+
+    #[test]
+    fn project_chat_unsaved_worktree_is_recovered_after_restart() {
+        let r = repos();
+        let before = r.original();
+        let (_store, chat, project) = rig(&r);
+        let t = chat
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let p = plan(&chat, &t.id).unwrap();
+        // The thread disappears between `git worktree add` and saving the link.
+        let err = create_then(
+            &chat,
+            &t.id,
+            |_| true,
+            || chat.delete_thread(&t.id).unwrap(),
+        )
+        .unwrap_err();
+        assert!(err.contains("저장하지 못했습니다"), "{err}");
+        assert!(
+            Path::new(&p.path).join("a.txt").exists(),
+            "the folder is kept"
+        );
+
+        // After a restart the leftover is recognized as Studio's own.
+        let again = ProjectChat::new(chat.root().to_path_buf());
+        let left = pending(&again);
+        assert_eq!(left.len(), 1);
+        let rec = &left[0];
+        assert_eq!(
+            (
+                rec.path.as_str(),
+                rec.branch.as_str(),
+                rec.base.as_str(),
+                rec.state.as_str()
+            ),
+            (p.path.as_str(), p.branch.as_str(), p.base.as_str(), "ready")
+        );
+        assert!(rec.guidance.contains("git worktree remove"));
+
+        // A started thread or another project's thread cannot take it.
+        let busy = again
+            .create_thread(&project, ChatAgent::Codex, ChatMode::Edit)
+            .unwrap();
+        again
+            .append(&busy.id, &[Item::new(ItemKind::User, "hi")])
+            .unwrap();
+        assert!(resume(&again, &rec.id, &busy.id).is_err());
+        // A fresh thread continues in it; the record is then gone.
+        let fresh = again
+            .create_thread(&project, ChatAgent::Codex, ChatMode::Edit)
+            .unwrap();
+        let linked = resume(&again, &rec.id, &fresh.id).unwrap();
+        assert_eq!(
+            linked.worktree.as_ref().map(|w| w.path.as_str()),
+            Some(p.path.as_str())
+        );
+        assert!(pending(&again).is_empty());
+
+        // A record whose folder is gone, or replaced by something else, is only
+        // explained and forgotten; Studio deletes nothing.
+        let t2 = again
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let p2 = plan(&again, &t2.id).unwrap();
+        create_then(
+            &again,
+            &t2.id,
+            |_| true,
+            || again.delete_thread(&t2.id).unwrap(),
+        )
+        .unwrap_err();
+        git_in(Path::new(&r.app), &["worktree", "remove", &p2.path]);
+        std::fs::create_dir_all(&p2.path).unwrap();
+        std::fs::write(Path::new(&p2.path).join("other.txt"), "x").unwrap();
+        let odd = pending(&again);
+        assert_eq!(odd[0].state, "unknown");
+        let t3 = again
+            .create_thread(&project, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        assert!(resume(&again, &odd[0].id, &t3.id).is_err());
+        forget(&again, &odd[0].id).unwrap();
+        assert!(pending(&again).is_empty());
+        assert!(Path::new(&p2.path).join("other.txt").exists());
+        assert_eq!(r.original(), before);
+    }
+}
+
 fn message(id: &str, from: &str, reply_to: Option<&str>) -> Message {
     serde_json::from_value(json!({"id":id,"from":from,"fromName":"Muse","text":"기획안","createdAt":null,"replyTo":reply_to})).unwrap()
 }

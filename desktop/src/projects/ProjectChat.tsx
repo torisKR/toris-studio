@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree
 } from "./project-chat-client";
 import { ThreadPreview } from "./ThreadPreview";
 import "./ProjectChat.css";
@@ -304,6 +304,51 @@ export function ProjectChat({ active }: Props) {
     else if (event.key === "ArrowUp") { event.preventDefault(); if (at <= 0) searchRef.current?.focus(); else buttons[at - 1]?.focus(); }
   };
 
+  // An isolated thread gets its own new branch and worktree from the committed HEAD. The host names
+  // them, the page only shows them; creation happens after the host's own OS confirmation.
+  const [plan, setPlan] = useState<{ plan: WorktreePlan; created: boolean } | null>(null);
+  const [leftovers, setLeftovers] = useState<PendingWorktree[]>([]);
+  const loadLeftovers = useCallback(async () => { try { setLeftovers(await pendingWorktrees()); } catch { setLeftovers([]); } }, []);
+  useEffect(() => { if (active) void loadLeftovers(); }, [active, loadLeftovers]);
+  useEffect(() => { setPlan(current => current && current.plan.threadId === threadId ? current : null); }, [threadId]);
+  const isolate = () => project && void run(async () => {
+    let current = thread;
+    const created = !current;
+    if (!current) current = await createThread(project.id, newAgent, newMode);
+    try {
+      const next = await planWorktree(current.id);
+      if (created) { upsert(current); setThreadId(current.id); threadRef.current = current.id; }
+      setPlan({ plan: next, created });
+    } catch (cause) { if (created) await deleteThread(current.id).catch(() => {}); throw cause; }
+  });
+  const dropPlan = async (shown: { plan: WorktreePlan; created: boolean }) => {
+    setPlan(null);
+    if (!shown.created) return;
+    await deleteThread(shown.plan.threadId).catch(() => {});
+    setThreads(current => current.filter(t => t.id !== shown.plan.threadId));
+    if (threadRef.current === shown.plan.threadId) { setThreadId(null); threadRef.current = null; }
+  };
+  const confirmPlan = () => plan && void run(async () => {
+    try {
+      const made = await createWorktree(plan.plan.threadId);
+      if (!made) return;
+      setPlan(null); upsert(made); setThreadId(made.id); threadRef.current = made.id; setChangesKey(k => k + 1);
+    } finally { void loadLeftovers(); }
+  });
+  const continueLeftover = (left: PendingWorktree) => project && void run(async () => {
+    const fresh = await createThread(left.projectId, newAgent, newMode);
+    const linked = await resumeWorktree(left.id, fresh.id).catch(async cause => { await deleteThread(fresh.id).catch(() => {}); throw cause; });
+    if (!linked) { await deleteThread(fresh.id).catch(() => {}); return; }
+    upsert(linked); setThreadId(linked.id); threadRef.current = linked.id; setChangesKey(k => k + 1);
+    await loadLeftovers();
+  });
+  const forgetLeftover = (left: PendingWorktree) => void run(async () => {
+    if (!window.confirm(`생성 기록만 지웁니다. 폴더 ${left.path}와 브랜치 ${left.branch}는 그대로 남습니다.`)) return;
+    await forgetWorktree(left.id);
+    await loadLeftovers();
+  });
+  const projectLeftovers = leftovers.filter(l => l.projectId === projectId);
+
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!project || !text.trim() || busy || thread?.running && target === "agent") return;
@@ -418,9 +463,34 @@ export function ProjectChat({ active }: Props) {
             <span className="pc-workdir-origin" title={project.folder}>원본 {project.folder}</span>
           </> : <span title={project.folder}>작업 폴더: 원본 프로젝트 폴더 <code>{project.folder}</code></span>}
           {!started && <button type="button" className="social-button compact" disabled={busy} onClick={attachWorktree}><FolderOpen size={12} />{thread?.worktree ? "다른 worktree로 바꾸기" : "기존 worktree 연결"}</button>}
+          {!started && !thread?.worktree && <button type="button" className="social-button compact" disabled={busy || !!plan} onClick={isolate}><GitBranchPlus size={12} />격리된 새 대화</button>}
           {started && thread?.worktree && <span className="pc-workdir-fixed">대화 시작 후 고정</span>}
         </div>
         {thread && <ThreadPreview key={thread.id} thread={thread} onSaved={upsert} />}
+        {plan && <div className="pc-plan" role="group" aria-label="새 worktree 계획">
+          <p><strong>이 대화용 새 브랜치와 worktree를 만듭니다.</strong> 만들기를 누르면 확인 창이 한 번 더 뜹니다.</p>
+          <dl>
+            <dt>원본</dt><dd title={plan.plan.projectFolder}>{plan.plan.projectFolder}</dd>
+            <dt>새 폴더</dt><dd title={plan.plan.path}>{plan.plan.path}</dd>
+            <dt>새 브랜치</dt><dd>{plan.plan.branch}</dd>
+            <dt>기준 HEAD</dt><dd title={plan.plan.base}>{plan.plan.base.slice(0, 12)}</dd>
+          </dl>
+          <p className="pc-muted">마지막 커밋에서 시작합니다. 원본의 커밋하지 않은 변경, .env 같은 파일, 설치한 의존성은 옮기지 않고, 원본 폴더도 바꾸지 않습니다.</p>
+          <div className="pc-plan-actions">
+            <button type="button" className="social-button primary compact" disabled={busy} onClick={confirmPlan}>{busy ? <LoaderCircle size={12} className="social-spin" /> : <GitBranchPlus size={12} />}만들기</button>
+            <button type="button" className="social-button compact" disabled={busy} onClick={() => void dropPlan(plan)}>취소</button>
+          </div>
+        </div>}
+        {projectLeftovers.length > 0 && <div className="pc-leftovers" role="group" aria-label="끝나지 않은 worktree 생성">
+          <p><CircleAlert size={13} /> 만들다 멈춘 worktree가 있습니다. Studio는 폴더나 브랜치를 지우지 않습니다.</p>
+          <ul>{projectLeftovers.map(left => <li key={left.id}>
+            <div><strong title={left.path}>{left.path}</strong> <span className="pc-workdir-tag">{left.branch}</span><p className="pc-muted">{left.guidance}</p></div>
+            <div className="pc-plan-actions">
+              {left.state === "ready" && <button type="button" className="social-button compact" disabled={busy} onClick={() => continueLeftover(left)}>새 대화로 이어서 연결</button>}
+              <button type="button" className="social-button compact" disabled={busy} onClick={() => forgetLeftover(left)}>기록 지우기</button>
+            </div>
+          </li>)}</ul>
+        </div>}
         {showInbox && thread && <div className="pc-inbox" aria-label="받은 메시지">
           <p className="pc-muted">Muse·Dots·Grok 같은 어시스턴트가 코드 없이 Studio로 보낸 기획을 이 대화에 붙입니다. 붙여도 자동으로 실행하지 않습니다.</p>
           {!unlinked.length && <p className="pc-muted">가져올 메시지가 없습니다.</p>}

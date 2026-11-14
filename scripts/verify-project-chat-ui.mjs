@@ -14,7 +14,8 @@ const calls = [];
 const at = n => `2026-11-14T03:0${n}:00.000Z`;
 const project = { id: "p-app", name: "pocket-app", folder: "/Users/qa/projects/pocket-app", addedAt: at(0) };
 const adminProject = { id: "p-admin", name: "admin-web", folder: "/Users/qa/projects/admin-web", addedAt: at(9) };
-let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set();
+let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set(), planReplies = [], createReplies = [], leftovers = [];
+const planFor = id => ({ threadId: id, projectFolder: project.folder, path: `${project.folder}-worktrees/${id}`, branch: `studio/${id}`, base: "89abcdef0123456789abcdef0123456789abcdef" });
 const worktree = { path: "/Users/qa/projects/pocket-app-wt", branch: "feature/login", base: "0123456789abcdef0123456789abcdef01234567", linkedAt: at(9) };
 const inboxMessage = { id: "m-free", from: "toris/grok-bot", fromName: "Grok Bot", text: "코드 없이 보낸 결제 기획\n1. 구독", createdAt: at(8), replyTo: null, video: null, requestError: null, jobId: null };
 const thread = (id, extra = {}) => ({ id, projectId: project.id, title: "새 대화", agent: "claude", mode: "edit", providerSession: null, createdAt: at(1), updatedAt: at(1), running: false, ...extra });
@@ -61,6 +62,31 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       threads = threads.map(t => t.id === args.input.threadId ? { ...t, worktree } : t);
       return { cancelled: false, thread: threads.find(t => t.id === args.input.threadId) };
     }
+    case "project_chat_worktree_pending": return leftovers;
+    case "project_chat_worktree_plan": {
+      assert.deepEqual(Object.keys(args.input), ["threadId"], "only the thread ID leaves the page; the host names folder and branch");
+      deletable.add(args.input.threadId);
+      if (planReplies.shift() === "error") throw new Error("저장소에 커밋이 없습니다. 첫 커밋을 만든 뒤 격리된 대화를 만들 수 있습니다.");
+      return planFor(args.input.threadId);
+    }
+    case "project_chat_create_worktree": {
+      assert.deepEqual(Object.keys(args.input), ["threadId"], "creation sends only the thread ID; the host confirms in an OS dialog");
+      if (createReplies.shift() === "cancel") return { cancelled: true };
+      const plan = planFor(args.input.threadId);
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, worktree: { path: plan.path, branch: plan.branch, base: plan.base, linkedAt: at(9) } } : t);
+      return { cancelled: false, thread: threads.find(t => t.id === args.input.threadId) };
+    }
+    case "project_chat_worktree_resume": {
+      assert.deepEqual(Object.keys(args.input).sort(), ["recordId", "threadId"]);
+      const left = leftovers.find(l => l.id === args.input.recordId);
+      assert.equal(left?.state, "ready", "only a ready leftover is offered for resuming");
+      leftovers = leftovers.filter(l => l !== left);
+      threads = threads.map(t => t.id === args.input.threadId ? { ...t, worktree: { path: left.path, branch: left.branch, base: left.base, linkedAt: at(9) } } : t);
+      return { cancelled: false, thread: threads.find(t => t.id === args.input.threadId) };
+    }
+    case "project_chat_worktree_forget":
+      assert.deepEqual(args.input, { recordId: "r-missing" });
+      leftovers = leftovers.filter(l => l.id !== args.input.recordId); return null;
     case "project_chat_thread_delete":
       if (!deletable.delete(args.input.threadId)) { report.unexpected.push(command); throw new Error("unexpected: " + command); }
       threads = threads.filter(t => t.id !== args.input.threadId); return null;
@@ -395,6 +421,52 @@ try {
   assert.equal(await workdir.getByRole("button").count(), 0, "the folder cannot change after the first message");
   await page.screenshot({ path: resolve(out, "07-worktree-fixed.png") });
   report.checks.push("A new conversation links an existing worktree via the host (cancel and refusal leave nothing), shows original vs. work folder and branch, reads changes there, and fixes it after the first message.");
+
+  // An isolated new conversation: the host plans a new branch and folder from the committed HEAD,
+  // the page shows them, and creation needs the host's OS confirmation. Refusals leave nothing.
+  await root.getByRole("button", { name: "새 대화", exact: true }).click();
+  const isolate = workdir.getByRole("button", { name: "격리된 새 대화", exact: true });
+  const beforeIsolated = threads.length;
+  planReplies = ["error"];
+  await isolate.click();
+  await root.getByText("저장소에 커밋이 없습니다.", { exact: false }).waitFor();
+  assert.equal(threads.length, beforeIsolated, "a refused plan leaves no thread");
+  await isolate.click();
+  const planCard = root.getByRole("group", { name: "새 worktree 계획" });
+  const planned = planFor(last("project_chat_worktree_plan").args.input.threadId);
+  for (const text of [planned.projectFolder, planned.path, planned.branch, planned.base.slice(0, 12)]) await planCard.getByText(text, { exact: true }).waitFor();
+  await planCard.getByText("커밋하지 않은 변경", { exact: false }).waitFor();
+  await page.screenshot({ path: resolve(out, "08-isolated-plan.png") });
+  await planCard.getByRole("button", { name: "취소", exact: true }).click();
+  await planCard.waitFor({ state: "detached" });
+  assert.equal(threads.length, beforeIsolated, "cancelling the plan removes the thread made for it");
+  await isolate.click();
+  const plan2 = planFor(last("project_chat_worktree_plan").args.input.threadId);
+  createReplies = ["cancel", "ok"];
+  await planCard.getByRole("button", { name: "만들기", exact: true }).click();
+  await page.waitForTimeout(150);
+  assert.equal(await planCard.isVisible(), true, "a cancelled OS confirmation keeps the plan on screen and creates nothing");
+  leftovers = [
+    { id: "r-ready", projectId: project.id, threadId: "gone", path: `${project.folder}-worktrees/old1`, branch: "studio/old1", base: plan2.base, startedAt: at(5), state: "ready", guidance: "Studio가 만든 worktree가 남아 있습니다. 새 대화로 이어서 연결하거나, 기록만 지우고 폴더를 그대로 둘 수 있습니다." },
+    { id: "r-missing", projectId: project.id, threadId: "gone2", path: `${project.folder}-worktrees/old2`, branch: "studio/old2", base: plan2.base, startedAt: at(6), state: "missing", guidance: "폴더가 없습니다. 브랜치 studio/old2이(가) 남았을 수 있습니다." }
+  ];
+  await planCard.getByRole("button", { name: "만들기", exact: true }).click();
+  await planCard.waitFor({ state: "detached" });
+  await workdir.getByText(plan2.branch, { exact: true }).waitFor();
+  await workdir.getByText(plan2.threadId, { exact: true }).waitFor();
+  assert.equal(count("project_chat_create_worktree"), 2);
+  const leftBox = root.getByRole("group", { name: "끝나지 않은 worktree 생성" });
+  await leftBox.getByText(leftovers[1].path, { exact: true }).waitFor();
+  assert.equal(await leftBox.getByRole("button", { name: "새 대화로 이어서 연결" }).count(), 1, "only a ready leftover can be continued");
+  await page.screenshot({ path: resolve(out, "09-isolated-created.png") });
+  await leftBox.getByRole("button", { name: "새 대화로 이어서 연결" }).click();
+  await workdir.getByText("studio/old1", { exact: true }).waitFor();
+  page.once("dialog", dialog => void dialog.accept());
+  await leftBox.getByRole("button", { name: "기록 지우기" }).click();
+  await leftBox.waitFor({ state: "detached" });
+  assert.deepEqual(leftovers, []);
+  await page.screenshot({ path: resolve(out, "10-leftover-resolved.png") });
+  report.checks.push("An isolated new conversation shows the host's planned folder, branch and base HEAD, creates only after the host confirms (refusal and cancel leave nothing), and leftovers from an interrupted creation are continued in a new thread or forgotten without deleting folders.");
 
   for (const width of [1100, 760]) {
     await page.setViewportSize({ width, height: 900 });
