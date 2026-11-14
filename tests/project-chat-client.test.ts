@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, toRows, type ChatItem
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, searchKey, searchProjects, sendMessage, toRows, type ChatItem, type Project, type Thread
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -99,4 +99,55 @@ test("a planner request stays open until a reply follows it", () => {
   assert.equal(awaitingPlanner([item("a", "hosted_request"), item("b", "peer_reply")]), false);
   assert.equal(awaitingPlanner([item("a", "peer_request"), item("b", "peer_reply"), item("c", "peer_request")]), true);
   assert.match(implementationPrompt(item("r", "peer_reply", { peer: "toris/chatgpt", peerName: "Dots" })), /^아래는 Dots가 보낸 기획/);
+});
+
+const proj = (id: string, name: string): Project => ({ id, name, folder: "/Users/me/" + name, addedAt: "" });
+const thr = (id: string, projectId: string, title: string, extra: Partial<Thread> = {}): Thread =>
+  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, ...extra });
+const searchFixture = () => ({
+  projects: [proj("p1", "Pocket App"), proj("p2", "결제 서버"), proj("p3", "notes")],
+  threads: [
+    thr("t1", "p1", "로그인 화면"), thr("t2", "p2", "로그인 화면", { agent: "codex", running: true }), thr("t3", "p1", "Payment  Flow"),
+    thr("t4", "gone", "로그인 고아"), thr("t5", "p3", "README 정리")
+  ]
+});
+const labels = (r: ReturnType<typeof searchProjects>) => r?.hits.map(h => h.kind === "project" ? "P:" + h.project.id : "T:" + h.thread.id);
+
+test("an empty or blank query is not a search", () => {
+  const { projects, threads } = searchFixture();
+  assert.equal(searchProjects("", projects, threads), null);
+  assert.equal(searchProjects("   \t\n", projects, threads), null);
+});
+
+test("title search ignores case, folds whitespace and matches Korean in NFC or NFD", () => {
+  const { projects, threads } = searchFixture();
+  assert.deepEqual(labels(searchProjects("POCKET", projects, threads)), ["P:p1"]);
+  assert.deepEqual(labels(searchProjects("  pocket   app ", projects, threads)), ["P:p1"]);
+  assert.deepEqual(labels(searchProjects("payment flow", projects, threads)), ["T:t3"], "double space in the title still matches");
+  assert.deepEqual(labels(searchProjects("결제", projects, threads)), ["P:p2"]);
+  const nfd = [proj("p9", "결제 서버".normalize("NFD"))];
+  assert.deepEqual(labels(searchProjects("결제", nfd, [])), ["P:p9"], "macOS folder names arrive decomposed");
+  assert.equal(searchKey("Ａ  b"), "ａ b");
+  assert.deepEqual(searchProjects("없는제목", projects, threads)?.hits, [], "no hits is a search with zero results, not null");
+  assert.deepEqual(searchProjects("로그인", [], [])?.hits, [], "no projects: still an empty result");
+});
+
+test("duplicate titles across projects stay separate hits with their project, agent and run state", () => {
+  const { projects, threads } = searchFixture();
+  const result = searchProjects("로그인", projects, threads)!;
+  assert.deepEqual(labels(result), ["T:t2", "T:t1"], "newest first; a thread of a removed project is dropped");
+  const [a, b] = result.hits;
+  assert.ok(a.kind === "thread" && b.kind === "thread");
+  assert.deepEqual([a.project.name, a.thread.agent, a.thread.running], ["결제 서버", "codex", true]);
+  assert.deepEqual([b.project.name, b.thread.agent, b.thread.running], ["Pocket App", "claude", false]);
+});
+
+test("project hits come before thread hits and count their threads and running state", () => {
+  const { projects, threads } = searchFixture();
+  const result = searchProjects("e", projects, threads)!;
+  assert.equal(result.hits[0].kind, "project");
+  const server = searchProjects("서버", projects, threads)!.hits[0];
+  assert.ok(server.kind === "project");
+  assert.deepEqual([server.threadCount, server.running], [1, true]);
+  assert.deepEqual(labels(searchProjects("notes", projects, threads)), ["P:p3"], "project names do not pull in every thread body or title");
 });
