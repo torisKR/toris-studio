@@ -73,6 +73,14 @@ env HOME="$QA/home" TORIS_MOBILE_QA_NO_AUTOMATION=1 "<binary>" > "$QA/logs/run-N
 
 D에서 실제로 보내는 "다음 Enter"는 받는 쪽을 호스팅 기획자(`hosted:*`)로 둔다. 이 대상은 요청 카드만 기록하고 네트워크 전송이나 에이전트 CLI를 시작하지 않으므로, 전송 횟수를 대화 기록의 요청 카드 수로 셀 수 있다. 앱의 자식 프로세스 목록도 함께 기록한다.
 
+## 준비 중 확인한 실행 제약 (c07f494 빌드, 실증 아님)
+
+- **격리 동작:** QA 앱은 `open -n --env HOME=… --env TORIS_MOBILE_QA_NO_AUTOMATION=1 "<QA.app>"`로 띄웠을 때 프로세스 환경에 두 변수가 모두 들어갔다(`ps eww`). 단일 실행 소켓은 `/tmp/kr_toris_studio_qa_si.sock`만 생겼고, 프로젝트 목록은 비어 있었다(사용자 데이터 미노출). 직접 실행 파일 실행도 같은 결과였지만, 창이 활성화되지 않아 `open`을 쓴다.
+- **정상 종료:** `osascript -e 'tell application id "kr.toris.studio.qa" to quit'` 후 프로세스와 QA 소켓이 사라졌다.
+- **조작 경로:** 앱 창은 접근성 트리로 클릭·입력할 수 있다. `type_text`는 2벌식이 선택된 상태에서도 영문 경로를 그대로 넣었으므로 입력기를 거치지 않는 것으로 본다. 따라서 D의 근거로 쓰지 않는다.
+- **OS 확인 창 제약:** 부모 창 없는 rfd 메시지 창(`reason_native::confirm`)은 macOS에서 `CFUserNotification`으로 뜨고, 앱이 아닌 UserNotificationCenter 프로세스가 그린다. 이번 실행 환경의 화면 조작 도구는 이 창을 대상으로 잡지 못한다. CLI에는 화면 녹화 권한이 없어 화면 전체 캡처도 실패했다. 그래서 프로젝트 추가·Studio worktree 생성·선택 커밋처럼 OS 확인이 필요한 단계는 **사람이 직접 확인 버튼을 눌러야** 진행된다. 내용을 볼 수 없는 시스템 알림에 키를 보내지 않는다.
+- **우회와 그 한계:** B·D·E에서 쓸 QA 프로젝트는 QA `HOME`의 `projects.json`에 QA 저장소 한 개를 직접 기록해 준비할 수 있다. 사용자의 실제 저장소와는 무관하고, 프로젝트 추가 확인 흐름 자체는 검증 대상이 아니다. C(worktree 정보·커밋 영수증)는 실제 OS 확인을 거쳐야 하므로 사람이 확인 버튼을 누르지 않으면 **미검증**으로 남긴다. 영수증·worktree 기록을 파일로 꾸며 넣지 않는다.
+
 ## 실행 기록
 
 준비 단계: 아직 실제 앱 QA를 실행하지 않았다. 16번(`feature/orphan-draft-recovery`)의 PR이 나온 뒤 그 head를 통합한 빌드로 실행하고 여기에 결과를 적는다.
