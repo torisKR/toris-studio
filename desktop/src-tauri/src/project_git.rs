@@ -27,7 +27,8 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 /// Changed files listed in one review.
@@ -41,6 +42,8 @@ pub const MAX_FILE_DIFF: usize = 48 * 1024;
 /// Commit message, in bytes.
 pub const MAX_MESSAGE: usize = 4000;
 const MAX_GIT_ERROR: usize = 400;
+/// How long one file's `git diff` may take before the file is refused.
+const DIFF_TIME_LIMIT: Duration = Duration::from_secs(20);
 const DELETED: &str = "deleted";
 
 /// One changed file as git sees it in the worktree.
@@ -127,6 +130,17 @@ struct Git<'a> {
 
 impl Git<'_> {
     fn run(&self, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        self.run_within(args, input, None)
+    }
+
+    /// Like [`Git::run`], but git is stopped and `Err` returned once `limit`
+    /// passes.
+    fn run_within(
+        &self,
+        args: &[&str],
+        input: Option<&[u8]>,
+        limit: Option<Duration>,
+    ) -> Result<Vec<u8>, String> {
         let hooks = if cfg!(windows) {
             "core.hooksPath=NUL"
         } else {
@@ -169,9 +183,11 @@ impl Git<'_> {
                 let _ = stdin.write_all(&bytes);
             });
         }
-        let output = child
-            .wait_with_output()
-            .map_err(|_| "git을 실행하지 못했습니다.".to_owned())?;
+        let output = match limit {
+            None => child.wait_with_output(),
+            Some(limit) => wait_within(child, limit)?,
+        }
+        .map_err(|_| "git을 실행하지 못했습니다.".to_owned())?;
         if output.status.success() {
             Ok(output.stdout)
         } else {
@@ -188,6 +204,45 @@ impl Git<'_> {
         let line = text.trim();
         (!line.is_empty() && !line.contains('\n')).then(|| line.to_owned())
     }
+}
+
+/// Waits for `child` and collects its output, killing it after `limit`.
+fn wait_within(
+    mut child: std::process::Child,
+    limit: Duration,
+) -> Result<std::io::Result<Output>, String> {
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = vec![];
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    }
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "git이 {}초 안에 끝나지 않았습니다.",
+                    limit.as_secs()
+                ));
+            }
+            Err(e) => break Err(e),
+        }
+    };
+    Ok(status.map(|status| Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    }))
 }
 
 fn is_sha(text: &str) -> bool {
@@ -431,11 +486,15 @@ fn content(git: &Git, entry: &Entry) -> Result<(String, Option<(String, Vec<u8>)
     }
 }
 
-fn diff_text(git: &Git, entry: &Entry, bytes: Option<&[u8]>) -> (String, bool) {
+/// The diff shown for one file and whether it was cut. `Err` when git could
+/// not produce it (failed, timed out, unreadable object): the file was not
+/// shown, so it must not be offered as reviewed. An empty `Ok` is a real empty
+/// diff.
+fn diff_text(git: &Git, entry: &Entry, bytes: Option<&[u8]>) -> Result<(String, bool), String> {
     let raw = if entry.code == *b"??" {
         match bytes {
             Some(b) if b.contains(&0) || std::str::from_utf8(b).is_err() => {
-                return ("(새 바이너리 파일)".into(), false)
+                return Ok(("(새 바이너리 파일)".into(), false))
             }
             Some(b) => {
                 let text = String::from_utf8_lossy(b);
@@ -450,7 +509,7 @@ fn diff_text(git: &Git, entry: &Entry, bytes: Option<&[u8]>) -> (String, bool) {
             None => String::new(),
         }
     } else {
-        git.run(
+        git.run_within(
             &[
                 "diff",
                 "HEAD",
@@ -461,15 +520,22 @@ fn diff_text(git: &Git, entry: &Entry, bytes: Option<&[u8]>) -> (String, bool) {
                 &entry.path,
             ],
             None,
+            Some(DIFF_TIME_LIMIT),
         )
         .map(|out| String::from_utf8_lossy(&out).into_owned())
-        .unwrap_or_default()
+        .map_err(|e| {
+            if e.is_empty() {
+                "diff를 읽지 못해 변경 내용을 보여 줄 수 없어 커밋하지 않습니다.".to_owned()
+            } else {
+                format!("diff를 읽지 못해 변경 내용을 보여 줄 수 없어 커밋하지 않습니다: {e}")
+            }
+        })?
     };
-    if raw.len() > MAX_FILE_DIFF {
+    Ok(if raw.len() > MAX_FILE_DIFF {
         (cut(&raw, MAX_FILE_DIFF), true)
     } else {
         (plain_text(&raw), false)
-    }
+    })
 }
 
 fn change_name(code: [u8; 2]) -> &'static str {
@@ -504,7 +570,7 @@ pub fn review(chat: &ProjectChat, thread_id: &str) -> Result<CommitReview, Strin
     let mut files = vec![];
     for entry in entries.iter().take(MAX_FILES) {
         let (fingerprint, diff, truncated, refused) = if staged(entry.code) {
-            let (diff, truncated) = diff_text(&git, entry, None);
+            let (diff, truncated) = diff_text(&git, entry, None).unwrap_or_default();
             (
                 String::new(),
                 diff,
@@ -514,9 +580,11 @@ pub fn review(chat: &ProjectChat, thread_id: &str) -> Result<CommitReview, Strin
         } else {
             match content(&git, entry) {
                 Ok((fingerprint, found)) => {
-                    let (diff, truncated) =
-                        diff_text(&git, entry, found.as_ref().map(|(_, b)| b.as_slice()));
-                    (fingerprint, diff, truncated, None)
+                    match diff_text(&git, entry, found.as_ref().map(|(_, b)| b.as_slice())) {
+                        Ok((diff, truncated)) => (fingerprint, diff, truncated, None),
+                        // Not shown means not reviewed: no fingerprint, refused.
+                        Err(why) => (String::new(), String::new(), false, Some(why)),
+                    }
                 }
                 Err(why) => (String::new(), String::new(), false, Some(why)),
             }
