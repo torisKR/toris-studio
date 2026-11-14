@@ -26,6 +26,26 @@
    ]
   },
   {
+   "id": "project-chat",
+   "label": "프로젝트 채팅: 앱 폴더를 추가하고 Claude Code·Codex와 채팅으로 기획·구현, Reason Network 기획자 요청, 변경 사항 보기",
+   "paths": [
+    "desktop/src/projects/**",
+    "desktop/src-tauri/src/project_chat*.rs",
+    "desktop/src-tauri/tests/project_chat_contract.rs",
+    "tests/project-chat-client.test.ts",
+    "scripts/verify-project-chat-ui.mjs",
+    "docs/PROJECT_CHAT.md"
+   ],
+   "verify": [
+    "node --import tsx --test tests/project-chat-client.test.ts",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract",
+    "node scripts/verify-project-chat-ui.mjs"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json"
+   ]
+  },
+  {
    "id": "mobile-companion",
    "label": "모바일 연결과 Android 리모컨",
    "paths": ["android/companion/**", "desktop/src-tauri/src/mobile_*.rs", "desktop/src/MobileSettings*"],

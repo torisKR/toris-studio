@@ -367,7 +367,7 @@ fn active(p: &Pipeline) -> Result<(), String> {
     Ok(())
 }
 /// Mail usually arrives as `person/session`; when it names a machine, that must match too.
-fn same_sender(from: &str, assignee: &str) -> bool {
+pub fn same_sender(from: &str, assignee: &str) -> bool {
     let split = |address: &str| {
         address
             .split_once('@')

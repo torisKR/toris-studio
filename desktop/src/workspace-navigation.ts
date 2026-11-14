@@ -1,7 +1,8 @@
-export type View = "sns" | "content" | "trends" | "keywords" | "ai" | "assets" | "video" | "agent" | "factory" | "publications" | "planner" | "ops" | "settings";
-export type Section = "sns" | "content" | "creation" | "publications" | "operations" | "settings";
-export const MAIN_SECTIONS = [{ id: "sns", label: "SNS 관리" }, { id: "content", label: "콘텐츠" }, { id: "creation", label: "제작" }, { id: "publications", label: "게시" }, { id: "operations", label: "운영" }] as const;
+export type View = "projects" | "sns" | "content" | "trends" | "keywords" | "ai" | "assets" | "video" | "agent" | "factory" | "publications" | "planner" | "ops" | "settings";
+export type Section = "projects" | "sns" | "content" | "creation" | "publications" | "operations" | "settings";
+export const MAIN_SECTIONS = [{ id: "projects", label: "프로젝트" }, { id: "sns", label: "SNS 관리" }, { id: "content", label: "콘텐츠" }, { id: "creation", label: "제작" }, { id: "publications", label: "게시" }, { id: "operations", label: "운영" }] as const;
 const items: Record<Section, { id: View; label: string; group: string }[]> = {
+  projects: [{ id: "projects", label: "프로젝트", group: "개발" }],
   sns: [{ id: "sns", label: "SNS 관리", group: "운영" }],
   content: [{ id: "content", label: "콘텐츠 플래너", group: "콘텐츠" }, { id: "trends", label: "트렌드 탐색", group: "콘텐츠" }, { id: "keywords", label: "키워드 탐색", group: "콘텐츠" }],
   creation: [{ id: "ai", label: "문구", group: "제작" }, { id: "assets", label: "이미지·에셋", group: "제작" }, { id: "video", label: "영상·모션", group: "제작" }, { id: "agent", label: "Agent", group: "제작" }, { id: "factory", label: "앱·게임", group: "제작" }],

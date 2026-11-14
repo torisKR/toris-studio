@@ -12,6 +12,7 @@ import { CreationInbox } from "./ChatGPTHandoff";
 import { aiStatus as readAiStatus, contentReady, generateText, modelLabel } from "./ai-client";
 import type { AiStatus as ModelStatus } from "./ai-client";
 import { AgentPanel } from "./AgentPanel";
+import { ProjectChat } from "./projects/ProjectChat";
 import type { ProductionSelection } from "./reason/types";
 import { PlannerPanel } from "./PlannerPanel";
 import { OpsPanel } from "./OpsPanel";
@@ -22,7 +23,7 @@ import "./Workspace.css";
 import { AssetStudio } from "./assets/AssetStudio";
 import { plainPreview } from "./content-preview";
 import { AiDiscovery } from "./AiDiscovery";
-import { BookOpen } from "lucide-react";
+import { BookOpen, FolderOpen } from "lucide-react";
 import { ActivityStatus, ActivitySkeleton } from "./ActivityStatus";
 import { applyMaterial, materialFromTrend, composeContext, chatBrief } from "./ai-discovery";
 import type { AiMaterial, AiSelectionMode } from "./ai-discovery";
@@ -73,7 +74,7 @@ const sourceLabels: Record<TrendSource, string> = {
   google_trends: "Google 트렌드", youtube: "YouTube", naver_blog: "네이버 블로그"
 };
 const tabs = ([...MAIN_SECTIONS.flatMap(item => sectionItems(item.id)), ...sectionItems("settings")]);
-const sectionIcons = { sns: Users, content: FileText, creation: Clapperboard, publications: Send, operations: CalendarDays, settings: Settings2 };
+const sectionIcons = { projects: FolderOpen, sns: Users, content: FileText, creation: Clapperboard, publications: Send, operations: CalendarDays, settings: Settings2 };
 const emptyDashboard: DashboardData = {
   channels: [], content: [], trends: [], integrations: [],
   database: { connected: false, message: "DB 연결 상태를 확인하고 있습니다." }
@@ -465,7 +466,7 @@ export function App() {
 
   const viewTitle = tabs.find(item => item.id === tab)?.label ?? "SNS 관리";
   const sectionLabel = MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정";
-  const viewDescription = { sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", factory: "한 줄 요청으로 Android 게임·앱 명세를 검사하고 프로젝트를 만든 뒤, 있는 도구만 실행합니다. 서명과 스토어 제출은 승인 전에도 실행하지 않습니다.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
+  const viewDescription = { projects: "앱 폴더를 추가하고 Claude Code·Codex와 채팅하며 기획·구현하세요. Muse·OpenAI Dots 기획을 그대로 구현으로 넘길 수 있습니다.", sns: "채널의 성과와 다음 작업을 확인하세요.", publications: "문구와 파일·계정을 검토하고 승인된 게시와 결과를 관리하세요.", content: "아이디어와 초안을 모으고 다음 발행을 계획하세요.", trends: "실제 출처에서 다음 콘텐츠 아이디어를 찾으세요.", keywords: "키워드와 콘텐츠 원문 근거를 연결하세요.", ai: "자료를 골라 Agent의 콘텐츠 작성 모델로 초안을 만들고 검토하세요.", planner: "오늘과 이번 주 일정, 열린 작업, 게시 예약을 보고 Studio 전용 Google 캘린더와 동기화하세요.", ops: "앱·웹·서비스의 CI, 배포, 헬스체크, Play 심사 상태를 읽기 전용으로 보고 문제는 작업으로 넘기세요.", agent: "프로젝트 코드 작업과 주간 콘텐츠·운영 점검 워크플로를 에이전트에게 맡기고 변경과 저장을 승인하세요.", factory: "한 줄 요청으로 Android 게임·앱 명세를 검사하고 프로젝트를 만든 뒤, 있는 도구만 실행합니다. 서명과 스토어 제출은 승인 전에도 실행하지 않습니다.", assets: "이미지와 에셋을 규격에 맞추고 재사용하세요.", video: "영상과 모션을 편집하고 로컬 MP4로 출력하세요.", settings: "로컬 데이터와 브라우저·앱을 설정하세요." }[tab];
 
   return (
     <div className="social-workspace">
@@ -486,8 +487,9 @@ export function App() {
           {sectionItems(section).length > 1 && <nav className="workspace-subnav" aria-label={`${MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정"} 화면`}>{sectionItems(section).map(item => <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
           {notice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={18} /> : <CircleAlert size={18} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></button></div>}
           {tab !== "assets" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
-          {tab !== "assets" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
+          {tab !== "assets" && tab !== "projects" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
 
+          <div hidden={tab !== "projects"}><ProjectChat active={tab === "projects"} /></div>
           <div hidden={tab !== "sns"}><SnsWorkspace active={tab === "sns"} dashboard={dashboard} refreshKey={assetRefreshKey} onAddChannel={openChannel} onCreate={(channel) => openContent(undefined, { platform: channel.platform, channelId: channel.id })} onNavigate={setTab} onChanged={() => void loadDashboard()}/></div>
 
           <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
