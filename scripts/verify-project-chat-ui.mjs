@@ -14,7 +14,7 @@ const calls = [];
 const at = n => `2026-11-14T03:0${n}:00.000Z`;
 const project = { id: "p-app", name: "pocket-app", folder: "/Users/qa/projects/pocket-app", addedAt: at(0) };
 const adminProject = { id: "p-admin", name: "admin-web", folder: "/Users/qa/projects/admin-web", addedAt: at(9) };
-let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set(), planReplies = [], createReplies = [], leftovers = [], commitBlocked = null, commitReplies = [];
+let projects = [], threads = [], items = {}, hostedPhase = false, nextThread = 1, linkReplies = [], deletable = new Set(), planReplies = [], createReplies = [], leftovers = [], commitBlocked = null, commitReplies = [], receiptEvents = [];
 const planFor = id => ({ threadId: id, projectFolder: project.folder, path: `${project.folder}-worktrees/${id}`, branch: `studio/${id}`, base: "89abcdef0123456789abcdef0123456789abcdef" });
 const commitHead = "89abcdef0123456789abcdef0123456789abcdef";
 const commitFilesFixture = [
@@ -138,7 +138,15 @@ await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
       if (reply === "stale") throw new Error("검토한 뒤 src/Checkout.tsx의 내용이 바뀌었습니다. 다시 검토하세요.");
       if (reply === "cancel") return { cancelled: true };
       const wt = threads.find(t => t.id === args.input.threadId)?.worktree;
-      return { cancelled: false, commit: { sha: "fedcba9876543210fedcba9876543210fedcba98", branch: wt.branch, folder: wt.path, files: args.input.files.map(f => f.path), indexUpdated: true } };
+      const done = { sha: reply === "receipt-fail" ? "0badc0de0badc0de0badc0de0badc0de0badc0de" : "fedcba9876543210fedcba9876543210fedcba98", branch: wt.branch, folder: wt.path, files: args.input.files.map(f => f.path), indexUpdated: true };
+      // Like the host: a plain-text notice from git's result is kept in the thread's history,
+      // or, when that history cannot be written, the commit still succeeds with a warning.
+      if (reply === "receipt-fail") return { cancelled: false, commit: { ...done, receiptWarning: "커밋은 완료됐지만 이 대화 기록에 영수증을 남기지 못했습니다: 대화 기록을 저장하지 못했습니다." } };
+      const receipt = { id: `receipt-${done.sha.slice(0, 8)}-${count("project_chat_commit")}`, kind: "notice", at: at(9),
+        text: `선택 커밋 완료\n커밋: ${done.sha}\n브랜치: ${done.branch}\nworktree: ${done.folder}\n파일 ${done.files.length}개:\n${done.files.map(f => "  " + f).join("\n")}\nindex: 고른 파일 갱신됨` };
+      items[args.input.threadId] = [...(items[args.input.threadId] ?? []), receipt];
+      receiptEvents.push({ threadId: args.input.threadId, kind: "items", items: [receipt] });
+      return { cancelled: false, commit: done };
     }
     case "project_chat_worktree_forget":
       assert.deepEqual(args.input, { recordId: "r-missing" });
@@ -354,6 +362,7 @@ try {
   await root.getByRole("button", { name: "보내기", exact: true }).click();
   await root.getByText("toris/muse@cloud에게 보냄").waitFor();
   assert.deepEqual(last("project_chat_ask_peer").args, { input: { threadId: "t1", peer: "toris/muse@cloud", text: "로그인 흐름을 기획해줘" } });
+  const turnsBeforePlan = count("project_chat_send");
   await root.getByText(/기획 답장을 기다리는 중/).waitFor();
   await root.getByText("로그인 기획", { exact: true }).waitFor({ timeout: 12000 });
   assert.equal(await root.locator("img").count(), 0, "planner markup stays text");
@@ -363,6 +372,7 @@ try {
   assert.match(prompt, /^아래는 Muse가 보낸 기획입니다/);
   assert.match(prompt, /1\. 이메일·비밀번호 입력/);
   assert.equal(await target.inputValue(), "agent:claude");
+  assert.equal(count("project_chat_send"), turnsBeforePlan, "a received plan and its prefill start no agent turn");
   await page.screenshot({ path: resolve(out, "03-planner-handoff.png") });
   report.checks.push("A planner request goes only to the chosen peer; its reply shows in the thread as text and '이 기획으로 구현' prefills the Claude prompt.");
 
@@ -748,6 +758,52 @@ try {
   assert.deepEqual(last("project_chat_commit").args.input.files, [{ path: "src/Checkout.tsx", fingerprint: commitFilesFixture[0].fingerprint }]);
   assert.equal(count("project_chat_commit"), 2);
   await page.screenshot({ path: resolve(out, "12-commit-done.png") });
+
+  // The commit receipt stays in the conversation: the host stores a plain-text notice and tells the
+  // window, so it outlives the panel's own "done" line, closing the panel and reopening the thread.
+  // A cancelled or refused commit leaves none.
+  assert.equal(receiptEvents.length, 1, "only the successful commit made a receipt (the stale one did not)");
+  await commitBox.getByRole("status").getByText("대화 기록에 영수증을 남겼습니다", { exact: false }).waitFor();
+  for (const event of receiptEvents.splice(0)) await emit(event);
+  const receiptNotice = transcript => transcript.locator(".pc-notice").filter({ hasText: "선택 커밋 완료" });
+  const commitTranscript = root.locator(".pc-transcript");
+  await receiptNotice(commitTranscript).getByText(`커밋: fedcba9876543210fedcba9876543210fedcba98`, { exact: false }).waitFor();
+  const receiptText = await receiptNotice(commitTranscript).textContent();
+  assert.ok(receiptText.includes(`브랜치: ${commitBranch}`) && receiptText.includes("src/Checkout.tsx") && receiptText.includes("index: 고른 파일 갱신됨"), receiptText);
+  assert.ok(!receiptText.includes("README.md") && !receiptText.includes("old.txt"), "only the committed file is listed");
+  commitReplies = ["cancel"];
+  await commitBox.getByRole("checkbox", { name: "README.md 커밋에 포함" }).check();
+  await commitMessage.fill("docs: 취소할 커밋");
+  await commitButton.click();
+  await until(async () => count("project_chat_commit") === 3, "cancelled commit asked");
+  assert.equal(receiptEvents.length, 0, "a cancelled commit makes no receipt");
+  await changes.getByRole("button", { name: "변경 사항 닫기" }).click();
+  await root.getByRole("button", { name: "변경 사항 열기" }).click();
+  await root.locator(".pc-changes").waitFor();
+  assert.equal(await receiptNotice(commitTranscript).count(), 1, "the receipt stays after the panel closes and opens");
+  await root.locator(".pc-thread").filter({ hasNotText: "격리된 커밋 대화" }).first().click();
+  await receiptNotice(commitTranscript).waitFor({ state: "detached" });
+  await root.locator(".pc-thread").filter({ hasText: "격리된 커밋 대화" }).click();
+  await root.locator(".pc-title strong").getByText("격리된 커밋 대화", { exact: true }).waitFor();
+  await receiptNotice(commitTranscript).getByText("커밋: fedcba9876543210fedcba9876543210fedcba98", { exact: false }).waitFor();
+  assert.equal(await receiptNotice(commitTranscript).count(), 1, "reopening the thread reads the same receipt from the host's history, once");
+  await receiptNotice(commitTranscript).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(out, "16-commit-receipt.png") });
+
+  // History could not be written: still a success with the SHA, plus a warning; never a failure or a retry.
+  await root.locator(".pc-changes").getByRole("button", { name: "선택 커밋", exact: true }).click();
+  const commitBox2 = root.locator(".pc-changes").getByRole("region", { name: "선택 파일 커밋", exact: true });
+  await commitBox2.getByRole("checkbox", { name: "README.md 커밋에 포함" }).check();
+  await commitBox2.getByRole("textbox", { name: "커밋 메시지" }).fill("docs: 결제 안내");
+  commitReplies = ["receipt-fail"];
+  await commitBox2.getByRole("button", { name: "고른 파일 커밋…" }).click();
+  await commitBox2.getByRole("status").getByText("0badc0de0bad", { exact: true }).waitFor();
+  await commitBox2.getByRole("alert").getByText("영수증을 남기지 못했습니다", { exact: false }).waitFor();
+  await commitBox2.getByText("다시 커밋하지 마세요", { exact: false }).waitFor();
+  assert.equal(count("project_chat_commit"), 4, "the commit is not sent again after the warning");
+  assert.equal(await receiptNotice(commitTranscript).count(), 1, "no receipt is invented on the page");
+  await page.screenshot({ path: resolve(out, "17-commit-receipt-warning.png") });
+  report.checks.push("A successful selected commit leaves a plain-text receipt (SHA, branch, files, index) in the conversation that survives closing the panel and reopening the thread; a cancelled or refused commit leaves none; when the history cannot be written the commit still shows as done with a warning and is not retried.");
   report.checks.push("In a Studio-made worktree the changes panel commits only picked files: blocked and refused files cannot be picked, each file's diff is shown, a message is required, a host refusal asks for a new review that clears the picks, and success shows the SHA and branch. A linked worktree offers no commit; nothing is pushed.");
 
   // Switching conversations while answers are late: two threads of the same project share the
@@ -861,6 +917,7 @@ try {
   await openThread("요청 추적");
   await root.locator("optgroup[label='기획 · Reason Network 연결 없음']").waitFor({ state: "attached" });
   const sendsBefore = count("reason_network_send");
+  const turnsBeforeReplies = count("project_chat_send");
   for (const [who, words] of [["hosted:muse", "로그인 기획 요청 R"], ["hosted:grok", "결제 기획 요청 R"]]) {
     await target.selectOption(who);
     await box.fill(words);
@@ -919,6 +976,7 @@ try {
   await checkBar.getByText(/기다리는 기획 요청이 없습니다 \(2개 중 남은 요청 0개\)/).waitFor();
   await museCard.getByText("답장 1개 받음").waitFor();
   assert.equal(count("reason_network_send"), sendsBefore, "receiving replies sends nothing");
+  assert.equal(count("project_chat_send"), turnsBeforeReplies, "received plans are never implemented automatically");
   await page.screenshot({ path: resolve(out, "15-request-tracking-done.png") });
   noPeers = false;
   report.checks.push("Planner requests are tracked one by one with no network peers: two hosted requests both wait (without claiming the prompt was sent), Grok's earlier answer closes only Grok's request (1/2 left), a failed manual check shows its error and recovers, a check answered after moving to another thread shows only on its own thread, a duplicate reply shows once, and a hand-filed message is marked 'request link unconfirmed'.");
