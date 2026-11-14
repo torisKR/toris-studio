@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X, FileText, Paperclip } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef
 } from "./project-chat-client";
 import { ThreadPreview } from "./ThreadPreview";
 import "./ProjectChat.css";
@@ -71,6 +71,29 @@ function ToolRow({ call, result }: { call: ChatItem; result: ChatItem | null }) 
   </div>;
 }
 
+/** Files a recorded message carried: names and sizes only, marked apart from the typed text. */
+function Attached({ files }: { files?: AttachmentRef[] }) {
+  if (!files?.length) return null;
+  return <ul className="pc-attached" aria-label="첨부한 파일">{files.map(f =>
+    <li key={f.name}><Paperclip size={11} /><span title={f.name}>{f.name}</span><small>{formatBytes(f.bytes)}</small></li>)}</ul>;
+}
+
+/** Files picked for the next message: what will be sent, with a preview and a remove button each. */
+function PendingAttachments({ files, busy, onRemove }: { files: Attachment[]; busy: boolean; onRemove: (file: Attachment) => void }) {
+  if (!files.length) return null;
+  const total = files.reduce((sum, f) => sum + f.bytes, 0);
+  return <div className="pc-pending" aria-label="보낼 첨부">
+    <p className="pc-muted">첨부 {files.length}/{MAX_ATTACHMENTS} · {formatBytes(total)}/{MAX_ATTACHMENTS_BYTES / 1024}KiB · 보낼 때 Studio가 파일을 다시 확인합니다</p>
+    <ul>{files.map(f => <li key={f.id} className={f.changed ? "changed" : ""}>
+      <details>
+        <summary><FileText size={12} /><span title={f.name}>{f.name}</span><small>{formatBytes(f.bytes)}</small>{f.changed && <em>선택 후 바뀜 · 새 내용 확인</em>}</summary>
+        <pre aria-label={`${f.name} 미리보기`}>{f.text}</pre>
+      </details>
+      <button type="button" className="pc-icon subtle" aria-label={`${f.name} 첨부 제거`} disabled={busy} onClick={() => onRemove(f)}><X size={12} /></button>
+    </li>)}</ul>
+  </div>;
+}
+
 function HostedRequestCard({ item }: { item: ChatItem }) {
   const [copied, setCopied] = useState("");
   const copy = () => void invoke("copy_text", { text: item.prompt ?? "" })
@@ -79,6 +102,7 @@ function HostedRequestCard({ item }: { item: ChatItem }) {
   return <div className="pc-msg user peer hosted">
     <span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? "어시스턴트"}에게 기획 요청 · <code>{item.code}</code></span>
     <div className="pc-bubble">{item.text}</div>
+    <Attached files={item.attachments} />
     <div className="pc-hosted">
       <p>{item.peerName ?? "어시스턴트"}는 이름으로 메시지를 받을 수 없어서, 이 전달문을 그 앱에 붙여넣어야 합니다. 첫 줄에 코드를 붙여 Studio로 보낸 기획만 이 대화에 표시됩니다.</p>
       <details><summary>전달문 보기</summary><pre>{item.prompt}</pre></details>
@@ -92,7 +116,7 @@ function HostedRequestCard({ item }: { item: ChatItem }) {
 
 function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: (item: ChatItem) => void; onReply: (item: ChatItem) => void }) {
   switch (item.kind) {
-    case "user": return <div className="pc-msg user"><div className="pc-bubble">{item.text}</div></div>;
+    case "user": return <div className="pc-msg user"><div className="pc-bubble">{item.text}</div><Attached files={item.attachments} /></div>;
     case "assistant": return <div className="pc-msg assistant"><Markdown text={item.text} /></div>;
     case "thinking": return <details className="pc-thinking"><summary>생각</summary><p>{item.text}</p></details>;
     case "result": return <div className="pc-result">{item.text}</div>;
@@ -146,6 +170,7 @@ export function ProjectChat({ active }: Props) {
   const [projectId, setProjectId] = useState<string | null>(() => { try { return localStorage.getItem("toris.projects.project"); } catch { return null; } });
   const [threadId, setThreadId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [text, setText] = useState("");
   const [target, setTarget] = useState<string>("agent");
   const [newAgent, setNewAgent] = useState<ChatAgent>("claude");
@@ -229,9 +254,9 @@ export function ProjectChat({ active }: Props) {
   }, [active]);
 
   useEffect(() => {
-    if (!threadId) { setItems([]); return; }
+    if (!threadId) { setItems([]); setAttachments([]); return; }
     let alive = true;
-    void readThread(threadId).then(data => { if (alive) { setItems(data.items); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
+    void readThread(threadId).then(data => { if (alive) { setItems(data.items); setAttachments(data.attachments); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
     return () => { alive = false; };
   }, [threadId]);
   // An empty thread shows its start screen from the top; only a transcript follows its end.
@@ -281,6 +306,7 @@ export function ProjectChat({ active }: Props) {
     const linked = await linkWorktree(current.id, null).catch(async cause => { if (created) await deleteThread(current.id).catch(() => {}); throw cause; });
     if (!linked) { if (created) await deleteThread(current.id).catch(() => {}); return; }
     upsert(linked); setThreadId(linked.id); threadRef.current = linked.id; setChangesKey(k => k + 1);
+    setAttachments([]); // the host drops files picked from the previous folder
   });
   const newThread = () => { setThreadId(null); setTarget("agent"); inputRef.current?.focus(); };
 
@@ -349,11 +375,26 @@ export function ProjectChat({ active }: Props) {
     await loadLeftovers();
   });
   const projectLeftovers = leftovers.filter(l => l.projectId === projectId);
+  // Files come from the OS dialog in the host, inside this thread's work folder; the window keeps only IDs.
+  const attach = () => project && void run(async () => {
+    let current = thread;
+    const created = !current;
+    if (!current) current = await createThread(project.id, newAgent, newMode);
+    const picked = await attachFile(current.id, attachments).catch(async cause => { if (created) await deleteThread(current.id).catch(() => {}); throw cause; });
+    if (!picked) { if (created) await deleteThread(current.id).catch(() => {}); return; }
+    if (created) { upsert(current); setThreadId(current.id); threadRef.current = current.id; }
+    setAttachments(prev => [...prev.filter(a => a.id !== picked.id), picked]);
+  });
+  const detach = (file: Attachment) => thread && void run(async () => setAttachments(await detachFile(thread.id, file.id)));
+  const canAttach = attachmentsAllowed(target, !!replyTo);
+  const attachBlocked = attachmentBlock(attachments);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!project || !text.trim() || busy || thread?.running && target === "agent") return;
+    if (attachments.length && !canAttach) { setError("첨부는 구현 에이전트나 호스팅 어시스턴트 전달문에만 넣을 수 있습니다. 첨부를 빼거나 받는 쪽을 바꾸세요."); return; }
     const message = text;
+    const files = attachments;
     void run(async () => {
       let current = thread;
       if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); carryDraft.current = true; setThreadId(current.id); threadRef.current = current.id; }
@@ -361,11 +402,16 @@ export function ProjectChat({ active }: Props) {
         const sent = await askPeer(current.id, replyTo.peer, message, undefined, replyTo.messageId);
         setItems(prev => mergeItems(prev, sent));
         setReplyTo(null);
-      } else if (target === "agent") {
-        upsert(await sendMessage(current.id, message));
-      } else if (target.startsWith("hosted:")) {
-        const made = await askHosted(current.id, target.slice(7) as HostedAssistant, message);
-        setItems(prev => mergeItems(prev, made));
+      } else if (target === "agent" || target.startsWith("hosted:")) {
+        const id = current.id;
+        // A refused send (a file changed or no longer passes the checks) shows the host's current preview.
+        const refresh = async (cause: unknown) => { if (files.length) await readThread(id).then(data => setAttachments(data.attachments)).catch(() => {}); throw cause; };
+        if (target === "agent") upsert(await sendMessage(id, message, undefined, files).catch(refresh));
+        else {
+          const made = await askHosted(id, target.slice(7) as HostedAssistant, message, undefined, files).catch(refresh);
+          setItems(prev => mergeItems(prev, made));
+        }
+        setAttachments([]);
       } else {
         const sent = await askPeer(current.id, target, message);
         setItems(prev => mergeItems(prev, sent));
@@ -518,6 +564,8 @@ export function ProjectChat({ active }: Props) {
         <form className="pc-composer" onSubmit={submit}>
           {replyTo && <div className="pc-replying" role="status"><Reply size={13} />{replyTo.peerName ?? replyTo.peer}에게 답장 · Reason Network로 보내며, 상대는 check_inbox로 받습니다
             <button type="button" className="pc-icon subtle" aria-label="답장 취소" onClick={() => setReplyTo(null)}><X size={12} /></button></div>}
+          <PendingAttachments files={attachments} busy={busy} onRemove={detach} />
+          {!!attachments.length && !canAttach && <p className="pc-muted pc-attach-note" role="status">Reason Network 피어와 답장에는 첨부를 보낼 수 없습니다. 첨부를 빼거나 구현 에이전트·호스팅 어시스턴트를 고르세요.</p>}
           <textarea ref={inputRef} value={text} onChange={event => setText(event.target.value)} onKeyDown={onKey} rows={3}
             placeholder={replyTo ? "답장 내용을 입력하세요" : target.startsWith("hosted:") ? "어시스턴트에게 맡길 기획 요청을 입력하세요 (전달문을 만들어 드립니다)" : target === "agent" ? (mode === "plan" ? "질문하거나 기획을 요청하세요 (파일은 바꾸지 않습니다)" : "만들거나 고칠 내용을 입력하세요") : "기획자에게 보낼 요청을 입력하세요"} aria-label="메시지" />
           <div className="pc-composer-bar">
@@ -534,8 +582,10 @@ export function ProjectChat({ active }: Props) {
               </optgroup>
             </select>
             <button type="button" className="pc-icon" aria-label="Reason Network 에이전트 새로고침" onClick={() => void loadPeers()}><RefreshCw size={13} /></button>
+            <button type="button" className="social-button compact" disabled={busy || !canAttach || !!attachBlocked} onClick={attach}
+              title={!canAttach ? "구현 에이전트나 호스팅 어시스턴트에게 보낼 때만 첨부할 수 있습니다" : attachBlocked ?? "이 대화의 작업 폴더 안 UTF-8 텍스트 파일 (파일당 8KiB, 최대 4개·합계 16KiB)"}><Paperclip size={12} />파일 첨부</button>
             <span className="pc-hint">{replyTo ? "보낸 쪽에게만 답장" : target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : target.startsWith("hosted:") ? "전달문을 만들고, 코드가 붙은 답장을 이 대화에 표시" : "답장이 오면 이 대화에 표시"} · Enter 보내기</span>
-            <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !replyTo && !!thread?.running}>
+            <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !replyTo && !!thread?.running || !!attachments.length && !canAttach}>
               {busy ? <LoaderCircle size={14} className="social-spin" /> : <Send size={14} />}보내기</button>
           </div>
         </form>

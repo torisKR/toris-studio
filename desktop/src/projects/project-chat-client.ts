@@ -12,7 +12,14 @@ export type Project = { id: string; name: string; folder: string; addedAt: strin
 /** An existing git worktree of the project a thread works in; fixed once the thread starts. */
 export type Worktree = { path: string; branch: string | null; base: string; linkedAt: string };
 export type Thread = { id: string; projectId: string; title: string; agent: ChatAgent; mode: ChatMode; providerSession: string | null; createdAt: string; updatedAt: string; running: boolean; worktree: Worktree | null; previewUrl: string | null };
-export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; at: string };
+/** What a message's record keeps of a file it carried: the name relative to the work folder and its size. */
+export type AttachmentRef = { name: string; bytes: number };
+/** A file picked for the next message. The host keeps its path; the window holds only the ID. */
+export type Attachment = { id: string; name: string; bytes: number; text: string; changed: boolean };
+export const MAX_ATTACHMENTS = 4;
+export const MAX_ATTACHMENT_BYTES = 8 * 1024;
+export const MAX_ATTACHMENTS_BYTES = 16 * 1024;
+export type ChatItem = { id: string; kind: ItemKind; text: string; tool?: string; toolId?: string; isError?: boolean; peer?: string; peerName?: string; messageId?: string; code?: string; prompt?: string; attachments?: AttachmentRef[]; at: string };
 /** Hosted assistants reach Reason Network only through its MCP server and cannot be messaged by name. */
 export const HOSTED_ASSISTANTS = ["muse", "dots", "grok"] as const;
 export type HostedAssistant = typeof HOSTED_ASSISTANTS[number];
@@ -65,7 +72,35 @@ export function normalizeItem(value: unknown): ChatItem | null {
   if (str(r.peerName)) item.peerName = str(r.peerName);
   if (str(r.code)) item.code = str(r.code);
   if (str(r.prompt)) item.prompt = str(r.prompt);
+  const attached = compact(list(r.attachments).map(normalizeAttachmentRef));
+  if (attached.length) item.attachments = attached;
   return item;
+}
+const size = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+export function normalizeAttachmentRef(value: unknown): AttachmentRef | null {
+  const r = rec(value);
+  const bytes = size(r.bytes);
+  return str(r.name) && bytes !== null ? { name: str(r.name), bytes } : null;
+}
+export function normalizeAttachment(value: unknown): Attachment | null {
+  const r = rec(value);
+  const bytes = size(r.bytes);
+  if (!/^[0-9a-f-]{36}$/i.test(str(r.id)) || !str(r.name) || bytes === null || bytes > MAX_ATTACHMENT_BYTES) return null;
+  return { id: str(r.id), name: str(r.name), bytes, text: str(r.text), changed: r.changed === true };
+}
+/** "3.1KiB" style size for a byte count. */
+export function formatBytes(bytes: number): string {
+  return bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)}KiB`;
+}
+/** Why another file cannot be picked now, or null when there is room (the host checks again). */
+export function attachmentBlock(current: Attachment[]): string | null {
+  if (current.length >= MAX_ATTACHMENTS) return `첨부는 메시지당 ${MAX_ATTACHMENTS}개까지입니다.`;
+  if (current.reduce((sum, a) => sum + a.bytes, 0) >= MAX_ATTACHMENTS_BYTES) return `첨부 합계가 ${MAX_ATTACHMENTS_BYTES / 1024}KiB에 이르렀습니다.`;
+  return null;
+}
+/** Attachments go to the implementation agent or into a hosted assistant's prompt, not to Reason Network peers. */
+export function attachmentsAllowed(target: string, replying: boolean): boolean {
+  return !replying && (target === "agent" || target.startsWith("hosted:"));
 }
 const compact = <T,>(values: (T | null)[]) => values.filter((v): v is T => v !== null);
 
@@ -129,12 +164,27 @@ export async function createThread(projectId: string, agent: ChatAgent, mode: Ch
   if (!thread) throw new Error("대화를 만들지 못했습니다.");
   return thread;
 }
-export async function readThread(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<{ thread: Thread; items: ChatItem[] }> {
+export async function readThread(threadId: string, call: BridgeInvoke = nativeInvoke): Promise<{ thread: Thread; items: ChatItem[]; attachments: Attachment[] }> {
   const r = rec(await call("project_chat_thread_get", { input: { threadId } }));
   const thread = normalizeThread(r.thread);
   if (!thread) throw new Error("대화를 찾지 못했습니다.");
-  return { thread, items: compact(list(r.items).map(normalizeItem)) };
+  return { thread, items: compact(list(r.items).map(normalizeItem)), attachments: compact(list(r.attachments).map(normalizeAttachment)) };
 }
+/** The host picks a text file inside the thread's work folder in an OS dialog and checks it. Null when cancelled. */
+export async function attachFile(threadId: string, current: Attachment[], call: BridgeInvoke = nativeInvoke): Promise<Attachment | null> {
+  const blocked = attachmentBlock(current);
+  if (blocked) throw new Error(blocked);
+  const r = rec(await call("project_chat_attach", { input: { threadId } }));
+  if (r.cancelled !== false) return null;
+  const attachment = normalizeAttachment(r.attachment);
+  if (!attachment) throw new Error("파일을 첨부하지 못했습니다.");
+  return attachment;
+}
+/** Drops a picked file; returns the thread's remaining attachments. */
+export async function detachFile(threadId: string, attachmentId: string, call: BridgeInvoke = nativeInvoke): Promise<Attachment[]> {
+  return compact(list(await call("project_chat_detach", { input: { threadId, attachmentId } })).map(normalizeAttachment));
+}
+const withIds = <T extends Rec>(input: T, attachments: Attachment[]) => attachments.length ? { ...input, attachments: attachments.map(a => a.id) } : input;
 export async function updateThread(threadId: string, change: { mode?: ChatMode; agent?: ChatAgent; title?: string }, call: BridgeInvoke = nativeInvoke): Promise<Thread> {
   const thread = normalizeThread(await call("project_chat_thread_update", { input: { threadId, ...change } }));
   if (!thread) throw new Error("대화를 바꾸지 못했습니다.");
@@ -149,9 +199,9 @@ export async function setThreadPreview(threadId: string, url: string, call: Brid
 export async function deleteThread(threadId: string, call: BridgeInvoke = nativeInvoke) {
   await call("project_chat_thread_delete", { input: { threadId } });
 }
-export async function sendMessage(threadId: string, text: string, call: BridgeInvoke = nativeInvoke): Promise<Thread> {
+export async function sendMessage(threadId: string, text: string, call: BridgeInvoke = nativeInvoke, attachments: Attachment[] = []): Promise<Thread> {
   if (!text.trim()) throw new Error("보낼 내용을 입력하세요.");
-  const thread = normalizeThread(await call("project_chat_send", { input: { threadId, text } }));
+  const thread = normalizeThread(await call("project_chat_send", { input: withIds({ threadId, text }, attachments) }));
   if (!thread) throw new Error("대화 상태를 확인하지 못했습니다.");
   return thread;
 }
@@ -165,10 +215,10 @@ export async function askPeer(threadId: string, peer: string, text: string, call
   return compact(list(await call("project_chat_ask_peer", { input })).map(normalizeItem));
 }
 /** Records a request for a hosted assistant; the returned item carries the prompt to copy into it. */
-export async function askHosted(threadId: string, assistant: HostedAssistant, text: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {
+export async function askHosted(threadId: string, assistant: HostedAssistant, text: string, call: BridgeInvoke = nativeInvoke, attachments: Attachment[] = []): Promise<ChatItem[]> {
   if (!HOSTED_ASSISTANTS.includes(assistant)) throw new Error("기획을 맡길 어시스턴트를 고르세요.");
   if (!text.trim()) throw new Error("기획 요청을 입력하세요.");
-  return compact(list(await call("project_chat_hosted_request", { input: { threadId, assistant, text } })).map(normalizeItem));
+  return compact(list(await call("project_chat_hosted_request", { input: withIds({ threadId, assistant, text }, attachments) })).map(normalizeItem));
 }
 /** Files a message from Studio's Reason Network inbox in this thread; the host reads its sender and text. */
 export async function linkMessage(threadId: string, messageId: string, call: BridgeInvoke = nativeInvoke): Promise<ChatItem[]> {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, type Attachment
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -239,4 +239,52 @@ test("leftover creations are listed with the host's guidance and resolved by ID"
   assert.equal(await resumeWorktree("r1", "t9", r.call), null);
   await forgetWorktree("r1", r.call);
   assert.deepEqual(r.calls, [["project_chat_worktree_resume", { input: { recordId: "r1", threadId: "t9" } }], ["project_chat_worktree_forget", { input: { recordId: "r1" } }]]);
+});
+
+const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const att = (n: number, bytes = 10, extra: Partial<Attachment> = {}): Attachment => ({ id: ID(n), name: `f${n}.txt`, bytes, text: "x", changed: false, ...extra });
+
+test("attaching asks the host to pick a file and keeps only what it describes; the window never sends a path", async () => {
+  const picked = recorder({ cancelled: false, attachment: { id: ID(1), name: "src/a.ts", bytes: 12, text: "const a = 1;", changed: false, path: "/etc/passwd" } });
+  const file = await attachFile("t1", [], picked.call);
+  assert.deepEqual(file, { id: ID(1), name: "src/a.ts", bytes: 12, text: "const a = 1;", changed: false });
+  assert.deepEqual(picked.calls, [["project_chat_attach", { input: { threadId: "t1" } }]]);
+  assert.equal(await attachFile("t1", [], recorder({ cancelled: true }).call), null);
+  await assert.rejects(attachFile("t1", [], recorder({ cancelled: false, attachment: { id: "x", name: "a", bytes: 1 } }).call), /첨부하지 못했습니다/);
+  await assert.rejects(attachFile("t1", [], recorder({ cancelled: false, attachment: { id: ID(2), name: "a", bytes: 9000 } }).call), "over 8KiB is not a valid attachment");
+  const full = recorder({});
+  await assert.rejects(attachFile("t1", [att(1), att(2), att(3), att(4)], full.call), /4개/);
+  await assert.rejects(attachFile("t1", [att(1, 8192), att(2, 8192)], full.call), /16KiB/);
+  assert.deepEqual(full.calls, [], "limits are checked before the dialog opens");
+  const left = recorder([{ id: ID(2), name: "b.md", bytes: 3, text: "hey", changed: true }, { id: "bad" }]);
+  assert.deepEqual(await detachFile("t1", ID(1), left.call), [{ id: ID(2), name: "b.md", bytes: 3, text: "hey", changed: true }]);
+  assert.deepEqual(left.calls, [["project_chat_detach", { input: { threadId: "t1", attachmentId: ID(1) } }]]);
+});
+
+test("sending carries attachment IDs only, to the agent or into a hosted prompt", async () => {
+  const files = [att(1, 100, { text: "secret text" }), att(2)];
+  const sent = recorder({ id: "t1", projectId: "p1", agent: "claude", mode: "edit", running: true });
+  await sendMessage("t1", "고쳐줘", sent.call, files);
+  assert.deepEqual(sent.calls, [["project_chat_send", { input: { threadId: "t1", text: "고쳐줘", attachments: [ID(1), ID(2)] } }]]);
+  await sendMessage("t1", "고쳐줘", sent.call);
+  assert.deepEqual(sent.calls[1], ["project_chat_send", { input: { threadId: "t1", text: "고쳐줘" } }], "no attachments, no field");
+  const hosted = recorder([{ id: "h1", kind: "hosted_request", text: "기획", attachments: [{ name: "f1.txt", bytes: 100 }, { name: "", bytes: 1 }, { name: "x", bytes: -1 }], at: "x" }]);
+  const [made] = await askHosted("t1", "dots", "기획", hosted.call, files);
+  assert.deepEqual(hosted.calls, [["project_chat_hosted_request", { input: { threadId: "t1", assistant: "dots", text: "기획", attachments: [ID(1), ID(2)] } }]]);
+  assert.deepEqual(made.attachments, [{ name: "f1.txt", bytes: 100 }], "a recorded message keeps names and sizes it can describe");
+  assert.equal(normalizeItem({ id: "u", kind: "user", text: "hi", at: "x" })?.attachments, undefined, "older records have none");
+  const read = await readThread("t1", recorder({ thread: { id: "t1", projectId: "p1", agent: "claude", mode: "edit" }, items: [], attachments: [{ id: ID(3), name: "c.md", bytes: 2, text: "hi", changed: true }, { id: ID(4) }] }).call);
+  assert.deepEqual(read.attachments, [{ id: ID(3), name: "c.md", bytes: 2, text: "hi", changed: true }], "picked files come back after a reload");
+});
+
+test("attachment limits and targets", () => {
+  assert.equal(attachmentBlock([]), null);
+  assert.equal(attachmentBlock([att(1, 8192), att(2, 8191)]), null);
+  assert.match(attachmentBlock([att(1, 8192), att(2, 8192)]) ?? "", /16KiB/);
+  assert.match(attachmentBlock([att(1), att(2), att(3), att(4)]) ?? "", /4개/);
+  assert.equal(attachmentsAllowed("agent", false), true);
+  assert.equal(attachmentsAllowed("hosted:muse", false), true);
+  assert.equal(attachmentsAllowed("peer-1", false), false, "Reason Network peers get no files");
+  assert.equal(attachmentsAllowed("agent", true), false, "nor do replies");
+  assert.deepEqual([formatBytes(12), formatBytes(3200), formatBytes(16384)], ["12B", "3.1KiB", "16KiB"]);
 });
