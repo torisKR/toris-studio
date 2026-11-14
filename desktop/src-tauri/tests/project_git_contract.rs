@@ -195,9 +195,13 @@ fn project_git_commits_new_deleted_and_oddly_named_files() {
     fs::write(rig.wt.join("*.txt"), "star\n").unwrap();
     fs::remove_file(rig.wt.join("gone.txt")).unwrap();
     fs::write(rig.wt.join("run.sh"), "#!/bin/sh\n").unwrap();
-    let mut perms = fs::metadata(rig.wt.join("run.sh")).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    fs::set_permissions(rig.wt.join("run.sh"), perms).unwrap();
+    // The executable bit exists only on unix; elsewhere run.sh is a plain new file.
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(rig.wt.join("run.sh")).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        fs::set_permissions(rig.wt.join("run.sh"), perms).unwrap();
+    }
 
     let r = review(&rig.chat, &rig.thread).unwrap();
     let odd_path = format!("src/새 폴더/{odd}");
@@ -209,6 +213,7 @@ fn project_git_commits_new_deleted_and_oddly_named_files() {
     let new = r.files.iter().find(|f| f.path == odd_path).unwrap();
     assert_eq!(new.change, "added");
     assert!(new.diff.contains("+odd"));
+    #[cfg(unix)]
     assert!(r
         .files
         .iter()
@@ -253,10 +258,9 @@ fn project_git_commits_new_deleted_and_oddly_named_files() {
     want.sort();
     assert_eq!(names, want);
     let tree = git(&rig.wt, &["ls-tree", "-r", &done.sha]);
-    assert!(
-        tree.contains("100755 blob") && tree.contains("run.sh"),
-        "{tree}"
-    );
+    assert!(tree.contains("run.sh"), "{tree}");
+    #[cfg(unix)]
+    assert!(tree.contains("100755 blob"), "{tree}");
     // The `*.txt` file was not picked: a literal path never matched it as a glob.
     assert_eq!(status(&rig.wt), "?? *.txt\n");
     assert!(!rig.wt.join("x").exists(), "nothing in a name ran");
@@ -340,14 +344,19 @@ fn project_git_refuses_paths_outside_the_list_links_and_bad_names() {
     let rig = rig();
     fs::write(rig.wt.join("a.txt"), "a changed\n").unwrap();
     fs::write(rig.wt.parent().unwrap().join("outside.txt"), "x\n").unwrap();
+    // Making a symbolic link needs extra rights on Windows: the link part runs on unix.
+    #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/hosts", rig.wt.join("link.txt")).unwrap();
     let r = review(&rig.chat, &rig.thread).unwrap();
-    let link = r.files.iter().find(|f| f.path == "link.txt").unwrap();
-    assert!(
-        link.refused.as_deref().unwrap().contains("링크"),
-        "{link:?}"
-    );
-    assert!(link.fingerprint.is_empty());
+    #[cfg(unix)]
+    {
+        let link = r.files.iter().find(|f| f.path == "link.txt").unwrap();
+        assert!(
+            link.refused.as_deref().unwrap().contains("링크"),
+            "{link:?}"
+        );
+        assert!(link.fingerprint.is_empty());
+    }
 
     for (path, fingerprint) in [
         ("../outside.txt", "100644:0"),
@@ -446,9 +455,13 @@ fn project_git_failed_commit_changes_nothing_and_runs_no_hooks() {
     ] {
         let path = hooks.join(hook);
         fs::write(&path, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        let mut perms = fs::metadata(&path).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-        fs::set_permissions(&path, perms).unwrap();
+        // Git for Windows runs a hook without an executable bit.
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&path).unwrap().permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+            fs::set_permissions(&path, perms).unwrap();
+        }
     }
     git(
         &rig.app,
