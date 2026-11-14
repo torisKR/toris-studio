@@ -194,6 +194,32 @@ test("a factory run uses the agent model when its JSON passes and labels a templ
   assert.equal(bad.calls.length, 2);
 });
 
+test("a mobile run waits for Mac approval before calling an external model", async () => {
+  const root = tempRoot();
+  let calls = 0;
+  const model: ChatModel = {
+    provider: "openai", model: "fixture",
+    complete: async ({ signal }) => {
+      calls++;
+      return new Promise<string>((_resolve, reject) => signal?.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true }));
+    },
+  };
+  const manager = new RunManager(() => parseSettings({ projectsRoot: root, chromaUrl: "http://127.0.0.1:9" }), () => {}, () => model);
+  const started = manager.start("", BRIEF, "game-factory", { brief: BRIEF }, "85b9a687-e03d-4a60-b543-50090385a127", "mobile");
+  for (let i = 0; i < 100 && !manager.get(started.runId).approvals.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  const approval = manager.get(started.runId).approvals[0];
+  assert.equal(approval?.kind, "factory_gate");
+  if (approval?.kind !== "factory_gate") throw new Error("missing factory approval");
+  assert.equal(approval.gate, "paid_api");
+  assert.equal(calls, 0);
+  await manager.resume(started.runId, { actionId: approval.id, decision: "approve" });
+  for (let i = 0; i < 100 && calls === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(calls, 1);
+  manager.cancel(started.runId);
+  await manager.settled(started.runId);
+  manager.shutdown();
+});
+
 async function run(root: string, model: ChatModel, input: Record<string, unknown>) {
   mkdirSync(root, { recursive: true });
   const events: string[] = [];

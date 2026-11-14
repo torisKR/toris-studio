@@ -22,6 +22,16 @@ pub mod legacy_cleanup;
 pub mod mcp_bridge;
 pub mod media;
 pub mod media_runtime;
+#[cfg(target_os = "macos")]
+pub mod mobile_host;
+#[cfg(feature = "desktop")]
+mod mobile_native;
+#[cfg(target_os = "macos")]
+pub mod mobile_pairing;
+#[cfg(target_os = "macos")]
+pub mod mobile_registry;
+#[cfg(target_os = "macos")]
+pub mod mobile_service;
 pub mod models;
 pub mod motion;
 pub mod motion_ai;
@@ -60,6 +70,13 @@ pub mod publication_media;
 mod publication_native;
 pub mod publishing;
 pub mod publishing_adapters;
+pub mod reason_agents;
+#[cfg(feature = "desktop")]
+mod reason_native;
+pub mod reason_network;
+pub mod reason_pipeline;
+pub mod reason_project;
+pub mod reason_video;
 pub mod scheduler;
 pub mod social;
 #[cfg(any(feature = "desktop", test))]
@@ -721,7 +738,14 @@ mod desktop {
     }
     pub fn launch(config: config::AppConfig) {
         let state = Arc::new(AppState::new(config));
-        tauri::Builder::default()
+        let runtime = agent_runtime::shared();
+        // An explicit debug-only QA run must not trigger the user's scheduled
+        // uploads, collection, synchronization, or recovery while testing pairing.
+        let suspend_automation = cfg!(all(debug_assertions, target_os = "macos"))
+            && std::env::var("TORIS_MOBILE_QA_NO_AUTOMATION").as_deref() == Ok("1");
+        #[cfg(target_os = "macos")]
+        let mobile = Arc::new(crate::mobile_host::MobileHost::new(runtime.clone()));
+        let builder = tauri::Builder::default()
             .plugin(tauri_plugin_single_instance::init(|app, _, _| {
                 crate::tray::show(app)
             }))
@@ -731,20 +755,41 @@ mod desktop {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .manage(state.clone())
             .manage(updater::shared())
-            .manage(agent_runtime::shared())
+            .manage(runtime)
             .manage(tts_runtime::shared())
             .manage(video_runtime::shared())
             .manage(production::shared())
+            .manage(reason_network::shared())
+            .manage(Arc::new(reason_agents::ReasonAgents::default()))
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
                 native_windows::protocol,
-            )
+            );
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .manage(mobile)
+            .register_asynchronous_uri_scheme_protocol(
+                "toris-mobile",
+                crate::mobile_native::qr_protocol,
+            );
+        builder
             .on_window_event(|window, event| {
                 use tauri::Manager;
                 if window.label() == "main" {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
+                        #[cfg(target_os = "macos")]
+                        {
+                            let host = window
+                                .app_handle()
+                                .state::<Arc<crate::mobile_host::MobileHost>>()
+                                .inner()
+                                .clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = host.close_pairing().await;
+                            });
+                        }
                         if window
                             .app_handle()
                             .state::<Arc<updater::UpdateController>>()
@@ -765,7 +810,9 @@ mod desktop {
                     productions.set_emitter(Arc::new(move |event| {
                         let _ = handle.emit_to("main", "production-event", event);
                     }));
-                    productions.recover_all();
+                    if !suspend_automation {
+                        productions.recover_all();
+                    }
                 }
                 {
                     use tauri::{Emitter, Manager};
@@ -775,112 +822,115 @@ mod desktop {
                             let _ = handle.emit_to("main", "agent-event", event);
                         }));
                 }
-                // Independent from uploads: a resume during a long request must
-                // still invalidate other reservations missed while asleep.
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        crate::publications::heartbeat();
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    }
-                });
-                let publishing_state = state.clone();
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Emitter;
-                    let _ = crate::legacy_cleanup::retire().await;
-                    let mut last_error = None;
-                    let mut database = None;
-                    let mut schema_ready = false;
-                    let mut schema_attempt = None;
-                    loop {
-                        let config = publishing_state.config_snapshot().await;
-                        if database != config.database_url {
-                            database = config.database_url.clone();
-                            schema_ready = false;
-                            schema_attempt = None;
+                if !suspend_automation {
+                    // Independent from uploads: a resume during a long request must
+                    // still invalidate other reservations missed while asleep.
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            crate::publications::heartbeat();
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                         }
-                        if config.database_url.is_some() {
-                            let outcome = if !schema_ready
-                                && schema_attempt.is_none_or(|last: std::time::Instant| {
-                                    last.elapsed().as_secs() >= 60
-                                }) {
-                                schema_attempt = Some(std::time::Instant::now());
-                                match crate::ops::migrate_configured_publications(&config).await {
-                                    Ok(()) => {
-                                        schema_ready = true;
-                                        crate::publications::tick(&config).await
-                                    }
-                                    Err(message) => Err(message),
-                                }
-                            } else if schema_ready {
-                                crate::publications::tick(&config).await
-                            } else {
-                                Ok(())
-                            };
-                            match outcome {
-                                Err(message) => {
-                                    if last_error.as_ref() != Some(&message) {
-                                        let _ = app_handle.emit_to(
-                                            "main",
-                                            "publication-runtime-error",
-                                            &message,
-                                        );
-                                        last_error = Some(message);
-                                    }
-                                }
-                                Ok(()) if schema_ready => last_error = None,
-                                Ok(()) => {}
+                    });
+                    let publishing_state = state.clone();
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        use tauri::Emitter;
+                        let _ = crate::legacy_cleanup::retire().await;
+                        let mut last_error = None;
+                        let mut database = None;
+                        let mut schema_ready = false;
+                        let mut schema_attempt = None;
+                        loop {
+                            let config = publishing_state.config_snapshot().await;
+                            if database != config.database_url {
+                                database = config.database_url.clone();
+                                schema_ready = false;
+                                schema_attempt = None;
                             }
-                            let _ = app_handle.emit_to(
-                                "main",
-                                "publication-scheduler-status",
-                                crate::publications::scheduler_status(),
-                            );
+                            if config.database_url.is_some() {
+                                let outcome = if !schema_ready
+                                    && schema_attempt.is_none_or(|last: std::time::Instant| {
+                                        last.elapsed().as_secs() >= 60
+                                    }) {
+                                    schema_attempt = Some(std::time::Instant::now());
+                                    match crate::ops::migrate_configured_publications(&config).await
+                                    {
+                                        Ok(()) => {
+                                            schema_ready = true;
+                                            crate::publications::tick(&config).await
+                                        }
+                                        Err(message) => Err(message),
+                                    }
+                                } else if schema_ready {
+                                    crate::publications::tick(&config).await
+                                } else {
+                                    Ok(())
+                                };
+                                match outcome {
+                                    Err(message) => {
+                                        if last_error.as_ref() != Some(&message) {
+                                            let _ = app_handle.emit_to(
+                                                "main",
+                                                "publication-runtime-error",
+                                                &message,
+                                            );
+                                            last_error = Some(message);
+                                        }
+                                    }
+                                    Ok(()) if schema_ready => last_error = None,
+                                    Ok(()) => {}
+                                }
+                                let _ = app_handle.emit_to(
+                                    "main",
+                                    "publication-scheduler-status",
+                                    crate::publications::scheduler_status(),
+                                );
+                            }
+                            tokio::select! {
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {},
+                                _ = crate::PUBLICATION_WAKE.notified() => {},
+                            }
                         }
-                        tokio::select! {
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {},
-                            _ = crate::PUBLICATION_WAKE.notified() => {},
+                    });
+                    let calendar_state = state.clone();
+                    let ops_state = state.clone();
+                    let state = state.clone();
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            scheduler::tick(state.clone()).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                         }
-                    }
-                });
-                let calendar_state = state.clone();
-                let ops_state = state.clone();
-                let state = state.clone();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        scheduler::tick(state.clone()).await;
-                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                    }
-                });
-                let analytics_state = app.state::<Arc<AppState>>().inner().clone();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        let config = analytics_state.config_snapshot().await;
-                        oauth_native::cleanup_disconnected(&config).await;
-                        let _ = analytics::sync_due(&config).await;
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    }
-                });
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        let _ = oauth::refresh_due().await;
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    }
-                });
-                tauri::async_runtime::spawn(async move {
-                    // Every 5 minutes; a missing DB or Google connection just records the reason.
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                        let _ = crate::planner_native::sync_once(&calendar_state).await;
-                    }
-                });
-                tauri::async_runtime::spawn(async move {
-                    // Read-only status every 15 minutes; failures are stored as error snapshots.
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(900)).await;
-                        let _ = crate::ops_native::refresh_once(&ops_state).await;
-                    }
-                });
+                    });
+                    let analytics_state = app.state::<Arc<AppState>>().inner().clone();
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            let config = analytics_state.config_snapshot().await;
+                            oauth_native::cleanup_disconnected(&config).await;
+                            let _ = analytics::sync_due(&config).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        }
+                    });
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            let _ = oauth::refresh_due().await;
+                            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        }
+                    });
+                    tauri::async_runtime::spawn(async move {
+                        // Every 5 minutes; a missing DB or Google connection just records the reason.
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                            let _ = crate::planner_native::sync_once(&calendar_state).await;
+                        }
+                    });
+                    tauri::async_runtime::spawn(async move {
+                        // Read-only status every 15 minutes; failures are stored as error snapshots.
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+                            let _ = crate::ops_native::refresh_once(&ops_state).await;
+                        }
+                    });
+                }
                 Ok(())
             })
             .invoke_handler({
@@ -895,7 +945,12 @@ mod desktop {
             .expect("Toris Studio application runtime failed")
             .run(|app, event| {
                 if let tauri::RunEvent::Exit = event {
+                    #[cfg(target_os = "macos")]
+                    app.state::<Arc<crate::mobile_host::MobileHost>>()
+                        .shutdown();
                     crate::publications::shutdown_media();
+                    app.state::<Arc<reason_agents::ReasonAgents>>().shutdown();
+                    app.state::<Arc<reason_network::ReasonNetwork>>().shutdown();
                     app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();
                     app.state::<Arc<tts_runtime::TtsRuntime>>().shutdown();
                     app.state::<Arc<video_runtime::VideoRuntime>>().shutdown();

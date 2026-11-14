@@ -35,6 +35,8 @@ export interface RunContext {
   info: ProjectInfo;
   /** Data the host passed with run.start (workflows without a project read only this). */
   input: Record<string, unknown>;
+  /** Set only by the native host for a request authenticated as a mobile device. */
+  origin?: "mobile";
   searchPath: string[];
   secrets: string[];
   signal: AbortSignal;

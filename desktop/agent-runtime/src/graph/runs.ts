@@ -30,6 +30,9 @@ export type RunSummary = {
   changes: string[];
   summary: string;
   events: RunEvent[];
+  /** Last event sequence is available even when the list omits event bodies. */
+  lastSeq?: number;
+  interrupted?: boolean;
 };
 
 type Waiter = (decision: ApprovalDecision) => void;
@@ -68,7 +71,15 @@ export class RunManager {
    * Starts a run. Workflows that need a project get its folder, file list and code search;
    * the others get no folder at all and read only `input` from the host.
    */
-  start(project: string, task: string, workflow = "coding", input: Record<string, unknown> = {}): RunSummary {
+  start(project: string, task: string, workflow = "coding", input: Record<string, unknown> = {}, hostRunId?: string, origin?: "mobile"): RunSummary {
+    if (hostRunId) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(hostRunId)) throw new UserError("작업 ID를 확인하세요.");
+      const existing = this.runs.get(hostRunId);
+      if (existing) {
+        if (existing.workflow !== workflow || existing.task !== task) throw new UserError("이미 사용한 작업 ID입니다.");
+        return this.view(existing, true);
+      }
+    }
     let spec;
     try { spec = this.workflows.get(workflow); } catch (error) { throw new UserError(errorText(error)); }
     if (spec.needsProject && !task.trim()) throw new UserError("에이전트에게 맡길 작업을 입력하세요.");
@@ -89,7 +100,7 @@ export class RunManager {
     }
     const index = new ProjectIndex(settings);
     const controller = new AbortController();
-    const runId = randomUUID();
+    const runId = hostRunId ?? randomUUID();
     let files: string[] | null = null;
     const secrets = Object.values(settings.keys).filter((v): v is string => Boolean(v));
     const now = new Date().toISOString();
@@ -105,7 +116,7 @@ export class RunManager {
       },
     };
     const ctx: RunContext = {
-      model: traced, projectRoot: root, projectsRoot: settings.projectsRoot, info, input, searchPath: settings.searchPath, secrets, signal: controller.signal,
+      model: traced, projectRoot: root, projectsRoot: settings.projectsRoot, info, input, origin, searchPath: settings.searchPath, secrets, signal: controller.signal,
       emit: (agent, phase, message, extra = {}) => this.emit(run, agent, phase, message, extra),
       approve: (action, message) => this.wait(run, action, message),
       search: async query => {
@@ -219,7 +230,8 @@ export class RunManager {
 
   private view(run: Run, events: boolean): RunSummary {
     const { runId, workflow, project, task, phase, agent, createdAt, updatedAt, approvals, changes, summary } = run;
-    return { runId, workflow, project, task, phase, agent, createdAt, updatedAt, approvals, changes, summary, events: events ? run.events : [] };
+    const interrupted = phase === "failed" && run.events.at(-1)?.message === "앱이 꺼져 작업이 멈췄습니다. 같은 작업을 다시 시작하세요.";
+    return { runId, workflow, project, task, phase, agent, createdAt, updatedAt, approvals, changes, summary, events: events ? run.events : [], lastSeq: run.seq, interrupted };
   }
   private require(runId: string): Run {
     const run = this.runs.get(runId);

@@ -109,6 +109,8 @@ test("hub runs are started and resumed by the host only", async () => {
   const runtime = new Runtime(event => out.push(event));
   runtime.settings = parseSettings({ projectsRoot: tmpdir(), chromaUrl: "http://127.0.0.1:9" });
   await assert.rejects(runtime.handle("run.start", { workflow: "ops-triage", input: { products: [] } }), /Studio 화면에서만/);
+  await assert.rejects(runtime.handle("run.start", { workflow: "coding", runId: id(9), host: true }), /팩토리 호스트만/);
+  await assert.rejects(runtime.handle("run.start", { workflow: "game-factory", origin: "mobile", host: true }), /작업 출처/);
   const run = await runtime.handle("run.start", { workflow: "ops-triage", input: { products: [] }, host: true }) as { runId: string };
   await assert.rejects(runtime.handle("run.resume", { runId: run.runId, actionId: "x", decision: "approve" }), /Studio 화면에서 처리/);
   await assert.rejects(runtime.handle("run.start", { workflow: "nope", host: true }), /알 수 없는 워크플로/);

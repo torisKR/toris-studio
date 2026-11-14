@@ -1,5 +1,6 @@
 import { MotionStudio } from "./motion/MotionStudio";
 import { ProductionStudio } from "./production/ProductionStudio";
+import type { ProductionSelection } from "./reason/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { openRenderPreview } from "./native-windows";
 import {
@@ -32,7 +33,7 @@ type PendingProject = { kind: "new" } | { kind: "select"; project: StudioVideoPr
 type Notice = { text: string; tone: "success" | "error" | "info" };
 type RenderOperation = { channel: Channel<VideoRenderProgressMessage> | null; session: ReturnType<typeof createRenderProgressSession> | null };
 type AiStatus = { providers: Array<{ id: string; label: string; available: boolean; detail: string }>; defaultProvider: string | null };
-type Props = { active: boolean; researchSeed?: VideoResearchSeed | null; onResearchSeedHandled?: (requestId: string) => void; onOpenKeywords?: () => void; onOpenSettings?: () => void };
+type Props = { active: boolean; productionSelection?: ProductionSelection | null; researchSeed?: VideoResearchSeed | null; onResearchSeedHandled?: (requestId: string) => void; onOpenKeywords?: () => void; onOpenSettings?: () => void };
 /** A finished AI production handed to the editor as its own saved project. */
 type EditorHandoff = { requestId: number; project: Record<string, unknown> };
 const sourceLabels: Record<string, string> = { youtube: "YouTube", naver_blog: "네이버 블로그", google_trends: "Google 트렌드" };
@@ -755,10 +756,11 @@ export function VideoPanel(props: Props) {
  const show=(next:"production"|"legacy"|"graphics")=>{if(next!=="production")setOpened(o=>({...o,[next]:true}));setMode(next);};
  const editInEditor=(project:Record<string,unknown>)=>{setHandoff(h=>({requestId:(h?.requestId??0)+1,project}));show("legacy");};
  useEffect(()=>{if(props.researchSeed){setOpened(o=>({...o,legacy:true}));setMode("legacy");}},[props.researchSeed]);
+ useEffect(()=>{if(props.productionSelection)setMode("production");},[props.productionSelection]);
  const others=<><button type="button" aria-pressed={mode==="legacy"} onClick={()=>show("legacy")}>직접 편집</button><button type="button" aria-pressed={mode==="graphics"} onClick={()=>show("graphics")}>모션 그래픽</button></>;
  return <>
   {mode!=="production"&&<nav className="video-mode-back" aria-label="영상 제작 모드"><button type="button" onClick={()=>show("production")}><ArrowRight size={14} style={{transform:"rotate(180deg)"}} aria-hidden="true"/>주제 → AI 영상</button>{others}</nav>}
-  <div hidden={mode!=="production"}><ProductionStudio active={props.active&&mode==="production"} onOpenSettings={props.onOpenSettings} onEditInEditor={editInEditor}/><nav className="video-alt-modes" aria-label="영상 제작 모드"><span>다른 방식으로 만들기</span>{others}</nav></div>
+  <div hidden={mode!=="production"}><ProductionStudio active={props.active&&mode==="production"} selection={props.productionSelection} onOpenSettings={props.onOpenSettings} onEditInEditor={editInEditor}/><nav className="video-alt-modes" aria-label="영상 제작 모드"><span>다른 방식으로 만들기</span>{others}</nav></div>
   <div hidden={mode!=="legacy"}>{opened.legacy&&<LegacyVideoPanel {...props} handoff={handoff} active={props.active&&mode==="legacy"}/>}</div>
   <div hidden={mode!=="graphics"}>{opened.graphics&&<MotionStudio active={props.active&&mode==="graphics"}/>}</div>
  </>;

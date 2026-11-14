@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nativeInvoke } from "./ai-client";
 import { AgentRunView } from "./AgentRunView";
 import { AgentSettingsCard } from "./AgentSettingsCard";
+import { ReasonNetworkPanel } from "./reason/ReasonNetworkPanel";
 import { HUB_WORKFLOWS, PHASE_LABELS, agentCall, applyEvent, bufferEarlyEvent, decide as decideAction, loadPanel, runTitle, startHub, type HubWorkflow, type IndexEvent, type IndexStatus, type PendingAction, type ProjectInfo, type RunEvent, type RunSummary, type RuntimeStatus, type SettingsView } from "./agent-client";
 import "./AgentPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function AgentPanel({ active }: { active: boolean }) {
+export function AgentPanel({ active, onOpenProduction }: { active: boolean; onOpenProduction: (jobId: string) => void }) {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -118,6 +119,7 @@ export function AgentPanel({ active }: { active: boolean }) {
     {error && <div className="social-notice error" role="alert"><span>{error}</span></div>}
     {notice && <div className="social-notice success" role="status"><span>{notice}</span></div>}
 
+    <ReasonNetworkPanel active={active} onOpenProduction={onOpenProduction} />
     <div className="agent-layout">
       <div className="agent-column">
         <section className="agent-card" aria-label="프로젝트">

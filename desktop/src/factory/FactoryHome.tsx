@@ -1,11 +1,11 @@
 import { LoaderCircle, Play, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { RunSummary } from "../agent-client";
+import { PHASE_LABELS, type RunSummary } from "../agent-client";
 import { AssetReview } from "./AssetReview";
 import { BuildReview } from "./BuildReview";
 import { FactoryProject } from "./FactoryProject";
 import { FactoryRun } from "./FactoryRun";
-import { factoryCancel, factoryDecide, factoryJobs, factoryPreview, factoryStart, factoryStatus, parseFactoryReport, type FactoryJobView, type FactoryReport } from "./factory-client";
+import { factoryCancel, factoryDecide, factoryJobs, factoryPreview, factoryRuns, factoryStart, factoryStatus, parseFactoryReport, type FactoryJobView, type FactoryReport } from "./factory-client";
 import "./Factory.css";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -17,9 +17,30 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
   const [orientation, setOrientation] = useState<"landscape" | "portrait">("landscape");
   const [preview, setPreview] = useState<FactoryReport | null>(null);
   const [run, setRun] = useState<RunSummary | null>(null);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
   const [jobs, setJobs] = useState<FactoryJobView[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    const refresh = () => void factoryRuns().then(list => {
+      if (!live) return;
+      setRuns(list);
+      setRun(current => current ?? list[0] ?? null);
+    }).catch(() => {});
+    refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => { live = false; clearInterval(timer); };
+  }, [active]);
+
+  useEffect(() => {
+    if (!active || !run?.runId) return;
+    let live = true;
+    void factoryStatus(run.runId).then(next => { if (live) setRun(next); }).catch(cause => { if (live) setError(messageOf(cause)); });
+    return () => { live = false; };
+  }, [active, run?.runId]);
 
   useEffect(() => {
     if (!active || !run || run.phase === "done" || run.phase === "failed" || run.phase === "cancelled") return;
@@ -42,6 +63,15 @@ export function FactoryHome({ active, onOpenAgent }: { active: boolean; onOpenAg
 
   return <div className="factory-layout" role="region" aria-label="앱·게임 팩토리">
     {error && <div className="social-notice error" role="alert"><span>{error}</span></div>}
+    {runs.length > 0 && <section className="factory-card" aria-label="팩토리 작업 목록">
+      <h2>팩토리 작업</h2>
+      <p>휴대폰에서 시작한 작업도 여기에서 열어 승인과 진행 상태를 확인할 수 있습니다.</p>
+      <ul className="factory-list">{runs.map(item => <li key={item.runId}>
+        <button type="button" className="social-button compact" aria-pressed={run?.runId === item.runId} onClick={() => void act("open", async () => setRun(await factoryStatus(item.runId)))}>
+          {PHASE_LABELS[item.phase]} · {item.runId}
+        </button>
+      </li>)}</ul>
+    </section>}
     <div className="factory-grid">
       <form className="factory-card" onSubmit={event => { event.preventDefault(); void act("start", async () => { const started = await factoryStart(request); setRun(started); }); }}>
         <h2>무엇을 만들까요?</h2>

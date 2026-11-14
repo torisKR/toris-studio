@@ -50,6 +50,8 @@ test("a finished run is still listed, with its log, after the app restarts", asy
   assert.equal(full.summary, "확인 완료");
   assert.equal(full.events.at(-1)?.phase, "done");
   assert.ok(full.events.length >= 3);
+  assert.deepEqual(again.list()[0].events, []);
+  assert.equal(again.list()[0].lastSeq, full.events.at(-1)?.seq);
 });
 
 test("a run cut off by the app closing comes back marked as stopped, with its log", async () => {
@@ -63,6 +65,7 @@ test("a run cut off by the app closing comes back marked as stopped, with its lo
   const again = h.reopen();
   const back = again.get(run.runId);
   assert.equal(back.phase, "failed");
+  assert.equal(again.list()[0].interrupted, true);
   assert.deepEqual(back.approvals, []);
   assert.ok(back.events.some(e => e.phase === "awaiting_approval"), "earlier log kept");
   assert.match(back.events.at(-1)!.message, /앱이 꺼져/);
@@ -70,6 +73,25 @@ test("a run cut off by the app closing comes back marked as stopped, with its lo
   // A stopped run does not block a new one on the same project.
   assert.doesNotThrow(() => again.start("demo", "다시 해줘"));
   h.manager.shutdown(); again.shutdown();
+});
+
+test("a host-assigned run ID returns the original run on retry and after restart", async () => {
+  const h = setup([
+    j({ route: "backend", plan: "p", testCommand: null }),
+    j({ action: "write_file", args: { path: "src/b.ts", content: "x\n" } }),
+  ]);
+  const runId = "85b9a687-e03d-4a60-b543-50090385a127";
+  const first = h.manager.start("demo", "b 파일 만들어줘", "coding", {}, runId);
+  const retried = h.manager.start("demo", "b 파일 만들어줘", "coding", {}, runId);
+  assert.equal(first.runId, runId);
+  assert.equal(retried.runId, first.runId);
+  assert.equal(h.manager.list().length, 1);
+  assert.throws(() => h.manager.start("demo", "다른 요청", "coding", {}, runId), /이미 사용한/);
+  await h.until(e => e.phase === "awaiting_approval");
+  const reopened = h.reopen();
+  assert.equal(reopened.start("demo", "b 파일 만들어줘", "coding", {}, runId).phase, "failed");
+  assert.equal(reopened.list().length, 1);
+  h.manager.shutdown(); reopened.shutdown();
 });
 
 test("history files are private, bad files are skipped, and old runs are pruned", () => {

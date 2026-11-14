@@ -4,24 +4,6 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::State;
 
-fn workflow_of(run: &Value) -> bool {
-    matches!(
-        run["workflow"].as_str(),
-        Some("game-factory" | "app-factory")
-    )
-}
-
-async fn factory_run(
-    runtime: &Arc<crate::agent_runtime::AgentRuntime>,
-    run_id: &str,
-) -> Result<Value, String> {
-    let run = runtime.call("run.get", json!({ "runId": run_id })).await?;
-    if !workflow_of(&run) {
-        return Err("이 화면에서 다룰 수 있는 작업이 아닙니다.".into());
-    }
-    Ok(run)
-}
-
 #[tauri::command]
 pub async fn factory_preview(
     window: tauri::WebviewWindow,
@@ -29,10 +11,7 @@ pub async fn factory_preview(
     input: Value,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    let request = crate::factory::parse_request(&input)?;
-    runtime
-        .call("factory.preview", request["input"].clone())
-        .await
+    crate::factory::preview(runtime.inner(), &input).await
 }
 
 #[tauri::command]
@@ -42,19 +21,7 @@ pub async fn factory_start(
     input: Value,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    let request = crate::factory::parse_request(&input)?;
-    runtime
-        .call(
-            "run.start",
-            json!({
-                "project": "",
-                "task": request["task"],
-                "workflow": request["workflow"],
-                "host": true,
-                "input": request["input"],
-            }),
-        )
-        .await
+    crate::factory::start(runtime.inner(), &input).await
 }
 
 #[tauri::command]
@@ -64,7 +31,7 @@ pub async fn factory_status(
     run_id: String,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    factory_run(runtime.inner(), &run_id).await
+    crate::factory::status(runtime.inner(), &run_id).await
 }
 
 #[tauri::command]
@@ -80,7 +47,7 @@ pub async fn factory_decide(
     if decision != "approve" && decision != "reject" {
         return Err("승인 또는 거절을 선택하세요.".into());
     }
-    factory_run(runtime.inner(), &run_id).await?;
+    crate::factory::status(runtime.inner(), &run_id).await?;
     runtime
         .call(
             "run.resume",
@@ -102,8 +69,7 @@ pub async fn factory_cancel(
     run_id: String,
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
-    factory_run(runtime.inner(), &run_id).await?;
-    runtime.call("run.cancel", json!({ "runId": run_id })).await
+    crate::factory::cancel(runtime.inner(), &run_id).await
 }
 
 #[tauri::command]

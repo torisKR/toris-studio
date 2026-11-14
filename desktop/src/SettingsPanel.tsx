@@ -7,6 +7,7 @@ import { External } from "./External";
 import { UpdatePanel } from "./UpdatePanel";
 import { BrowserSettingsPanel } from "./BrowserSettingsPanel";
 import { LocalVoice } from "./LocalVoice";
+import { MobileSettingsPanel } from "./MobileSettings";
 
 export type PublicSettings = {
   databaseConfigured: boolean;
@@ -271,6 +272,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
   return <div className="desktop-settings">
     <UpdatePanel hasUnsavedChanges={dirtyFields.current.size > 0 || browserDirty} otherOperationBusy={settingsOperationBusy} onInstallBusyChange={setUpdateInstalling} />
     <BrowserSettingsPanel disabled={updateInstalling || coreSettingsOperationBusy} onDirtyChange={setBrowserDirty} onBusyChange={setBrowserBusy} />
+    <MobileSettingsPanel disabled={updateInstalling} />
     <div className="desktop-settings-intro"><ShieldCheck size={21} /><div><strong>연결 정보는 내 기기에 보관됩니다</strong><p>API 키와 DB 비밀번호는 macOS 키체인·Windows 자격 증명에 보관합니다. 저장소 권한은 Toris Studio가 보관한 연결 정보를 읽고 저장할 때 사용합니다. 빈 비밀키 입력란은 기존 값을 유지합니다.</p><p>일반 설정 파일</p><code>{settings.configPath}</code></div></div>
     {storageNotice}
     {(error || notice || followupNotice) && <div ref={feedback} tabIndex={-1}>

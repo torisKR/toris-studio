@@ -1,5 +1,5 @@
 import { nativeInvoke, type BridgeInvoke } from "../ai-client";
-import type { PendingAction, RunSummary } from "../agent-client";
+import { isFactoryRun, type PendingAction, type RunSummary } from "../agent-client";
 
 export type FactoryGateName = "plan" | "code" | "asset" | "model3d" | "gameplay" | "android" | "release";
 export type FactoryGateStatus = "passed" | "failed" | "blocked" | "not_run";
@@ -112,4 +112,9 @@ export function factoryCancel(runId: string, call: BridgeInvoke = nativeInvoke):
 }
 export function factoryJobs(call: BridgeInvoke = nativeInvoke): Promise<{ jobs: FactoryJobView[] }> {
   return call("factory_jobs") as Promise<{ jobs: FactoryJobView[] }>;
+}
+/** Desktop-only list: the mobile protocol does not expose the runtime's run list. */
+export async function factoryRuns(call: BridgeInvoke = nativeInvoke): Promise<RunSummary[]> {
+  const result = await call("agent_call", { method: "run.list", params: {} }) as { runs: RunSummary[] };
+  return result.runs.filter(isFactoryRun);
 }

@@ -12,6 +12,7 @@ import { CreationInbox } from "./ChatGPTHandoff";
 import { aiStatus as readAiStatus, contentReady, generateText, modelLabel } from "./ai-client";
 import type { AiStatus as ModelStatus } from "./ai-client";
 import { AgentPanel } from "./AgentPanel";
+import type { ProductionSelection } from "./reason/types";
 import { PlannerPanel } from "./PlannerPanel";
 import { OpsPanel } from "./OpsPanel";
 import { SnsWorkspace } from "./sns/SnsWorkspace";
@@ -223,6 +224,7 @@ export function App() {
   const section = sectionFor(tab);
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
   const [assetQueueRequest, setAssetQueueRequest] = useState(0);
+  const [productionSelection, setProductionSelection] = useState<ProductionSelection | null>(null);
   const [aiReferences, setAiReferences] = useState<AiMaterial[]>([]);
   const [aiSelectionNotice, setAiSelectionNotice] = useState("");
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
@@ -490,8 +492,8 @@ export function App() {
 
           <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} queueRequest={assetQueueRequest} /></div>
-          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} /></div>
-          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} /></div>
+          <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} productionSelection={productionSelection} /></div>
+          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} onOpenProduction={jobId => { setProductionSelection(current => ({ jobId, requestId: (current?.requestId ?? 0) + 1 })); setTab("video"); }} /></div>
           <div hidden={tab !== "factory"}><Suspense fallback={<p role="status">앱·게임 팩토리를 불러오는 중입니다.</p>}><FactoryHome active={tab === "factory"} onOpenAgent={() => setTab("agent")} /></Suspense></div>
           <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenPublications={() => setTab("publications")} /></div>
           <div hidden={tab !== "ops"}><OpsPanel active={tab === "ops"} databaseConnected={dashboard.database.connected} onOpenPlanner={() => setTab("planner")} /></div>

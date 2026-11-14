@@ -1,6 +1,6 @@
 [package]
 name = "toris-studio-desktop"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.90"
 default-run = "toris-studio-desktop"
@@ -59,12 +59,21 @@ ring = "=0.17.14"
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 libc = "0.2"
+if-addrs = "0.13"
+qrcode = { version = "0.14.1", default-features = false, features = ["image"] }
+russh = { version = "=0.54.5", default-features = false, features = ["ring"] }
+zeroize = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+# Process-group signalling for development agent sessions (reason_agents).
+libc = "0.2"
 keyring = { version = "3", default-features = false, features = ["linux-native"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+rqrr = "0.11"
 
 [profile.release]
 # rust-lang/rust#157750: stripping proc-macro dylibs breaks macOS 27 loading.

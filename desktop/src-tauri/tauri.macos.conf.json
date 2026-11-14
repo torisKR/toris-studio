@@ -1,1 +1,8 @@
-{ "bundle": { "targets": ["app", "dmg"] } }
+{
+  "bundle": { "targets": ["app", "dmg"] },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost blob:; img-src 'self' asset: http://asset.localhost data: blob: https://i.ytimg.com toris-mobile: http://toris-mobile.localhost; media-src 'self' asset: http://asset.localhost blob: toris-preview: http://toris-preview.localhost; style-src 'self' 'unsafe-inline'; font-src 'self'; frame-src http://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  }
+}
