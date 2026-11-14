@@ -46,6 +46,15 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, red
 page.on("pageerror", error => report.errors.push(error.message));
 const last = command => calls.filter(c => c.command === command).at(-1);
 const count = command => calls.filter(c => c.command === command).length;
+// Condition waits instead of fixed sleeps: poll until `check` holds, or fail with `message`.
+const until = async (check, message, timeout = 5000) => {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await check()) return;
+    if (Date.now() > deadline) assert.fail(`${message} (waited ${timeout}ms)`);
+    await new Promise(r => setTimeout(r, 25));
+  }
+};
 await page.exposeFunction("__qaInvoke", async (command, args = {}) => {
   calls.push({ command, args });
   if (command === "get_dashboard") return { channels: [], content: [], trends: [], integrations: [], database: { connected: false, message: "fixture" } };
@@ -230,8 +239,9 @@ try {
 
   // Folder picker cancelled: nothing added. Typed path: host confirms and adds.
   await root.getByRole("button", { name: "프로젝트 추가", exact: true }).first().click();
+  const addsBefore = count("project_chat_add_project");
   await root.getByRole("button", { name: "폴더 선택", exact: true }).click();
-  await page.waitForTimeout(100);
+  await until(() => count("project_chat_add_project") > addsBefore, "the folder picker asks the host");
   assert.deepEqual(last("project_chat_add_project").args, { input: {} });
   assert.equal(projects.length, 0);
   await root.getByLabel("프로젝트 폴더 경로", { exact: true }).fill("~/projects/pocket-app");
@@ -289,8 +299,7 @@ try {
   threads = threads.map(t => ({ ...t, running: false }));
   const changesBefore = count("project_chat_changes");
   await emit({ threadId: "t1", kind: "state", running: false });
-  await page.waitForTimeout(150);
-  assert.ok(count("project_chat_changes") > changesBefore, "changes reload when a turn ends");
+  await until(() => count("project_chat_changes") > changesBefore, "changes reload when a turn ends");
   const changes = root.getByRole("complementary", { name: "변경 사항", exact: true });
   await changes.getByText("src/Login.tsx", { exact: true }).waitFor();
   assert.equal(await changes.locator(".pc-diff .add").count(), 4);
@@ -309,7 +318,7 @@ try {
   await root.getByText("로그인 기획", { exact: true }).waitFor({ timeout: 12000 });
   assert.equal(await root.locator("img").count(), 0, "planner markup stays text");
   await root.getByRole("button", { name: "이 기획으로 구현", exact: true }).click();
-  await page.waitForTimeout(100);
+  await until(async () => (await box.inputValue()).length > 0, "'이 기획으로 구현' prefills the prompt");
   const prompt = await box.inputValue();
   assert.match(prompt, /^아래는 Muse가 보낸 기획입니다/);
   assert.match(prompt, /1\. 이메일·비밀번호 입력/);
@@ -455,9 +464,10 @@ try {
   const linkButton = workdir.getByRole("button", { name: "기존 worktree 연결", exact: true });
   const before = threads.length;
   linkReplies = ["cancel", "error", "ok"];
+  const linksBefore = count("project_chat_link_worktree");
   await linkButton.click();
-  await page.waitForTimeout(150);
-  assert.equal(threads.length, before, "a cancelled pick leaves no thread");
+  await until(() => count("project_chat_link_worktree") > linksBefore, "the link button asks the host");
+  await until(async () => threads.length === before && await linkButton.isEnabled(), "a cancelled pick leaves no thread");
   await linkButton.click();
   await root.getByText("선택한 폴더는 이 프로젝트와 다른 Git 저장소입니다.").waitFor();
   assert.equal(threads.length, before, "a refused folder leaves no thread");
@@ -503,8 +513,10 @@ try {
   await isolate.click();
   const plan2 = planFor(last("project_chat_worktree_plan").args.input.threadId);
   createReplies = ["cancel", "ok"];
+  const createsBefore = count("project_chat_create_worktree");
   await planCard.getByRole("button", { name: "만들기", exact: true }).click();
-  await page.waitForTimeout(150);
+  await until(() => count("project_chat_create_worktree") > createsBefore, "만들기 asks the host to confirm");
+  await until(() => planCard.getByRole("button", { name: "만들기", exact: true }).isEnabled(), "a cancelled confirmation settles");
   assert.equal(await planCard.isVisible(), true, "a cancelled OS confirmation keeps the plan on screen and creates nothing");
   leftovers = [
     { id: "r-ready", projectId: project.id, threadId: "gone", path: `${project.folder}-worktrees/old1`, branch: "studio/old1", base: plan2.base, startedAt: at(5), state: "ready", guidance: "Studio가 만든 worktree가 남아 있습니다. 새 대화로 이어서 연결하거나, 기록만 지우고 폴더를 그대로 둘 수 있습니다." },
