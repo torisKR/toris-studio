@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, type Attachment
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, type Attachment, jobRows
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -103,7 +103,7 @@ test("a planner request stays open until a reply follows it", () => {
 
 const proj = (id: string, name: string): Project => ({ id, name, folder: "/Users/me/" + name, addedAt: "" });
 const thr = (id: string, projectId: string, title: string, extra: Partial<Thread> = {}): Thread =>
-  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, worktree: null, previewUrl: null, ...extra });
+  ({ id, projectId, title, agent: "claude", mode: "edit", providerSession: null, createdAt: "", updatedAt: "2026-01-0" + id.slice(-1), running: false, worktree: null, previewUrl: null, lastRun: null, ...extra });
 const searchFixture = () => ({
   projects: [proj("p1", "Pocket App"), proj("p2", "결제 서버"), proj("p3", "notes")],
   threads: [
@@ -185,7 +185,7 @@ test("changes are read from the thread's folder when a thread is open", async ()
 });
 
 test("a thread is started once it has items, a provider session or a running turn", () => {
-  const t = { id: "t1", projectId: "p1", title: "", agent: "claude" as const, mode: "edit" as const, providerSession: null, createdAt: "", updatedAt: "", running: false, worktree: null, previewUrl: null };
+  const t = { id: "t1", projectId: "p1", title: "", agent: "claude" as const, mode: "edit" as const, providerSession: null, createdAt: "", updatedAt: "", running: false, worktree: null, previewUrl: null, lastRun: null };
   assert.equal(threadStarted(null, []), false);
   assert.equal(threadStarted(t, []), false);
   assert.equal(threadStarted(t, [item("i1", "hosted_request")]), true);
@@ -287,4 +287,21 @@ test("attachment limits and targets", () => {
   assert.equal(attachmentsAllowed("peer-1", false), false, "Reason Network peers get no files");
   assert.equal(attachmentsAllowed("agent", true), false, "nor do replies");
   assert.deepEqual([formatBytes(12), formatBytes(3200), formatBytes(16384)], ["12B", "3.1KiB", "16KiB"]);
+});
+
+test("the jobs list shows running threads first, then finished ones, with agent, branch and project", () => {
+  const base = { projectId: "p1", title: "x", agent: "claude", mode: "edit", createdAt: "", providerSession: null, worktree: null, lastRun: null, running: false };
+  const raw = [
+    { ...base, id: "idle", updatedAt: "2026-01-09" },
+    { ...base, id: "done", updatedAt: "2026-01-02", lastRun: { outcome: "done", startedAt: "2026-01-01", finishedAt: "2026-01-02" } },
+    { ...base, id: "failed", projectId: "p2", agent: "codex", updatedAt: "2026-01-03", lastRun: { outcome: "failed", startedAt: "2026-01-02", finishedAt: "2026-01-03" } },
+    { ...base, id: "run", updatedAt: "2026-01-01", running: true, worktree: { path: "/w/a", branch: "studio/a", base: "a".repeat(40), linkedAt: "" }, lastRun: { outcome: "failed", startedAt: "", finishedAt: "2026-01-04" } },
+    { ...base, id: "odd", updatedAt: "2026-01-05", lastRun: { outcome: "merged", startedAt: "", finishedAt: "2026-01-05" } }
+  ];
+  const threads = raw.map(normalizeThread).filter(t => t !== null);
+  assert.equal(threads.find(t => t.id === "odd")!.lastRun, null, "an unknown outcome is dropped");
+  const jobs = jobRows(threads, [{ id: "p1", name: "app", folder: "/a", addedAt: "" }]);
+  assert.deepEqual(jobs.map(j => [j.thread.id, j.state, j.branch]), [["run", "running", "studio/a"], ["failed", "failed", null], ["done", "done", null]]);
+  assert.equal(jobs[0].project?.name, "app");
+  assert.equal(jobs[1].project, null, "a thread of a removed project still shows");
 });

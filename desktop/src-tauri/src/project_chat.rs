@@ -120,6 +120,27 @@ pub struct Thread {
     /// Set before the first turn and fixed after it; absent in older stores.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<Worktree>,
+    /// How this thread's latest finished turn ended; absent before its first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<LastRun>,
+}
+
+/// How a finished turn ended, kept so the jobs list can show done and failed
+/// work after the process is gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunOutcome {
+    Done,
+    Failed,
+    Stopped,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastRun {
+    pub outcome: RunOutcome,
+    pub started_at: String,
+    pub finished_at: String,
 }
 
 /// An existing git worktree of the project's repository, linked to a thread.
@@ -649,6 +670,7 @@ pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 
 /// A running turn: its process group, the folder it works in and whether it may edit there.
 struct Run {
+    /// 0 while the slot is reserved and the CLI not yet started.
     pid: u32,
     folder: Option<String>,
     edit: bool,
@@ -832,6 +854,7 @@ impl ProjectChat {
             running: false,
             preview_url: None,
             worktree: None,
+            last_run: None,
         };
         store.threads.push(thread.clone());
         self.write(&store)?;
@@ -980,11 +1003,32 @@ impl ProjectChat {
         slot_free(&running, thread, Some(folder), edit)
     }
 
+    /// Records the process group of a turn whose slot was reserved with pid 0.
+    pub fn set_pid(&self, thread: &str, pid: u32) {
+        if let Ok(mut running) = self.running.lock() {
+            if let Some(run) = running.get_mut(thread) {
+                run.pid = pid;
+            }
+        }
+    }
+
     pub fn release(&self, thread: &str) {
         if let Ok(mut running) = self.running.lock() {
             running.remove(thread);
         }
-        self.notify(json!({"threadId": thread, "kind": "state", "running": false}));
+        let mut event = json!({"threadId": thread, "kind": "state", "running": false});
+        if let Ok(updated) = self.thread(thread) {
+            event["thread"] = json!(updated);
+        }
+        self.notify(event);
+    }
+
+    /// Whether a stop was asked for this thread, without clearing it.
+    fn stop_requested(&self, thread: &str) -> bool {
+        self.stopping
+            .lock()
+            .map(|s| s.contains(thread))
+            .unwrap_or(false)
     }
 
     pub fn running_pid(&self, thread: &str) -> Option<u32> {
@@ -1254,7 +1298,10 @@ pub async fn start_turn_with(
     let cli = find_cli(spec.program, &path)
         .ok_or_else(|| format!("{label} CLI를 찾지 못했습니다. 설치한 뒤 다시 시도하세요."))?;
     let edit = thread.mode == ChatMode::Edit;
-    chat.check_slot(&thread.id, &folder, edit)?;
+    // The slot is reserved before the CLI exists: a refusal starts nothing.
+    chat.stopped(&thread.id, false);
+    chat.claim_in(&thread.id, 0, Some(&folder), edit)?;
+    let started_at = now();
     let mut command = tokio::process::Command::new(cli);
     command
         .args(&spec.args)
@@ -1273,34 +1320,50 @@ pub async fn start_turn_with(
     for (key, value) in &spec.env {
         command.env(key, value);
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| format!("{label}을(를) 시작하지 못했습니다."))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            chat.release(&thread.id);
+            return Err(format!("{label}을(를) 시작하지 못했습니다."));
+        }
+    };
     let pid = child.id().unwrap_or(0);
-    if let Err(error) = chat.claim_in(&thread.id, pid, Some(&folder), edit) {
-        signal(pid, libc::SIGKILL);
-        let _ = child.start_kill();
-        return Err(error);
-    }
-    // The work folder is fixed once a turn runs; refuse if it moved meanwhile.
-    let linked = |t: &Thread| t.worktree.as_ref().map(|w| w.path.clone());
-    if chat.thread(&thread.id).ok().as_ref().map(linked) != Some(linked(&thread)) {
+    chat.set_pid(&thread.id, pid);
+    // Anything that fails before the turn is recorded ends its process group
+    // and frees its slot, so nothing is left running unseen.
+    let abort = |child: &mut tokio::process::Child, error: String| {
         signal(pid, libc::SIGKILL);
         let _ = child.start_kill();
         chat.release(&thread.id);
-        return Err("대화의 작업 폴더가 바뀌었습니다. 다시 보내세요.".into());
+        Err::<Thread, String>(error)
+    };
+    // The work folder is fixed once a turn runs; refuse if it moved meanwhile.
+    let linked = |t: &Thread| t.worktree.as_ref().map(|w| w.path.clone());
+    if chat.thread(&thread.id).ok().as_ref().map(linked) != Some(linked(&thread)) {
+        return abort(
+            &mut child,
+            "대화의 작업 폴더가 바뀌었습니다. 다시 보내세요.".into(),
+        );
     }
-    chat.stopped(&thread.id, false);
     let first = chat.items(&thread.id).is_empty();
-    let updated = chat.update_thread(&thread.id, |t| {
+    let updated = match chat.update_thread(&thread.id, |t| {
         if first || t.title == "새 대화" {
             t.title = title_from(&shown);
         }
         Ok(())
-    })?;
+    }) {
+        Ok(updated) => updated,
+        Err(error) => return abort(&mut child, error),
+    };
     let mut said = Item::new(ItemKind::User, shown);
     said.attachments = attachments;
-    let _ = chat.append(&thread.id, &[said]);
+    if let Err(error) = chat.append(&thread.id, &[said]) {
+        return abort(&mut child, error);
+    }
+    // A stop asked while the slot was only reserved applies now.
+    if chat.stop_requested(&thread.id) {
+        signal(pid, libc::SIGTERM);
+    }
     chat.notify(
         json!({"threadId": thread.id, "kind": "state", "running": true, "thread": updated}),
     );
@@ -1330,6 +1393,7 @@ pub async fn start_turn_with(
             text[start..].to_owned()
         });
         let mut finished = false;
+        let mut failed = false;
         if let Some(stdout) = stdout {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -1349,6 +1413,7 @@ pub async fn start_turn_with(
                 finished |= items
                     .iter()
                     .any(|i| matches!(i.kind, ItemKind::Result | ItemKind::Error));
+                failed |= items.iter().any(|i| i.kind == ItemKind::Error);
                 let _ = chat.append(&id, &items);
             }
         }
@@ -1371,6 +1436,21 @@ pub async fn start_turn_with(
             item.is_error = true;
             let _ = chat.append(&id, &[item]);
         }
+        let outcome = if was_stopped {
+            RunOutcome::Stopped
+        } else if failed || !finished {
+            RunOutcome::Failed
+        } else {
+            RunOutcome::Done
+        };
+        let _ = chat.update_thread(&id, |t| {
+            t.last_run = Some(LastRun {
+                outcome,
+                started_at,
+                finished_at: now(),
+            });
+            Ok(())
+        });
         chat.release(&id);
     });
     Ok(chat.thread(&thread.id).unwrap_or(updated))

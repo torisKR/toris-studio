@@ -1,13 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X, FileText, Paperclip } from "lucide-react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, GitBranchPlus, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Search, Send, Sparkles, Square, Trash2, Wrench, X, FileText, Paperclip, Activity, CircleCheck, CircleSlash } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
 } from "./project-chat-client";
 import { ThreadPreview } from "./ThreadPreview";
 import "./ProjectChat.css";
@@ -254,9 +254,12 @@ export function ProjectChat({ active }: Props) {
   }, [active]);
 
   useEffect(() => {
-    if (!threadId) { setItems([]); setAttachments([]); return; }
+    // Start empty so a switch never shows the previous thread's rows; items streamed
+    // for this thread while it loads are kept alongside the stored ones.
+    setItems([]); setAttachments([]);
+    if (!threadId) return;
     let alive = true;
-    void readThread(threadId).then(data => { if (alive) { setItems(data.items); setAttachments(data.attachments); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
+    void readThread(threadId).then(data => { if (alive) { setItems(current => mergeItems(data.items, current)); setAttachments(data.attachments); upsert(data.thread); } }).catch(cause => alive && setError(errorText(cause)));
     return () => { alive = false; };
   }, [threadId]);
   // An empty thread shows its start screen from the top; only a transcript follows its end.
@@ -434,6 +437,9 @@ export function ProjectChat({ active }: Props) {
   const mode = thread?.mode ?? newMode;
   const agent = thread?.agent ?? newAgent;
   const rows = useMemo(() => toRows(items), [items]);
+  const jobs = useMemo(() => jobRows(threads, projects), [threads, projects]);
+  const runningCount = useMemo(() => threads.filter(t => t.running).length, [threads]);
+  const openJob = (job: Job) => { setProjectId(job.thread.projectId); setThreadId(job.thread.id); threadRef.current = job.thread.id; };
 
   return <section className={"pc-root" + (showChanges && project ? " with-changes" : "")} aria-label="프로젝트 채팅">
     <nav className="pc-sidebar" aria-label="프로젝트">
@@ -450,6 +456,19 @@ export function ProjectChat({ active }: Props) {
         {query && <button type="button" className="pc-icon" aria-label="검색 지우기" onClick={clearSearch}><X size={12} /></button>}
       </div>
       {!projects.length && !adding && !found && <p className="pc-muted pc-empty-side">앱 폴더를 추가하면 그 폴더에서 Claude Code·Codex와 채팅하며 기획·구현할 수 있습니다.</p>}
+      {!!jobs.length && <section className="pc-jobs" aria-label="작업 현황">
+        <header><Activity size={13} /><strong>작업 현황</strong><small>{runningCount}/{MAX_RUNNING} 실행 중</small></header>
+        <ul>{jobs.map(job => <li key={job.thread.id} className={"pc-job " + job.state + (job.thread.id === threadId ? " active" : "")}>
+          <button type="button" className="pc-job-open" aria-current={job.thread.id === threadId ? "true" : undefined} onClick={() => openJob(job)}
+            title={`${job.project?.name ?? "프로젝트"} · ${job.thread.title}`}>
+            {job.state === "running" ? <LoaderCircle size={12} className="social-spin" aria-hidden /> : job.state === "done" ? <CircleCheck size={12} aria-hidden /> : job.state === "failed" ? <CircleAlert size={12} aria-hidden /> : <CircleSlash size={12} aria-hidden />}
+            <span className="pc-job-title">{job.thread.title}</span>
+            <span className="pc-job-meta">{job.thread.agent === "claude" ? "Claude" : "Codex"} · {job.branch ?? "원본 폴더"}{job.project && job.project.id !== projectId ? ` · ${job.project.name}` : ""}</span>
+            <span className="pc-job-state">{JOB_LABELS[job.state]}</span>
+          </button>
+          {job.state === "running" && <button type="button" className="pc-icon subtle" aria-label={`${job.thread.title} 중지`} onClick={() => void run(() => stopTurn(job.thread.id))}><Square size={11} /></button>}
+        </li>)}</ul>
+      </section>}
       {found && <div className="pc-results">
         <p className="pc-muted pc-empty-side" role="status">{!projects.length ? "아직 프로젝트가 없습니다. 먼저 앱 폴더를 추가하세요."
           : found.hits.length ? `제목 검색 결과 ${found.hits.length}개 · ↓로 이동, Esc로 지우기` : `"${query.trim()}"와(과) 일치하는 프로젝트·대화가 없습니다.`}</p>

@@ -6,8 +6,8 @@ use std::path::Path;
 use toris_studio_desktop::project_chat::{
     changes, handoff_code, hosted_prompt, normalize_claude, normalize_codex, preview_url,
     strip_code, title_from, tool_summary, turn_command, verify_worktree, work_folder, ChatAgent,
-    ChatMode, HostedAssistant, Item, ItemKind, ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL,
-    MAX_RUNNING,
+    ChatMode, HostedAssistant, Item, ItemKind, ProjectChat, RunOutcome, Thread, CLAUDE_EFFORT,
+    CLAUDE_MODEL, MAX_RUNNING,
 };
 use toris_studio_desktop::reason_agents::{checked_folder, typed_path};
 use toris_studio_desktop::reason_network::Message;
@@ -27,6 +27,7 @@ fn thread(agent: ChatAgent, mode: ChatMode, session: Option<&str>) -> Thread {
         running: false,
         worktree: None,
         preview_url: None,
+        last_run: None,
     }
 }
 
@@ -1123,11 +1124,12 @@ mod turns {
         let claude = r#"#!/bin/sh
 printf '%s\n' "$@" > "@LOG@/args.txt"
 pwd > "@LOG@/cwd.txt"
+echo "claude $$ $(pwd)" >> "@LOG@/runs.txt"
 env > "@LOG@/env.txt"
 cat > "@LOG@/stdin.txt"
 echo '{"type":"system","subtype":"hook_response","output":"noise"}'
 echo '{"type":"system","subtype":"init","session_id":"sess-1"}'
-if [ '@MODE@' = 'hang' ]; then echo $$ > "@LOG@/pid.txt"; sleep 300 & wait; exit 0; fi
+if [ '@MODE@' = 'hang' ]; then echo $$ > "@LOG@/pid.txt"; echo $$ >> "@LOG@/hung.txt"; sleep 300 & wait; exit 0; fi
 if [ '@MODE@' = 'crash' ]; then echo 'boom: not logged in' >&2; exit 3; fi
 echo 'not json'
 echo '{"type":"assistant","message":{"content":[{"type":"text","text":"만들게요"},{"type":"tool_use","id":"k1","name":"Write","input":{"file_path":"@DIR@/a.txt"}}]}}'
@@ -1136,7 +1138,9 @@ echo '{"type":"result","subtype":"success","is_error":false,"duration_ms":1000,"
 "#;
         let codex = r#"#!/bin/sh
 printf '%s\n' "$@" > "@LOG@/args.txt"
+echo "codex $$ $(pwd)" >> "@LOG@/runs.txt"
 cat > "@LOG@/stdin.txt"
+if [ '@MODE@' = 'hang' ]; then echo $$ >> "@LOG@/hung.txt"; sleep 300 & wait; exit 0; fi
 echo '{"type":"thread.started","thread_id":"th-9"}'
 echo '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"ok"}}'
 echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
@@ -1495,6 +1499,252 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
             rig.chat.attachments(&t.id).is_empty(),
             "sent files are forgotten"
         );
+    }
+
+    fn alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    async fn wait_lines(rig: &Rig, name: &str, n: usize) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let lines: Vec<String> = log(rig, name).lines().map(str::to_owned).collect();
+            if lines.len() >= n {
+                return lines;
+            }
+            assert!(Instant::now() < deadline, "{name}: {lines:?}");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn project_chat_runs_worktrees_in_parallel_within_the_native_limits() {
+        let rig = rig("hang");
+        let app = std::path::Path::new(&rig.folder);
+        super::git_in(app, &["init", "-q", "-b", "main"]);
+        fs::write(app.join("a.txt"), "one\n").unwrap();
+        super::git_in(app, &["add", "."]);
+        super::git_in(app, &["commit", "-qm", "init"]);
+        for (branch, dir) in [("feature/a", "../wt-a"), ("feature/b", "../wt-b")] {
+            super::git_in(app, &["worktree", "add", "-q", "-b", branch, dir]);
+        }
+        fs::write(app.join("a.txt"), "user's edit\n").unwrap();
+        fs::write(app.join("new.txt"), "untracked\n").unwrap();
+        let folder = checked_folder(app).unwrap();
+        let wt_a = checked_folder(&rig.dir.path().join("wt-a")).unwrap();
+        let wt_b = checked_folder(&rig.dir.path().join("wt-b")).unwrap();
+        let project = rig.chat.add_project(&folder).unwrap();
+        let new = |agent, mode, wt: Option<&str>| {
+            let t = rig.chat.create_thread(&project.id, agent, mode).unwrap();
+            match wt {
+                Some(wt) => rig.chat.link_worktree(&t.id, wt).unwrap(),
+                None => t,
+            }
+        };
+        let claude = new(ChatAgent::Claude, ChatMode::Edit, Some(&wt_a));
+        let codex = new(ChatAgent::Codex, ChatMode::Edit, Some(&wt_b));
+        let same = new(ChatAgent::Claude, ChatMode::Edit, Some(&wt_a));
+        let plan1 = new(ChatAgent::Claude, ChatMode::Plan, None);
+        let plan2 = new(ChatAgent::Codex, ChatMode::Plan, None);
+        let fifth = new(ChatAgent::Claude, ChatMode::Plan, None);
+        let start = |t: &Thread| {
+            let cwd = work_folder(&project, t).unwrap();
+            start_turn(rig.chat.clone(), t.clone(), cwd, "hi".into(), rig.path())
+        };
+
+        // Claude and Codex edit at once, each in its own worktree.
+        start(&claude).await.unwrap();
+        start(&codex).await.unwrap();
+        let runs = wait_lines(&rig, "runs.txt", 2).await;
+        wait_lines(&rig, "hung.txt", 2).await;
+        assert!(rig.chat.is_running(&claude.id) && rig.chat.is_running(&codex.id));
+        let ran_in = |agent: &str| {
+            let line = runs.iter().find(|l| l.starts_with(agent)).unwrap();
+            let path = line.splitn(3, ' ').nth(2).unwrap();
+            std::path::Path::new(path)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(ran_in("claude"), wt_a);
+        assert_eq!(ran_in("codex"), wt_b);
+
+        // One turn per thread, one editor per folder: refused before any CLI starts.
+        let twice = start(&claude).await.unwrap_err();
+        assert!(twice.contains("이미 답하는 중"), "{twice}");
+        let shared = start(&same).await.unwrap_err();
+        assert!(shared.contains("같은 작업 폴더"), "{shared}");
+        assert!(!rig.chat.is_running(&same.id));
+
+        // Planning turns in the original folder fill the four slots; the fifth is refused.
+        start(&plan1).await.unwrap();
+        start(&plan2).await.unwrap();
+        wait_lines(&rig, "runs.txt", 4).await;
+        let refused = start(&fifth).await.unwrap_err();
+        assert!(refused.contains("4개 대화까지"), "{refused}");
+        assert!(!rig.chat.is_running(&fifth.id));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(log(&rig, "runs.txt").lines().count(), 4, "no fifth CLI");
+        assert_eq!(rig.chat.running_pids().len(), 4);
+
+        // Stopping one thread leaves the others' processes alone.
+        let pids: Vec<i32> = wait_lines(&rig, "hung.txt", 4)
+            .await
+            .iter()
+            .map(|p| p.parse().unwrap())
+            .collect();
+        let claude_pid = rig.chat.running_pid(&claude.id).unwrap() as i32;
+        stop_turn(rig.chat.clone(), &claude.id);
+        idle(&rig.chat, &claude.id).await;
+        assert!(!alive(claude_pid), "the stopped turn's process is gone");
+        for pid in pids.iter().filter(|p| **p != claude_pid) {
+            assert!(alive(*pid), "{pid} kept running");
+        }
+        for t in [&codex, &plan1, &plan2] {
+            assert!(rig.chat.is_running(&t.id), "{} still runs", t.title);
+        }
+        let stopped = rig.chat.thread(&claude.id).unwrap();
+        assert_eq!(stopped.last_run.unwrap().outcome, RunOutcome::Stopped);
+        assert!(rig
+            .chat
+            .items(&codex.id)
+            .iter()
+            .all(|i| i.text != "사용자가 중지했습니다."));
+
+        // A slot freed by the stop is usable again, now by the fifth thread.
+        start(&fifth).await.unwrap();
+        for t in [&codex, &plan1, &plan2, &fifth] {
+            stop_turn(rig.chat.clone(), &t.id);
+        }
+        for t in [&codex, &plan1, &plan2, &fifth] {
+            idle(&rig.chat, &t.id).await;
+        }
+        assert!(rig.chat.running_pids().is_empty());
+        let events = rig.events.lock().unwrap().clone();
+        let ended = events
+            .iter()
+            .filter(|e| {
+                e["kind"] == "state" && e["running"] == false && e["threadId"] == codex.id.as_str()
+            })
+            .last()
+            .unwrap();
+        assert_eq!(
+            ended["thread"]["lastRun"]["outcome"], "stopped",
+            "the event carries the outcome"
+        );
+
+        // The user's original folder is untouched.
+        assert_eq!(
+            fs::read_to_string(app.join("a.txt")).unwrap(),
+            "user's edit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(app.join("new.txt")).unwrap(),
+            "untracked\n"
+        );
+        let status = super::git_in(app, &["status", "--porcelain"]);
+        assert!(
+            status.contains("M a.txt") && status.contains("?? new.txt"),
+            "{status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_chat_records_done_and_failed_turns() {
+        let ok = rig("ok");
+        let project = ok.chat.add_project(&ok.folder).unwrap();
+        let t = ok
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        assert!(t.last_run.is_none());
+        start_turn(
+            ok.chat.clone(),
+            t.clone(),
+            ok.folder.clone(),
+            "hi".into(),
+            ok.path(),
+        )
+        .await
+        .unwrap();
+        idle(&ok.chat, &t.id).await;
+        let run = ok.chat.thread(&t.id).unwrap().last_run.unwrap();
+        assert_eq!(run.outcome, RunOutcome::Done);
+        assert!(run.started_at <= run.finished_at);
+        // It survives a restart.
+        let again = ProjectChat::new(ok.dir.path().join("store"));
+        assert_eq!(
+            again.thread(&t.id).unwrap().last_run.unwrap().outcome,
+            RunOutcome::Done
+        );
+
+        let crash = rig("crash");
+        let project = crash.chat.add_project(&crash.folder).unwrap();
+        let t = crash
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        start_turn(
+            crash.chat.clone(),
+            t.clone(),
+            crash.folder.clone(),
+            "hi".into(),
+            crash.path(),
+        )
+        .await
+        .unwrap();
+        idle(&crash.chat, &t.id).await;
+        assert_eq!(
+            crash.chat.thread(&t.id).unwrap().last_run.unwrap().outcome,
+            RunOutcome::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn project_chat_start_that_cannot_be_saved_leaves_no_slot_or_process() {
+        let rig = rig("hang");
+        let project = rig.chat.add_project(&rig.folder).unwrap();
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let store = rig.dir.path().join("store");
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            "hi".into(),
+            rig.path(),
+        )
+        .await;
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err(), "the turn could not be recorded");
+        assert!(!rig.chat.is_running(&t.id));
+        assert!(rig.chat.running_pids().is_empty(), "the slot is free");
+        // Whatever the CLI managed to start is gone with its group.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        for line in log(&rig, "runs.txt").lines() {
+            let pid: i32 = line.split(' ').nth(1).unwrap().parse().unwrap();
+            assert!(!alive(pid), "process {pid} was left running");
+        }
+        assert!(log(&rig, "hung.txt").is_empty());
+
+        // A CLI that cannot start frees its reserved slot too.
+        let bin = rig.bin.join("claude");
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o644)).unwrap();
+        let broken = start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            "hi".into(),
+            rig.path(),
+        )
+        .await;
+        assert!(broken.unwrap_err().contains("시작하지 못했습니다"));
+        assert!(rig.chat.running_pids().is_empty());
     }
 
     /// Live: runs the real Claude Code once in a scratch folder. `cargo test -- --ignored live`.
