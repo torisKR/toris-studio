@@ -67,6 +67,7 @@ mod production_native;
 pub mod project_chat;
 #[cfg(feature = "desktop")]
 mod project_chat_native;
+pub mod project_git;
 pub mod project_worktrees;
 pub mod publication_handoff;
 pub mod publication_media;
