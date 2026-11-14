@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, type Attachment, jobRows
+  addProject, askHosted, askPeer, awaitingPlanner, openPlannerRequests, plannerRequests, replyLink, syncPeers, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, type Attachment, jobRows
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -93,12 +93,59 @@ test("hosted assistants get a prompt request; replies and pulls send only IDs an
   await assert.rejects(linkMessage("t1", "", call));
 });
 
-test("a planner request stays open until a reply follows it", () => {
+test("a planner request stays open until a reply the host tied to it arrives", () => {
   assert.equal(awaitingPlanner([]), false);
   assert.equal(awaitingPlanner([item("a", "hosted_request")]), true);
-  assert.equal(awaitingPlanner([item("a", "hosted_request"), item("b", "peer_reply")]), false);
-  assert.equal(awaitingPlanner([item("a", "peer_request"), item("b", "peer_reply"), item("c", "peer_request")]), true);
+  assert.equal(awaitingPlanner([item("a", "hosted_request"), item("b", "peer_reply", { requestId: "a" })]), false);
+  assert.equal(awaitingPlanner([item("a", "peer_request"), item("b", "peer_reply", { requestId: "a" }), item("c", "peer_request")]), true);
+  const states = (items: ChatItem[]) => plannerRequests(items).map(r => `${r.id}:${r.state}:${r.replies}`);
+
+  // A and B asked; B answers first: A still waits, and the count says one is left.
+  const ab = [item("A", "hosted_request", { peerName: "Muse", code: "TS-A" }), item("B", "hosted_request", { peerName: "Grok Bot", code: "TS-B" })];
+  const bFirst = [...ab, item("rB", "peer_reply", { requestId: "B" })];
+  assert.deepEqual(states(bFirst), ["A:waiting:0", "B:answered:1"]);
+  assert.equal(openPlannerRequests(bFirst), 1);
+  assert.equal(awaitingPlanner(bFirst), true);
+  const both = [...bFirst, item("rA", "peer_reply", { requestId: "A" })];
+  assert.deepEqual(states(both), ["A:answered:1", "B:answered:1"]);
+  assert.equal(awaitingPlanner(both), false);
+
+  // A plan the user filed by hand (no code, no reply_to match) closes nothing.
+  const manual = [...ab, item("rM", "peer_reply", { unmatched: true })];
+  assert.deepEqual(states(manual), ["A:waiting:0", "B:waiting:0"]);
+  assert.equal(openPlannerRequests(manual), 2);
+  assert.deepEqual(replyLink(manual[2], plannerRequests(manual)), { kind: "unmatched" });
+
+  // An older record (reply saved without its request): the requests before it are unknown, not
+  // answered and not waiting; a request made after it still waits.
+  const legacy = [item("o1", "peer_request"), item("old", "peer_reply"), item("n1", "peer_request")];
+  assert.deepEqual(states(legacy), ["o1:unknown:0", "n1:waiting:0"]);
+  assert.deepEqual(replyLink(legacy[1], plannerRequests(legacy)), { kind: "legacy" });
+  assert.equal(openPlannerRequests(legacy), 1);
+  // A reply the host later ties to the old request still answers it.
+  assert.deepEqual(states([...legacy, item("r1", "peer_reply", { requestId: "o1" })]), ["o1:answered:1", "n1:waiting:0"]);
+
+  // Duplicate delivery of the same reply never shows twice, and a second reply only adds to its count.
+  const dup = mergeItems(bFirst, [item("rB", "peer_reply", { requestId: "B" }), item("rB2", "peer_reply", { requestId: "B" })]);
+  assert.deepEqual(states(dup), ["A:waiting:0", "B:answered:2"]);
+  // A reply naming a request this thread does not hold closes nothing.
+  assert.deepEqual(states([...ab, item("x", "peer_reply", { requestId: "elsewhere" })]), ["A:waiting:0", "B:waiting:0"]);
+  const link = replyLink(bFirst[2], plannerRequests(bFirst));
+  assert.equal(link.kind === "request" && link.request?.name, "Grok Bot");
   assert.match(implementationPrompt(item("r", "peer_reply", { peer: "toris/chatgpt", peerName: "Dots" })), /^아래는 Dots가 보낸 기획/);
+});
+
+test("planner reply links survive the bridge, and a failed check is an error", async () => {
+  const kept = normalizeItem({ id: "r", kind: "peer_reply", text: "x", at: "", requestId: "q", unmatched: false });
+  assert.deepEqual(kept, { id: "r", kind: "peer_reply", text: "x", at: "", requestId: "q" });
+  assert.equal(normalizeItem({ id: "r", kind: "peer_reply", text: "x", at: "", unmatched: true })?.unmatched, true);
+  assert.equal(normalizeItem({ id: "r", kind: "peer_reply", text: "x", at: "", unmatched: "yes", requestId: 3 })?.unmatched, undefined);
+  const failing: BridgeInvoke = async () => { throw new Error("기획 답장을 확인하지 못했습니다(Reason Network): 연결 끊김"); };
+  await assert.rejects(syncPeers("t1", failing), /연결 끊김/);
+  let asked: unknown;
+  const ok: BridgeInvoke = async (command, args) => { asked = { command, args }; return [{ id: "r", kind: "peer_reply", text: "x", at: "", requestId: "q" }]; };
+  assert.deepEqual(await syncPeers("t1", ok), [{ id: "r", kind: "peer_reply", text: "x", at: "", requestId: "q" }]);
+  assert.deepEqual(asked, { command: "project_chat_sync_peers", args: { input: { threadId: "t1" } } });
 });
 
 const proj = (id: string, name: string): Project => ({ id, name, folder: "/Users/me/" + name, addedAt: "" });

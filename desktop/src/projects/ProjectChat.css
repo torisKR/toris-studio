@@ -201,3 +201,11 @@
 .pc-job.running .pc-job-state { color: var(--social-accent, #3b82f6); }
 .pc-job.done > .pc-job-open > svg { color: #16a34a; }
 .pc-job.failed > .pc-job-open > svg, .pc-job.failed .pc-job-state { color: #dc2626; }
+.pc-request-state { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 11px; color: var(--social-muted); }
+.pc-request-state.answered { color: var(--social-accent); }
+.pc-reply-for { display: block; font-size: 11px; color: var(--social-muted); margin: 2px 0 4px; overflow-wrap: anywhere; }
+.pc-reply-for.unmatched { font-style: italic; }
+.pc-planner-check { display: grid; gap: 6px; }
+.pc-planner-check .pc-working { flex-wrap: wrap; }
+.pc-planner-check .pc-working .social-button { margin-left: auto; }
+.pc-planner-check p { margin: 0; }
