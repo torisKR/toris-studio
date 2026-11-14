@@ -1,17 +1,18 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Bot, ChevronDown, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { Bot, Check, Inbox, ChevronDown, Copy, Reply, ChevronRight, CircleAlert, FileDiff, FolderOpen, FolderPlus, GitBranch, LoaderCircle, MessageSquarePlus, PanelRightClose, PanelRightOpen, RefreshCw, Send, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { refreshNetwork } from "../reason/reason-client";
-import type { ReasonPeer } from "../reason/types";
+import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askPeer, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
   readThread, removeProject, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type ChatMode, type Changes, type Project, type Thread
+  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type Thread
 } from "./project-chat-client";
 import "./ProjectChat.css";
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value);
-const PLANNER = /muse|dots/i;
+const PLANNER = /muse|dots|grok/i;
 const time = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); };
 
 /** A small, safe Markdown subset: fences, headings, lists, quotes, inline code and bold. Never HTML. */
@@ -69,7 +70,26 @@ function ToolRow({ call, result }: { call: ChatItem; result: ChatItem | null }) 
   </div>;
 }
 
-function ItemRow({ item, onImplement }: { item: ChatItem; onImplement: (item: ChatItem) => void }) {
+function HostedRequestCard({ item }: { item: ChatItem }) {
+  const [copied, setCopied] = useState("");
+  const copy = () => void invoke("copy_text", { text: item.prompt ?? "" })
+    .then(() => setCopied("복사했습니다. " + (item.peerName ?? "어시스턴트") + "에 붙여넣으세요."))
+    .catch(cause => setCopied(errorText(cause)));
+  return <div className="pc-msg user peer hosted">
+    <span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? "어시스턴트"}에게 기획 요청 · <code>{item.code}</code></span>
+    <div className="pc-bubble">{item.text}</div>
+    <div className="pc-hosted">
+      <p>{item.peerName ?? "어시스턴트"}는 이름으로 메시지를 받을 수 없어서, 이 전달문을 그 앱에 붙여넣어야 합니다. 첫 줄에 코드를 붙여 Studio로 보낸 기획만 이 대화에 표시됩니다.</p>
+      <details><summary>전달문 보기</summary><pre>{item.prompt}</pre></details>
+      <div className="pc-hosted-actions">
+        <button type="button" className="social-button compact primary" onClick={copy} disabled={!item.prompt}>{copied.startsWith("복사") ? <Check size={13} /> : <Copy size={13} />}전달문 복사</button>
+        {copied && <span role="status">{copied}</span>}
+      </div>
+    </div>
+  </div>;
+}
+
+function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: (item: ChatItem) => void; onReply: (item: ChatItem) => void }) {
   switch (item.kind) {
     case "user": return <div className="pc-msg user"><div className="pc-bubble">{item.text}</div></div>;
     case "assistant": return <div className="pc-msg assistant"><Markdown text={item.text} /></div>;
@@ -78,11 +98,15 @@ function ItemRow({ item, onImplement }: { item: ChatItem; onImplement: (item: Ch
     case "notice": return <div className={"pc-notice" + (item.isError ? " warn" : "")}>{item.text}</div>;
     case "error": return <div className="pc-notice error" role="alert"><CircleAlert size={14} />{item.text}</div>;
     case "tool_result": return <div className={"pc-tool" + (item.isError ? " error" : "")}><pre>{item.text}</pre></div>;
-    case "peer_request": return <div className="pc-msg user peer"><span className="pc-peer-label"><Sparkles size={12} />{item.peer}에게 기획 요청</span><div className="pc-bubble">{item.text}</div></div>;
+    case "peer_request": return <div className="pc-msg user peer"><span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? item.peer}에게 보냄</span><div className="pc-bubble">{item.text}</div></div>;
+    case "hosted_request": return <HostedRequestCard item={item} />;
     case "peer_reply": return <div className="pc-msg peer-reply">
-      <span className="pc-peer-label"><Sparkles size={12} />{item.peer}의 기획 · {time(item.at)}</span>
+      <span className="pc-peer-label" title={item.peer}><Sparkles size={12} />{item.peerName ?? item.peer}의 기획 · {time(item.at)}</span>
       <Markdown text={item.text} />
-      <button type="button" className="social-button compact primary" onClick={() => onImplement(item)}><Wrench size={13} />이 기획으로 구현</button>
+      <div className="pc-reply-actions">
+        <button type="button" className="social-button compact primary" onClick={() => onImplement(item)}><Wrench size={13} />이 기획으로 구현</button>
+        {item.peer && item.messageId && <button type="button" className="social-button compact" onClick={() => onReply(item)}><Reply size={13} />답장</button>}
+      </div>
     </div>;
     default: return null;
   }
@@ -125,6 +149,9 @@ export function ProjectChat({ active }: Props) {
   const [newAgent, setNewAgent] = useState<ChatAgent>("claude");
   const [newMode, setNewMode] = useState<ChatMode>("edit");
   const [peers, setPeers] = useState<ReasonPeer[]>([]);
+  const [replyTo, setReplyTo] = useState<ChatItem | null>(null);
+  const [inbox, setInbox] = useState<ReasonMessage[]>([]);
+  const [showInbox, setShowInbox] = useState(false);
   const [path, setPath] = useState("");
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -151,7 +178,12 @@ export function ProjectChat({ active }: Props) {
     } catch (cause) { setError(errorText(cause)); }
   }, []);
   const loadPeers = useCallback(async () => {
-    try { const snapshot = await refreshNetwork(); setPeers(snapshot.state === "connected" ? snapshot.peers : []); } catch { setPeers([]); }
+    try {
+      const snapshot = await refreshNetwork();
+      const connected = snapshot.state === "connected";
+      setPeers(connected ? snapshot.peers : []);
+      setInbox(connected ? snapshot.messages.filter(m => !m.video && m.text.trim()) : []);
+    } catch { setPeers([]); setInbox([]); }
   }, []);
   useEffect(() => { if (active) { void reload(); void loadPeers(); } }, [active, reload, loadPeers]);
   useEffect(() => { try { if (projectId) localStorage.setItem("toris.projects.project", projectId); } catch { /* storage unavailable */ } }, [projectId]);
@@ -181,10 +213,15 @@ export function ProjectChat({ active }: Props) {
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [items.length, threadId]);
 
   // Planner replies arrive through Reason Network; check while a request is unanswered.
-  const waitingPeer = useMemo(() => {
-    const replied = items.filter(i => i.kind === "peer_reply").length;
-    return items.filter(i => i.kind === "peer_request").length > replied;
-  }, [items]);
+  const waitingPeer = useMemo(() => awaitingPlanner(items), [items]);
+  useEffect(() => { setReplyTo(null); setShowInbox(false); }, [threadId]);
+  const linked = useMemo(() => new Set(items.filter(i => i.kind === "peer_reply").map(i => i.messageId)), [items]);
+  const unlinked = useMemo(() => inbox.filter(m => !linked.has(m.id)).slice(-20).reverse(), [inbox, linked]);
+  const pull = (m: ReasonMessage) => thread && void run(async () => {
+    const added = await linkMessage(thread.id, m.id);
+    setItems(prev => mergeItems(prev, added));
+    setShowInbox(false);
+  });
   useEffect(() => {
     if (!active || !threadId || !waitingPeer) return;
     const timer = window.setInterval(() => { void syncPeers(threadId).then(fresh => fresh.length && setItems(current => mergeItems(current, fresh))).catch(() => {}); }, 8000);
@@ -218,8 +255,15 @@ export function ProjectChat({ active }: Props) {
     void run(async () => {
       let current = thread;
       if (!current) { current = await createThread(project.id, newAgent, newMode); upsert(current); setThreadId(current.id); threadRef.current = current.id; }
-      if (target === "agent") {
+      if (replyTo?.peer && replyTo.messageId) {
+        const sent = await askPeer(current.id, replyTo.peer, message, undefined, replyTo.messageId);
+        setItems(prev => mergeItems(prev, sent));
+        setReplyTo(null);
+      } else if (target === "agent") {
         upsert(await sendMessage(current.id, message));
+      } else if (target.startsWith("hosted:")) {
+        const made = await askHosted(current.id, target.slice(7) as HostedAssistant, message);
+        setItems(prev => mergeItems(prev, made));
       } else {
         const sent = await askPeer(current.id, target, message);
         setItems(prev => mergeItems(prev, sent));
@@ -230,7 +274,9 @@ export function ProjectChat({ active }: Props) {
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
   };
+  const answer = (reply: ChatItem) => { setReplyTo(reply); inputRef.current?.focus(); };
   const implement = (reply: ChatItem) => void run(async () => {
+    setReplyTo(null);
     setTarget("agent");
     if (thread && thread.mode !== "edit") upsert(await updateThread(thread.id, { mode: "edit" }));
     setText(implementationPrompt(reply));
@@ -271,7 +317,7 @@ export function ProjectChat({ active }: Props) {
     <div className="pc-main">
       {!project ? <div className="pc-welcome">
         <h2>앱 폴더를 넣고 채팅으로 만드세요</h2>
-        <p>왼쪽에서 프로젝트를 추가하면 그 폴더에서 <strong>Claude Opus 5.5 (medium)</strong> 또는 Codex가 채팅으로 기획하고 코드를 고칩니다. Reason Network의 Muse·OpenAI Dots에게 기획을 맡기고 답장을 그대로 구현으로 넘길 수도 있습니다.</p>
+        <p>왼쪽에서 프로젝트를 추가하면 그 폴더에서 <strong>Claude Opus 5.5 (medium)</strong> 또는 Codex가 채팅으로 기획하고 코드를 고칩니다. Muse·OpenAI Dots·Grok Bot에게 기획을 맡기고 답장을 그대로 구현으로 넘길 수도 있습니다.</p>
         <button type="button" className="social-button primary" onClick={() => setAdding(true)}><FolderPlus size={16} />프로젝트 추가</button>
       </div> : <>
         <header className="pc-head">
@@ -279,10 +325,19 @@ export function ProjectChat({ active }: Props) {
           <div className="pc-head-actions">
             <div className="pc-segment" role="group" aria-label="모드">{(["plan", "edit"] as ChatMode[]).map(m =>
               <button key={m} type="button" aria-pressed={mode === m} disabled={busy || !!thread?.running} title={MODE_LABELS[m]} onClick={() => setMode(m)}>{m === "plan" ? "기획" : "편집"}</button>)}</div>
+            {thread && <button type="button" className="social-button compact" aria-expanded={showInbox} onClick={() => { setShowInbox(v => !v); void loadPeers(); }}><Inbox size={12} />받은 기획 가져오기</button>}
             {thread?.running && <button type="button" className="social-button compact" onClick={() => void run(() => stopTurn(thread.id))}><Square size={12} />중지</button>}
             {!showChanges && <button type="button" className="pc-icon" aria-label="변경 사항 열기" onClick={() => setShowChanges(true)}><PanelRightOpen size={16} /></button>}
           </div>
         </header>
+        {showInbox && thread && <div className="pc-inbox" aria-label="받은 메시지">
+          <p className="pc-muted">Muse·Dots·Grok 같은 어시스턴트가 코드 없이 Studio로 보낸 기획을 이 대화에 붙입니다. 붙여도 자동으로 실행하지 않습니다.</p>
+          {!unlinked.length && <p className="pc-muted">가져올 메시지가 없습니다.</p>}
+          <ul>{unlinked.map(m => <li key={m.id}>
+            <div><strong>{m.fromName ?? m.from}</strong><small title={m.from}>{m.from}{m.createdAt ? " · " + time(m.createdAt) : ""}</small><p>{m.text.length > 280 ? m.text.slice(0, 280) + "…" : m.text}</p></div>
+            <button type="button" className="social-button compact" disabled={busy} onClick={() => pull(m)}>이 대화에 붙이기</button>
+          </li>)}</ul>
+        </div>}
         <div className="pc-transcript" aria-live="polite">
           {!items.length && <div className="pc-empty">
             <p><strong>{project.name}</strong>에서 무엇을 만들까요?</p>
@@ -292,28 +347,33 @@ export function ProjectChat({ active }: Props) {
               <li><button type="button" onClick={() => setText("테스트를 실행하고 실패하는 것을 고쳐줘.")}>테스트 실행 후 실패 수정</button></li>
             </ul>
           </div>}
-          {rows.map(row => row.type === "tool" ? <ToolRow key={row.call.id} call={row.call} result={row.result} /> : <ItemRow key={row.item.id} item={row.item} onImplement={implement} />)}
+          {rows.map(row => row.type === "tool" ? <ToolRow key={row.call.id} call={row.call} result={row.result} /> : <ItemRow key={row.item.id} item={row.item} onImplement={implement} onReply={answer} />)}
           {thread?.running && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />{AGENT_LABELS[thread.agent]}이(가) 작업 중입니다</div>}
-          {waitingPeer && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />기획 답장을 기다리는 중입니다 (Reason Network)</div>}
+          {waitingPeer && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />기획 답장을 기다리는 중입니다 (Reason Network, 8초마다 확인)</div>}
           <div ref={endRef} />
         </div>
         {error && <p className="pc-error" role="alert"><CircleAlert size={14} />{error}<button type="button" className="pc-icon subtle" aria-label="닫기" onClick={() => setError("")}><X size={12} /></button></p>}
         <form className="pc-composer" onSubmit={submit}>
+          {replyTo && <div className="pc-replying" role="status"><Reply size={13} />{replyTo.peerName ?? replyTo.peer}에게 답장 · Reason Network로 보내며, 상대는 check_inbox로 받습니다
+            <button type="button" className="pc-icon subtle" aria-label="답장 취소" onClick={() => setReplyTo(null)}><X size={12} /></button></div>}
           <textarea ref={inputRef} value={text} onChange={event => setText(event.target.value)} onKeyDown={onKey} rows={3}
-            placeholder={target === "agent" ? (mode === "plan" ? "질문하거나 기획을 요청하세요 (파일은 바꾸지 않습니다)" : "만들거나 고칠 내용을 입력하세요") : "기획자에게 보낼 요청을 입력하세요"} aria-label="메시지" />
+            placeholder={replyTo ? "답장 내용을 입력하세요" : target.startsWith("hosted:") ? "어시스턴트에게 맡길 기획 요청을 입력하세요 (전달문을 만들어 드립니다)" : target === "agent" ? (mode === "plan" ? "질문하거나 기획을 요청하세요 (파일은 바꾸지 않습니다)" : "만들거나 고칠 내용을 입력하세요") : "기획자에게 보낼 요청을 입력하세요"} aria-label="메시지" />
           <div className="pc-composer-bar">
-            <select value={target === "agent" ? "agent:" + agent : target} aria-label="받는 에이전트" disabled={busy}
+            <select value={target === "agent" ? "agent:" + agent : target} aria-label="받는 에이전트" disabled={busy || !!replyTo}
               onChange={event => { const v = event.target.value; if (v.startsWith("agent:")) { setTarget("agent"); if (!thread) setNewAgent(v.slice(6) as ChatAgent); } else setTarget(v); }}>
               <optgroup label="구현 · 이 폴더에서 실행">
                 {(["claude", "codex"] as ChatAgent[]).map(a => <option key={a} value={"agent:" + a} disabled={!!thread && thread.agent !== a}>{AGENT_LABELS[a]}</option>)}
+              </optgroup>
+              <optgroup label="기획 · 호스팅 어시스턴트 (전달문 복사)">
+                {HOSTED_ASSISTANTS.map(a => <option key={a} value={"hosted:" + a}>{HOSTED_LABELS[a]}</option>)}
               </optgroup>
               <optgroup label={peers.length ? "기획 · Reason Network" : "기획 · Reason Network 연결 없음"}>
                 {sortedPeers.map(p => <option key={p.id} value={p.id}>{p.name}{PLANNER.test(p.name) ? " (추천)" : ""}{p.machine ? ` · ${p.machine}` : ""}</option>)}
               </optgroup>
             </select>
             <button type="button" className="pc-icon" aria-label="Reason Network 에이전트 새로고침" onClick={() => void loadPeers()}><RefreshCw size={13} /></button>
-            <span className="pc-hint">{target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : "답장이 오면 이 대화에 표시"} · Enter 보내기</span>
-            <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !!thread?.running}>
+            <span className="pc-hint">{replyTo ? "보낸 쪽에게만 답장" : target === "agent" ? (mode === "edit" ? "편집: 이 폴더의 파일을 묻지 않고 수정" : "기획: 읽기만 함") : target.startsWith("hosted:") ? "전달문을 만들고, 코드가 붙은 답장을 이 대화에 표시" : "답장이 오면 이 대화에 표시"} · Enter 보내기</span>
+            <button type="submit" className="social-button primary compact" disabled={busy || !text.trim() || target === "agent" && !replyTo && !!thread?.running}>
               {busy ? <LoaderCircle size={14} className="social-spin" /> : <Send size={14} />}보내기</button>
           </div>
         </form>

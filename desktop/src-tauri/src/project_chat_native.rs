@@ -2,7 +2,7 @@
 //! folders are confirmed in an OS dialog this process owns before they become
 //! projects, and every turn re-checks its folder before an agent starts there.
 use crate::project_chat::{
-    self, ChatAgent, ChatMode, Item, ItemKind, ProjectChat, MAX_PROMPT_BYTES,
+    self, ChatAgent, ChatMode, HostedAssistant, Item, ItemKind, ProjectChat, MAX_PROMPT_BYTES,
 };
 use crate::reason_agents::{checked_folder, typed_path};
 use crate::reason_network::{ReasonNetwork, MAX_SEND_BYTES};
@@ -87,6 +87,24 @@ pub struct SendInput {
 pub struct AskPeerInput {
     thread_id: String,
     peer: String,
+    text: String,
+    /// Answer a planner reply in this thread (how a hosted assistant gets an answer).
+    #[serde(default)]
+    reply_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkInput {
+    thread_id: String,
+    message_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostedInput {
+    thread_id: String,
+    assistant: HostedAssistant,
     text: String,
 }
 
@@ -315,6 +333,9 @@ pub async fn project_chat_ask_peer(
     if typed.is_empty() {
         return Err("보낼 내용을 입력하세요.".into());
     }
+    if let Some(reply_to) = input.reply_to.as_deref() {
+        return answer_reply(&chat, &network, &thread, reply_to, &input.peer, typed).await;
+    }
     // Planners elsewhere cannot open the folder: quote Studio's own read of it as data.
     let snapshot = crate::reason_project::snapshot(Path::new(&project.folder));
     let text = format!(
@@ -336,6 +357,109 @@ pub async fn project_chat_ask_peer(
         });
     }
     Ok(vec![item])
+}
+
+/// Sends an answer to a planner reply this thread holds, as a reply to that
+/// message, so a hosted assistant sees it with check_inbox. Only the sender of
+/// that reply can be answered this way.
+async fn answer_reply(
+    chat: &ProjectChat,
+    network: &ReasonNetwork,
+    thread: &project_chat::Thread,
+    reply_to: &str,
+    peer: &str,
+    typed: &str,
+) -> Result<Vec<Item>, String> {
+    let reply = chat
+        .reply_item(&thread.id, reply_to)
+        .ok_or("이 대화에 없는 기획에는 답장할 수 없습니다.")?;
+    if reply.peer.as_deref() != Some(peer) {
+        return Err("답장은 그 기획을 보낸 쪽에게만 보낼 수 있습니다.".into());
+    }
+    if typed.len() > MAX_SEND_BYTES {
+        return Err("답장이 너무 깁니다. 내용을 줄이세요.".into());
+    }
+    let receipt = network.send(peer, typed, Some(reply_to)).await?;
+    let mut item = Item::new(ItemKind::PeerRequest, typed.to_owned());
+    item.peer = Some(peer.to_owned());
+    item.peer_name = reply.peer_name.clone();
+    item.message_id = receipt.message_ids.first().cloned();
+    chat.append(&thread.id, std::slice::from_ref(&item))?;
+    Ok(vec![item])
+}
+
+/// Records a request for a hosted assistant and returns it with the prompt to
+/// copy. Nothing is sent: the user pastes the prompt into Muse, Dots or Grok.
+#[tauri::command]
+pub async fn project_chat_hosted_request(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    network: Network<'_>,
+    input: HostedInput,
+) -> Result<Vec<Item>, String> {
+    crate::updater::authorize(&window)?;
+    wire(&app, &chat);
+    let thread = chat.thread(&input.thread_id)?;
+    let project = chat.project(&thread.project_id)?;
+    let typed = crate::reason_pipeline::plain_text(&input.text);
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err("기획 요청을 입력하세요.".into());
+    }
+    if typed.len() > MAX_SEND_BYTES / 2 {
+        return Err("요청이 너무 깁니다. 내용을 줄이세요.".into());
+    }
+    let snapshot = network.refresh().await;
+    let studio = snapshot
+        .self_id
+        .filter(|_| snapshot.state == "connected")
+        .ok_or("Reason Network에 연결된 뒤에 요청을 만들 수 있습니다. Agent → Reason Network에서 연결을 확인하세요.")?;
+    let code = project_chat::handoff_code();
+    let folder = crate::reason_project::snapshot(Path::new(&project.folder));
+    let prompt = project_chat::hosted_prompt(
+        input.assistant,
+        &project.name,
+        typed,
+        &folder,
+        &studio,
+        &code,
+    );
+    let mut item = Item::new(ItemKind::HostedRequest, typed.to_owned());
+    item.peer_name = Some(input.assistant.label().to_owned());
+    item.code = Some(code);
+    item.prompt = Some(prompt);
+    chat.append(&thread.id, std::slice::from_ref(&item))?;
+    if thread.title == "새 대화" {
+        let _ = chat.update_thread(&thread.id, |t| {
+            t.title = project_chat::title_from(typed);
+            Ok(())
+        });
+    }
+    Ok(vec![item])
+}
+
+/// Files a message from Studio's inbox in a thread as a planner reply. Only
+/// the IDs come from the window; sender and text are read from the inbox.
+#[tauri::command]
+pub async fn project_chat_link_message(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    network: Network<'_>,
+    input: LinkInput,
+) -> Result<Vec<Item>, String> {
+    crate::updater::authorize(&window)?;
+    let thread = chat.thread(&input.thread_id)?;
+    let snapshot = network.refresh().await;
+    let message = snapshot
+        .messages
+        .iter()
+        .find(|m| m.id == input.message_id)
+        .ok_or("받은 메시지함에서 그 메시지를 찾지 못했습니다. 새로고침한 뒤 다시 고르세요.")?;
+    Ok(chat
+        .link_message(&thread.id, message)?
+        .into_iter()
+        .collect())
 }
 
 /// Asks the network for new mail, then adds replies that belong to this thread.

@@ -4,8 +4,9 @@
 use serde_json::json;
 use std::path::Path;
 use toris_studio_desktop::project_chat::{
-    changes, normalize_claude, normalize_codex, title_from, tool_summary, turn_command, ChatAgent,
-    ChatMode, Item, ItemKind, ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL, MAX_RUNNING,
+    changes, handoff_code, hosted_prompt, normalize_claude, normalize_codex, strip_code,
+    title_from, tool_summary, turn_command, ChatAgent, ChatMode, HostedAssistant, Item, ItemKind,
+    ProjectChat, Thread, CLAUDE_EFFORT, CLAUDE_MODEL, MAX_RUNNING,
 };
 use toris_studio_desktop::reason_agents::{checked_folder, typed_path};
 use toris_studio_desktop::reason_network::Message;
@@ -342,6 +343,126 @@ fn project_chat_links_only_replies_from_the_asked_planner() {
         chat.sync_replies(&t.id, &mail).unwrap().is_empty(),
         "no duplicates"
     );
+}
+
+fn mail(id: &str, from: &str, text: &str) -> Message {
+    serde_json::from_value(
+        json!({"id":id,"from":from,"fromName":"Dots","text":text,"createdAt":null,"replyTo":null}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn project_chat_hosted_prompt_names_studio_and_code() {
+    let code = handoff_code();
+    assert!(code.starts_with("TS-") && code.len() == 13, "{code}");
+    assert_ne!(code, handoff_code(), "codes are fresh");
+    let prompt = hosted_prompt(
+        HostedAssistant::Dots,
+        "pocket-app",
+        "로그인 화면 기획",
+        "구성: Next.js",
+        "toris/toris-studio@mac",
+        &code,
+    );
+    assert!(prompt.contains("OpenAI Dots"));
+    assert!(prompt.contains("`toris/toris-studio@mac`"));
+    assert!(prompt.contains(&format!("`[{code}]`")));
+    assert!(prompt.contains("send_message") && prompt.contains("check_inbox"));
+    assert!(prompt.contains("로그인 화면 기획") && prompt.contains("구성: Next.js"));
+    assert_eq!(serde_json::to_value(HostedAssistant::Grok).unwrap(), "grok");
+    assert!(serde_json::from_str::<HostedAssistant>("\"claude\"").is_err());
+}
+
+#[test]
+fn project_chat_strip_code_needs_it_on_the_first_line() {
+    let code = "TS-ABCDEF1234";
+    assert_eq!(
+        strip_code("\n[TS-ABCDEF1234]\n## 목표\n로그인", code).as_deref(),
+        Some("## 목표\n로그인")
+    );
+    assert_eq!(
+        strip_code("[TS-ABCDEF1234] 로그인 기획\n1. 화면", code).as_deref(),
+        Some("로그인 기획\n1. 화면")
+    );
+    assert_eq!(
+        strip_code("[ts-abcdef1234]\n본문", code).as_deref(),
+        Some("본문"),
+        "case-insensitive match"
+    );
+    assert!(
+        strip_code("안녕\n[TS-ABCDEF1234]", code).is_none(),
+        "not on first line"
+    );
+    assert!(
+        strip_code("[TS-ABCDEF9999]\n본문", code).is_none(),
+        "other code"
+    );
+    assert!(strip_code("[TS-ABCDEF1234]", code).is_none(), "empty body");
+}
+
+#[test]
+fn project_chat_files_hosted_replies_by_code_and_answers_their_sender() {
+    let root = tempfile::tempdir().unwrap();
+    let chat = ProjectChat::new(root.path().to_path_buf());
+    let project = chat.add_project("/Users/me/projects/app").unwrap();
+    let t = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan)
+        .unwrap();
+    let other = chat
+        .create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan)
+        .unwrap();
+    let mut request = Item::new(ItemKind::HostedRequest, "로그인 기획");
+    request.code = Some("TS-AAAA000011".into());
+    request.peer_name = Some("OpenAI Dots".into());
+    chat.append(&t.id, &[request]).unwrap();
+
+    let inbox = [
+        mail(
+            "h1",
+            "toris/chatgpt",
+            "[TS-AAAA000011]\n## 로그인 기획\n1. 이메일",
+        ),
+        mail("h2", "toris/chatgpt", "아무 메시지"),
+        mail("h3", "toris/grok", "[TS-BBBB000011]\n다른 대화"),
+    ];
+    let fresh = chat.sync_replies(&t.id, &inbox).unwrap();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].kind, ItemKind::PeerReply);
+    assert_eq!(fresh[0].text, "## 로그인 기획\n1. 이메일");
+    assert_eq!(
+        fresh[0].peer.as_deref(),
+        Some("toris/chatgpt"),
+        "reply address kept"
+    );
+    assert_eq!(fresh[0].peer_name.as_deref(), Some("Dots"));
+    assert!(
+        chat.sync_replies(&t.id, &inbox).unwrap().is_empty(),
+        "no duplicates"
+    );
+    assert!(
+        chat.sync_replies(&other.id, &inbox).unwrap().is_empty(),
+        "code belongs to one thread"
+    );
+    assert!(chat.reply_item(&t.id, "h1").is_some());
+    assert!(chat.reply_item(&t.id, "h2").is_none());
+    assert!(chat.reply_item(&other.id, "h1").is_none());
+
+    // A later answer to Studio's reply comes back through the normal reply path.
+    let mut answer = Item::new(ItemKind::PeerRequest, "결제도 넣어줘");
+    answer.peer = Some("toris/chatgpt".into());
+    answer.message_id = Some("sent-9".into());
+    chat.append(&t.id, &[answer]).unwrap();
+    let follow: Message = serde_json::from_value(json!({"id":"h4","from":"toris/chatgpt","fromName":"Dots","text":"결제 기획","createdAt":null,"replyTo":"sent-9"})).unwrap();
+    let fresh = chat.sync_replies(&t.id, &[follow]).unwrap();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].text, "결제 기획");
+
+    // A message without a code can be filed by hand, once.
+    let linked = chat.link_message(&other.id, &inbox[1]).unwrap().unwrap();
+    assert_eq!(linked.kind, ItemKind::PeerReply);
+    assert_eq!(linked.peer.as_deref(), Some("toris/chatgpt"));
+    assert!(chat.link_message(&other.id, &inbox[1]).unwrap().is_none());
 }
 
 #[test]

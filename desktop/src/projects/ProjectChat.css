@@ -112,3 +112,16 @@
   .pc-sidebar { border-right: 0; border-bottom: 1px solid var(--social-line); max-height: 240px; }
   .pc-main { min-height: 560px; }
 }
+
+.pc-hosted { margin-top: 6px; padding: 8px 10px; border: 1px dashed var(--border, rgba(127,127,127,.35)); border-radius: 8px; font-size: 12px; display: grid; gap: 6px; max-width: 100%; }
+.pc-hosted p { margin: 0; opacity: .8; }
+.pc-hosted pre { max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; margin: 6px 0 0; }
+.pc-hosted-actions, .pc-reply-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pc-hosted-actions span { font-size: 12px; opacity: .8; }
+.pc-replying { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 8px; border-radius: 6px; background: rgba(127,127,127,.12); }
+.pc-replying .pc-icon { margin-left: auto; }
+.pc-inbox { margin: 0 16px; padding: 10px 12px; border: 1px solid var(--social-line); border-radius: 10px; max-height: 280px; overflow: auto; font-size: 12px; }
+.pc-inbox ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pc-inbox li { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; }
+.pc-inbox li small { margin-left: 6px; opacity: .7; }
+.pc-inbox li p { margin: 4px 0 0; white-space: pre-wrap; }

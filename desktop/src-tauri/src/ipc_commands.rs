@@ -100,6 +100,8 @@ macro_rules! app_command_registry {
             [crate::project_chat_native] project_chat_stop,
             [crate::project_chat_native] project_chat_ask_peer,
             [crate::project_chat_native] project_chat_sync_peers,
+            [crate::project_chat_native] project_chat_hosted_request,
+            [crate::project_chat_native] project_chat_link_message,
             [crate::desktop] get_settings,
             [crate::desktop] get_keychain_status,
             [crate::desktop] retry_keychain_access,
