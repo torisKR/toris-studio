@@ -5,7 +5,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
+  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, createThread, deleteThread, diffLines, implementationPrompt, listProjects, mergeItems, MODE_LABELS, normalizeEvent, readChanges,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
   type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Changes, type Project, type SearchHit, type Thread
 } from "./project-chat-client";
@@ -112,14 +112,14 @@ function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: 
   }
 }
 
-function ChangesPanel({ project, refreshKey, onClose }: { project: Project; refreshKey: number; onClose: () => void }) {
+function ChangesPanel({ project, threadId, refreshKey, onClose }: { project: Project; threadId: string | null; refreshKey: number; onClose: () => void }) {
   const [changes, setChanges] = useState<Changes | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError("");
-    try { setChanges(await readChanges(project.id)); } catch (cause) { setError(errorText(cause)); } finally { setLoading(false); }
-  }, [project.id]);
+    try { setChanges(await readChanges(project.id, undefined, threadId ?? undefined)); } catch (cause) { setChanges(null); setError(errorText(cause)); } finally { setLoading(false); }
+  }, [project.id, threadId]);
   useEffect(() => { void load(); }, [load, refreshKey]);
   const lines = useMemo(() => diffLines(changes?.diff ?? ""), [changes?.diff]);
   return <aside className="pc-changes" aria-label="변경 사항">
@@ -128,6 +128,7 @@ function ChangesPanel({ project, refreshKey, onClose }: { project: Project; refr
       <button type="button" className="pc-icon" aria-label="변경 사항 새로고침" onClick={() => void load()} disabled={loading}>{loading ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}</button>
       <button type="button" className="pc-icon" aria-label="변경 사항 닫기" onClick={onClose}><PanelRightClose size={15} /></button>
     </header>
+    {changes?.folder && changes.folder !== project.folder && <p className="pc-muted pc-changes-folder" title={changes.folder}>worktree: {changes.folder}</p>}
     {error && <p className="pc-error" role="alert">{error}</p>}
     {changes && !changes.isRepo && <p className="pc-muted">git 저장소가 아니어서 변경 사항을 보여 줄 수 없습니다.</p>}
     {changes?.isRepo && !changes.files.length && <p className="pc-muted">바뀐 파일이 없습니다.</p>}
@@ -269,6 +270,17 @@ export function ProjectChat({ active }: Props) {
     if (threadId === t.id) setThreadId(null);
     setThreads(current => current.filter(x => x.id !== t.id));
   });
+  // Before a thread starts it may move into an existing git worktree of the project; the host
+  // picks the folder in an OS dialog, verifies it with git and asks for confirmation.
+  const started = threadStarted(thread, items);
+  const attachWorktree = () => project && void run(async () => {
+    let current = thread;
+    const created = !current;
+    if (!current) current = await createThread(project.id, newAgent, newMode);
+    const linked = await linkWorktree(current.id, null).catch(async cause => { if (created) await deleteThread(current.id).catch(() => {}); throw cause; });
+    if (!linked) { if (created) await deleteThread(current.id).catch(() => {}); return; }
+    upsert(linked); setThreadId(linked.id); threadRef.current = linked.id; setChangesKey(k => k + 1);
+  });
   const newThread = () => { setThreadId(null); setTarget("agent"); inputRef.current?.focus(); };
 
   // Search opens a project or thread only: it never stops, starts or retargets a run.
@@ -397,6 +409,17 @@ export function ProjectChat({ active }: Props) {
             {!showChanges && <button type="button" className="pc-icon" aria-label="변경 사항 열기" onClick={() => setShowChanges(true)}><PanelRightOpen size={16} /></button>}
           </div>
         </header>
+        <div className="pc-workdir" aria-label="작업 폴더">
+          <GitBranch size={13} />
+          {thread?.worktree ? <>
+            <span>작업 폴더 <strong title={thread.worktree.path}>{thread.worktree.path.split("/").pop()}</strong></span>
+            <span className="pc-workdir-tag">{thread.worktree.branch ?? "분리된 HEAD"}</span>
+            <span title={thread.worktree.base}>기준 {thread.worktree.base.slice(0, 7)}</span>
+            <span className="pc-workdir-origin" title={project.folder}>원본 {project.folder}</span>
+          </> : <span title={project.folder}>작업 폴더: 원본 프로젝트 폴더 <code>{project.folder}</code></span>}
+          {!started && <button type="button" className="social-button compact" disabled={busy} onClick={attachWorktree}><FolderOpen size={12} />{thread?.worktree ? "다른 worktree로 바꾸기" : "기존 worktree 연결"}</button>}
+          {started && thread?.worktree && <span className="pc-workdir-fixed">대화 시작 후 고정</span>}
+        </div>
         {showInbox && thread && <div className="pc-inbox" aria-label="받은 메시지">
           <p className="pc-muted">Muse·Dots·Grok 같은 어시스턴트가 코드 없이 Studio로 보낸 기획을 이 대화에 붙입니다. 붙여도 자동으로 실행하지 않습니다.</p>
           {!unlinked.length && <p className="pc-muted">가져올 메시지가 없습니다.</p>}
@@ -446,6 +469,6 @@ export function ProjectChat({ active }: Props) {
         </form>
       </>}
     </div>
-    {project && showChanges && <ChangesPanel project={project} refreshKey={changesKey} onClose={() => setShowChanges(false)} />}
+    {project && showChanges && <ChangesPanel key={thread?.worktree?.path ?? project.folder} project={project} threadId={thread?.id ?? null} refreshKey={changesKey} onClose={() => setShowChanges(false)} />}
   </section>;
 }
