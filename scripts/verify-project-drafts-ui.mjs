@@ -191,11 +191,23 @@ try {
   await composition("compositionend");
   await imeEnter(false);
   assert.equal(sends().length, sent, "the IME's confirming Enter after compositionend (WebKit order, keyCode 229) does not send");
+  // WKWebView order captured in the real Tauri app (macOS 2-Set Korean, g k s then Enter): no
+  // composition events at all. The IME re-commits "한" with insertReplacementText, then the Enter
+  // keydown arrives as a plain Enter (keyCode 13, isComposing false). isSendEnter alone sent it.
+  const wkConfirmingEnter = () => box.evaluate(el => {
+    el.dispatchEvent(new InputEvent("input", { inputType: "insertReplacementText", data: "한", bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true, isComposing: false }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+  });
+  await wkConfirmingEnter();
+  await new Promise(r => setTimeout(r, 150));
+  assert.equal(sends().length, sent, "the Enter that confirms a syllable in WKWebView's order (insertReplacementText, then keyCode 13) does not send");
+  await expectBox("한글 입력", "the confirming Enter keeps the text");
   await box.press("Shift+Enter");
   await box.pressSequentially("둘째 줄");
   await expectBox("한글 입력\n둘째 줄", "Shift+Enter adds a line");
   assert.equal(sends().length, sent, "Enter while composing and Shift+Enter do not send");
-  report.checks.push("Enter during IME composition (Chromium order), the IME's confirming Enter after compositionend (WebKit order, keyCode 229) and Shift+Enter do not send (synthetic events).");
+  report.checks.push("Enter during IME composition (Chromium order), the IME's confirming Enter after compositionend (WebKit order, keyCode 229), the confirming Enter in the order captured in the real WKWebView app (insertReplacementText, then keyCode 13) and Shift+Enter do not send (synthetic events).");
 
   // 6b. After the composition ends, a separate plain Enter sends exactly once, with the mixed text intact.
   await open("결제 대화");
@@ -207,6 +219,9 @@ try {
   await imeEnter(false);
   assert.equal(sends().length, sent, "the confirming Enter does not send");
   await expectBox(mixed, "the confirming Enter keeps the text");
+  await wkConfirmingEnter();
+  assert.equal(sends().length, sent, "the confirming Enter in WKWebView's order does not send");
+  await expectBox(mixed, "the WKWebView confirming Enter keeps the text");
   await box.press("Enter");
   await until(() => sends().length === sent + 1, "the plain Enter sends");
   await until(async () => await root.locator(".pc-composer .social-spin").count() === 0, "the send finishes");
