@@ -64,6 +64,9 @@ pub mod ops_status;
 pub mod production;
 #[cfg(feature = "desktop")]
 mod production_native;
+pub mod project_chat;
+#[cfg(feature = "desktop")]
+mod project_chat_native;
 pub mod publication_handoff;
 pub mod publication_media;
 #[cfg(feature = "desktop")]
@@ -761,6 +764,7 @@ mod desktop {
             .manage(production::shared())
             .manage(reason_network::shared())
             .manage(Arc::new(reason_agents::ReasonAgents::default()))
+            .manage(project_chat_native::shared())
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,
@@ -949,6 +953,7 @@ mod desktop {
                     app.state::<Arc<crate::mobile_host::MobileHost>>()
                         .shutdown();
                     crate::publications::shutdown_media();
+                    project_chat_native::shutdown(&app.state::<Arc<project_chat::ProjectChat>>());
                     app.state::<Arc<reason_agents::ReasonAgents>>().shutdown();
                     app.state::<Arc<reason_network::ReasonNetwork>>().shutdown();
                     app.state::<Arc<agent_runtime::AgentRuntime>>().shutdown();

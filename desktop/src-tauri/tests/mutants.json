@@ -1146,8 +1146,8 @@
  {
   "id": "rs.reason-agent-home-allowed",
   "file": "desktop/src-tauri/src/reason_agents.rs",
-  "find": "if folder.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&folder))\n        {",
-  "replace": "if false\n        {",
+  "find": "if folder.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&folder)) {",
+  "replace": "if false {",
   "cmd": [
    "cargo",
    "test",
@@ -1396,6 +1396,86 @@
    "--no-default-features",
    "--test",
    "reason_pipeline_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.project-chat-claude-bypass",
+  "file": "desktop/src-tauri/src/project_chat.rs",
+  "find": "ChatMode::Edit => \"acceptEdits\",",
+  "replace": "ChatMode::Edit => \"bypassPermissions\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "project_chat_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.project-chat-codex-full-access",
+  "file": "desktop/src-tauri/src/project_chat.rs",
+  "find": "ChatMode::Edit => \"sandbox_mode=\\\"workspace-write\\\"\",",
+  "replace": "ChatMode::Edit => \"sandbox_mode=\\\"danger-full-access\\\"\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "project_chat_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.project-chat-reply-any-sender",
+  "file": "desktop/src-tauri/src/project_chat.rs",
+  "find": "m.reply_to.as_deref() == Some(*sent) && same_sender(&m.from, peer)",
+  "replace": "m.reply_to.as_deref() == Some(*sent)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "project_chat_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.project-chat-no-running-cap",
+  "file": "desktop/src-tauri/src/project_chat.rs",
+  "find": "if running.len() >= MAX_RUNNING {",
+  "replace": "if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "project_chat_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.project-chat-blank-text-shown",
+  "file": "desktop/src-tauri/src/project_chat.rs",
+  "find": "\"text\" if !s(part, \"text\").trim().is_empty() => out.items.push(Item::new(",
+  "replace": "\"text\" => out.items.push(Item::new(",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "project_chat_contract"
   ],
   "timeoutMs": 900000
  }

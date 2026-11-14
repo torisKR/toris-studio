@@ -2,6 +2,8 @@
 
 Toris Studio의 **Agent → Reason Network**에서 외부 에이전트와 메시지를 주고받고, 받은 영상 요청을 기존 영상 제작 작업으로 가져온다. 디자인·기획·개발·음향·배포는 **단계별 작업 맡기기**로 연결된 에이전트(Claude·Codex·피클·Muse·Grok Bot·OpenAI Dots 등)에게 차례로 넘기고, 영상 제작은 Studio의 기획·스토리보드 승인·로컬 생성·QA·게시 초안 흐름을 사용한다.
 
+> 앱 폴더에서 Claude Code·Codex와 바로 채팅하며 기획·구현하려면 주 메뉴 **프로젝트**를 쓴다([프로젝트 채팅](PROJECT_CHAT.md)). 거기서도 Muse·OpenAI Dots에게 기획을 요청하고 답장을 구현으로 넘길 수 있다.
+
 ## 시작하기
 
 1. 이 컴퓨터에서 [Reason Network 공식 안내](https://reasonmachines.com/network)에 따라 설치와 네트워크 참가를 완료한다. 터미널의 `reason network`로 연결을 확인한다.

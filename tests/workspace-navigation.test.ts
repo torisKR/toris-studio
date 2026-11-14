@@ -8,7 +8,9 @@ test("retired coding and split connection screens restore into the SNS workspace
   assert.equal(restoreView("video"), "video");
   assert.equal(sectionFor("trends"), "content");
   assert.equal(sectionFor("assets"), "creation");
-  assert.deepEqual(MAIN_SECTIONS.map(item => item.id), ["sns", "content", "creation", "publications", "operations"]);
+  assert.deepEqual(MAIN_SECTIONS.map(item => item.id), ["projects", "sns", "content", "creation", "publications", "operations"]);
+  assert.equal(restoreView("projects"), "projects");
+  assert.equal(sectionFor("projects"), "projects");
   assert.equal(sectionFor("agent"), "creation");
   assert.equal(sectionFor("planner"), "operations");
   assert.equal(sectionFor("ops"), "operations");

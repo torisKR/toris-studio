@@ -172,6 +172,66 @@ fn branch(folder: &Path) -> Option<String> {
         .then(|| name.to_string())
 }
 
+/// Expands a path the user typed (`/…` or `~/…`). Only a proposal: callers
+/// still pass the result through [`checked_folder`].
+pub fn typed_path(typed: &str) -> Result<PathBuf, String> {
+    let typed = typed.trim();
+    if typed.is_empty() || typed.len() > MAX_PATH_INPUT || typed.chars().any(char::is_control) {
+        return Err("프로젝트 폴더 경로를 입력하세요.".into());
+    }
+    let path = match typed.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir()
+            .ok_or("홈 폴더를 확인하지 못했습니다.")?
+            .join(rest),
+        None => PathBuf::from(typed),
+    };
+    if !path.is_absolute() {
+        return Err("/ 또는 ~/ 로 시작하는 전체 경로를 입력하세요.".into());
+    }
+    Ok(path)
+}
+
+/// Resolves a folder and applies the rules for one an agent may edit without
+/// asking: a real directory, not the home folder or above, not a system,
+/// settings or key folder. Returns the canonical path as text.
+pub fn checked_folder(picked: &Path) -> Result<String, String> {
+    let folder = picked
+        .canonicalize()
+        .map_err(|_| "선택한 폴더를 열 수 없습니다.")?;
+    if !folder.is_dir() {
+        return Err("프로젝트 폴더를 선택하세요.".into());
+    }
+    let home = dirs::home_dir().and_then(|home| home.canonicalize().ok());
+    if folder.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&folder)) {
+        return Err(
+            "홈 폴더나 그 상위 폴더 전체는 맡길 수 없습니다. 프로젝트 폴더를 선택하세요.".into(),
+        );
+    }
+    // Settings, keys and app data: ~/.ssh, ~/.aws, ~/Library and the like.
+    let private = home
+        .as_ref()
+        .and_then(|home| folder.strip_prefix(home).ok())
+        .is_some_and(|inside| {
+            inside.components().next().is_some_and(|first| {
+                let first = first.as_os_str().to_string_lossy();
+                first.starts_with('.') || first == "Library"
+            })
+        });
+    if private || SYSTEM_ROOTS.iter().any(|root| folder.starts_with(root)) {
+        return Err("시스템·설정 폴더는 맡길 수 없습니다. 프로젝트 폴더를 선택하세요.".into());
+    }
+    folder
+        .to_str()
+        .filter(|text| !text.chars().any(char::is_control))
+        .map(str::to_owned)
+        .ok_or_else(|| "폴더 경로에 사용할 수 없는 문자가 있습니다.".into())
+}
+
+/// The current branch of a git checkout, read from `.git/HEAD` without running git.
+pub fn current_branch(folder: &Path) -> Option<String> {
+    branch(folder)
+}
+
 impl ReasonAgents {
     /// Dependency injection for native contract tests. Never exposed over IPC.
     #[doc(hidden)]
@@ -197,40 +257,11 @@ impl ReasonAgents {
     /// Records the one folder the user just picked. `picked` must come from the
     /// native folder dialog; it is resolved and checked before it is remembered.
     pub fn offer(&self, picked: &Path, kind: AgentKind, machine: &str) -> Result<Draft, String> {
-        let folder = picked
-            .canonicalize()
-            .map_err(|_| "선택한 폴더를 열 수 없습니다.")?;
-        if !folder.is_dir() {
-            return Err("프로젝트 폴더를 선택하세요.".into());
-        }
-        let home = dirs::home_dir().and_then(|home| home.canonicalize().ok());
-        if folder.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&folder))
-        {
-            return Err(
-                "홈 폴더나 그 상위 폴더 전체는 맡길 수 없습니다. 프로젝트 폴더를 선택하세요."
-                    .into(),
-            );
-        }
-        // Settings, keys and app data: ~/.ssh, ~/.aws, ~/Library and the like.
-        let private = home
-            .as_ref()
-            .and_then(|home| folder.strip_prefix(home).ok())
-            .is_some_and(|inside| {
-                inside.components().next().is_some_and(|first| {
-                    let first = first.as_os_str().to_string_lossy();
-                    first.starts_with('.') || first == "Library"
-                })
-            });
-        if private || SYSTEM_ROOTS.iter().any(|root| folder.starts_with(root)) {
-            return Err("시스템·설정 폴더는 맡길 수 없습니다. 프로젝트 폴더를 선택하세요.".into());
-        }
-        let text = folder
-            .to_str()
-            .filter(|text| !text.chars().any(char::is_control));
-        let text = text.ok_or("폴더 경로에 사용할 수 없는 문자가 있습니다.")?;
+        let text = checked_folder(picked)?;
+        let folder = PathBuf::from(&text);
         let draft = Draft {
             kind,
-            folder: text.to_string(),
+            folder: text,
             branch: branch(&folder),
             name: session_name(machine, kind, &folder),
             model: kind.model().map(str::to_owned),
@@ -243,19 +274,7 @@ impl ReasonAgents {
     /// resolved here, held to the same folder rules as a dialog pick, and still
     /// needs the native confirmation before anything starts.
     pub fn offer_path(&self, typed: &str, kind: AgentKind, machine: &str) -> Result<Draft, String> {
-        let typed = typed.trim();
-        if typed.is_empty() || typed.len() > MAX_PATH_INPUT || typed.chars().any(char::is_control) {
-            return Err("프로젝트 폴더 경로를 입력하세요.".into());
-        }
-        let path = match typed.strip_prefix("~/") {
-            Some(rest) => dirs::home_dir()
-                .ok_or("홈 폴더를 확인하지 못했습니다.")?
-                .join(rest),
-            None => PathBuf::from(typed),
-        };
-        if !path.is_absolute() {
-            return Err("/ 또는 ~/ 로 시작하는 전체 경로를 입력하세요.".into());
-        }
+        let path = typed_path(typed)?;
         self.offer(&path, kind, machine)
     }
 

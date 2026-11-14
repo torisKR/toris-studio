@@ -75,7 +75,7 @@ pub struct AgentLaunchInput {
 }
 
 /// A confirmation the webview cannot answer for the user: an OS dialog owned by this process.
-fn confirm(app: &tauri::AppHandle, title: &str, message: String, action: &str) -> bool {
+pub(crate) fn confirm(app: &tauri::AppHandle, title: &str, message: String, action: &str) -> bool {
     app.dialog()
         .message(message)
         .title(title)
