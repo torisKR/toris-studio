@@ -1329,21 +1329,29 @@ pub async fn start_turn_with(
     };
     let pid = child.id().unwrap_or(0);
     chat.set_pid(&thread.id, pid);
-    // Anything that fails before the turn is recorded ends its process group
-    // and frees its slot, so nothing is left running unseen.
-    let abort = |child: &mut tokio::process::Child, error: String| {
-        signal(pid, libc::SIGKILL);
-        let _ = child.start_kill();
-        chat.release(&thread.id);
-        Err::<Thread, String>(error)
+    // Anything that fails before the turn is recorded ends its process group,
+    // reaps the CLI and frees its slot before the error is returned, so
+    // nothing is left running unseen and the same thread can be retried.
+    // The prompt has not been written to stdin yet at any of these points.
+    let abort = |mut child: tokio::process::Child, error: String| {
+        let chat = chat.clone();
+        let id = thread.id.clone();
+        async move {
+            signal(pid, libc::SIGKILL);
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+            chat.release(&id);
+            Err::<Thread, String>(error)
+        }
     };
     // The work folder is fixed once a turn runs; refuse if it moved meanwhile.
     let linked = |t: &Thread| t.worktree.as_ref().map(|w| w.path.clone());
     if chat.thread(&thread.id).ok().as_ref().map(linked) != Some(linked(&thread)) {
         return abort(
-            &mut child,
+            child,
             "대화의 작업 폴더가 바뀌었습니다. 다시 보내세요.".into(),
-        );
+        )
+        .await;
     }
     let first = chat.items(&thread.id).is_empty();
     let updated = match chat.update_thread(&thread.id, |t| {
@@ -1353,12 +1361,12 @@ pub async fn start_turn_with(
         Ok(())
     }) {
         Ok(updated) => updated,
-        Err(error) => return abort(&mut child, error),
+        Err(error) => return abort(child, error).await,
     };
     let mut said = Item::new(ItemKind::User, shown);
     said.attachments = attachments;
     if let Err(error) = chat.append(&thread.id, &[said]) {
-        return abort(&mut child, error);
+        return abort(child, error).await;
     }
     // A stop asked while the slot was only reserved applies now.
     if chat.stop_requested(&thread.id) {
