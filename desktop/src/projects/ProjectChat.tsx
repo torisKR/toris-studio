@@ -11,7 +11,7 @@ import {
 } from "./project-chat-client";
 import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
-import { isSendEnter } from "./composer-keys";
+import { createComposerGuard } from "./composer-keys";
 import { browserStorage, DRAFT_SAVED, DraftStore, draftSlot, joinDraft, missingDrafts } from "./project-drafts";
 import { COPIED_NOTE, copyDraft, DISCARD_CONFIRM, DraftRecovery } from "./DraftRecovery";
 import { ChangesPanel } from "./ChangesPanel";
@@ -197,6 +197,7 @@ export function ProjectChat({ active }: Props) {
   const threadRef = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const imeGuard = useRef(createComposerGuard());
   threadRef.current = threadId;
   // Which screen is shown, so async work can tell whether the screen it started from is still open.
   const view = useRef<ViewTracker | null>(null);
@@ -482,8 +483,11 @@ export function ProjectChat({ active }: Props) {
     });
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter that confirms a Korean (IME) composition never sends, in either browser's event order.
-    if (isSendEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode })) { event.preventDefault(); submit(); }
+    // Enter that confirms a Korean (IME) syllable never sends, in Chromium's order or WKWebView's
+    // (an insertReplacementText commit, then a plain Enter keydown). That Enter adds no line either.
+    const action = imeGuard.current.onKeyDown({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode });
+    if (action !== "none") event.preventDefault();
+    if (action === "send") submit();
   };
   const answer = (reply: ChatItem) => { setReplyTo(reply); inputRef.current?.focus(); };
   const implement = (reply: ChatItem) => void run(async () => {
@@ -679,7 +683,8 @@ export function ProjectChat({ active }: Props) {
           <PendingAttachments files={attachments} busy={busy} onRemove={detach} />
           {!!attachments.length && !canAttach && <p className="pc-muted pc-attach-note" role="status">Reason Network 피어와 답장에는 첨부를 보낼 수 없습니다. 첨부를 빼거나 구현 에이전트·호스팅 어시스턴트를 고르세요.</p>}
           {draftNote && <p className="pc-muted pc-attach-note" role="status"><CircleAlert size={12} /> {draftNote}</p>}
-          <textarea ref={inputRef} value={text} onChange={event => edit(event.target.value)} onKeyDown={onKey} rows={3}
+          <textarea ref={inputRef} value={text} onChange={event => edit(event.target.value)} onKeyDown={onKey} onKeyUp={() => imeGuard.current.onKeyUp()}
+            onCompositionEnd={() => imeGuard.current.onCompositionEnd()} onInput={event => imeGuard.current.onInput(event.nativeEvent as InputEvent)} rows={3}
             placeholder={replyTo ? "답장 내용을 입력하세요" : target.startsWith("hosted:") ? "어시스턴트에게 맡길 기획 요청을 입력하세요 (전달문을 만들어 드립니다)" : target === "agent" ? (mode === "plan" ? "질문하거나 기획을 요청하세요 (파일은 바꾸지 않습니다)" : "만들거나 고칠 내용을 입력하세요") : "기획자에게 보낼 요청을 입력하세요"} aria-label="메시지" />
           <div className="pc-composer-bar">
             <select value={target === "agent" ? "agent:" + agent : target} aria-label="받는 에이전트" disabled={busy || !!replyTo}
