@@ -188,11 +188,15 @@ fn project_git_confirm(plan: &toris_studio_desktop::project_git::CommitPlan) -> 
 #[test]
 fn project_git_commits_new_deleted_and_oddly_named_files() {
     let rig = rig();
-    let odd = "공백 '따옴표\" $(touch x) -n.txt";
+    // `"`, `*` and `?` cannot be in a Windows file name; the other odd parts can.
+    #[cfg(unix)]
+    let (odd, glob) = ("공백 '따옴표\" $(touch x) -n.txt", "*.txt");
+    #[cfg(not(unix))]
+    let (odd, glob) = ("공백 '따옴표 $(touch x) -n.txt", "[ab-].txt");
     fs::create_dir_all(rig.wt.join("src/새 폴더")).unwrap();
     fs::write(rig.wt.join("src/새 폴더").join(odd), "odd\n").unwrap();
     fs::write(rig.wt.join("-dash.txt"), "dash\n").unwrap();
-    fs::write(rig.wt.join("*.txt"), "star\n").unwrap();
+    fs::write(rig.wt.join(glob), "star\n").unwrap();
     fs::remove_file(rig.wt.join("gone.txt")).unwrap();
     fs::write(rig.wt.join("run.sh"), "#!/bin/sh\n").unwrap();
     // The executable bit exists only on unix; elsewhere run.sh is a plain new file.
@@ -261,8 +265,8 @@ fn project_git_commits_new_deleted_and_oddly_named_files() {
     assert!(tree.contains("run.sh"), "{tree}");
     #[cfg(unix)]
     assert!(tree.contains("100755 blob"), "{tree}");
-    // The `*.txt` file was not picked: a literal path never matched it as a glob.
-    assert_eq!(status(&rig.wt), "?? *.txt\n");
+    // The glob-named file was not picked: a literal path never matched it as a glob.
+    assert_eq!(status(&rig.wt), format!("?? {glob}\n"));
     assert!(!rig.wt.join("x").exists(), "nothing in a name ran");
 }
 
@@ -411,7 +415,8 @@ fn project_git_refuses_a_running_agent_a_linked_worktree_and_the_project_folder(
             "-q",
             "-b",
             "mine",
-            mine.to_str().unwrap(),
+            // git for Windows cannot use a `\\?\` verbatim path.
+            &project_worktrees::git_path(mine.to_str().unwrap()).unwrap(),
         ],
     );
     let t = rig
