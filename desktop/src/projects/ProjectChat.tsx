@@ -11,6 +11,7 @@ import {
 } from "./project-chat-client";
 import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
+import { isSendEnter } from "./composer-keys";
 import { browserStorage, DRAFT_SAVED, DraftStore, draftSlot, joinDraft } from "./project-drafts";
 import { ChangesPanel } from "./ChangesPanel";
 import "./ProjectChat.css";
@@ -471,7 +472,8 @@ export function ProjectChat({ active }: Props) {
     });
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
+    // Enter that confirms a Korean (IME) composition never sends, in either browser's event order.
+    if (isSendEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode })) { event.preventDefault(); submit(); }
   };
   const answer = (reply: ChatItem) => { setReplyTo(reply); inputRef.current?.focus(); };
   const implement = (reply: ChatItem) => void run(async () => {
