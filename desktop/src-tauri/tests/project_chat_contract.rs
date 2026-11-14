@@ -1747,6 +1747,115 @@ echo '{"type":"turn.completed","usage":{"output_tokens":5}}'
         assert!(rig.chat.running_pids().is_empty());
     }
 
+    #[tokio::test]
+    async fn project_chat_start_storage_failure_releases_slot_and_process() {
+        let rig = rig("hang");
+        let project = rig.chat.add_project(&rig.folder).unwrap();
+        // Another conversation's turn runs throughout and must be left alone.
+        let other = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan)
+            .unwrap();
+        start_turn(
+            rig.chat.clone(),
+            other.clone(),
+            rig.folder.clone(),
+            "other".into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
+        let other_pid: i32 = wait_lines(&rig, "hung.txt", 1).await[0].parse().unwrap();
+
+        // The thread metadata saves, but its first user message cannot be recorded.
+        let t = rig
+            .chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Edit)
+            .unwrap();
+        let threads = rig.dir.path().join("store/threads");
+        fs::create_dir_all(&threads).unwrap();
+        fs::set_permissions(&threads, fs::Permissions::from_mode(0o555)).unwrap();
+        let prompt = "저장하지 못한 프롬프트";
+        // Another thread notes the CLI's PID while it holds the slot.
+        let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watch = {
+            let (chat, id, seen) = (rig.chat.clone(), t.id.clone(), seen.clone());
+            std::thread::spawn(move || {
+                let mut pid = None;
+                while !seen.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(p) = chat.running_pid(&id).filter(|p| *p > 0) {
+                        pid = Some(p as i32);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_micros(50));
+                }
+                pid
+            })
+        };
+        let failed = start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            prompt.into(),
+            rig.path(),
+        )
+        .await;
+        seen.store(true, std::sync::atomic::Ordering::Relaxed);
+        let cli = watch.join().unwrap().expect("the CLI was started");
+        // `ps` also lists a killed child nobody waited for (a zombie).
+        let left_over = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &cli.to_string()])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap();
+        fs::set_permissions(&threads, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The error reaches the caller, and by then the CLI's group is killed,
+        // the CLI is reaped (not even a zombie is left) and its slot is free.
+        let err = failed.unwrap_err();
+        assert!(err.contains("대화 기록을 저장하지 못했습니다"), "{err}");
+        assert!(!rig.chat.is_running(&t.id));
+        assert_eq!(rig.chat.running_pids(), vec![other_pid as u32]);
+        assert_eq!(
+            left_over, "",
+            "the failed CLI {cli} was not killed and reaped"
+        );
+        assert!(rig.chat.items(&t.id).is_empty(), "nothing half-recorded");
+        assert!(
+            !log(&rig, "stdin.txt").contains(prompt),
+            "an unsaved prompt never reaches the CLI"
+        );
+        assert!(alive(other_pid), "the other conversation keeps running");
+        assert!(rig.chat.is_running(&other.id));
+
+        // The user can send the same message again in the same conversation.
+        start_turn(
+            rig.chat.clone(),
+            t.clone(),
+            rig.folder.clone(),
+            prompt.into(),
+            rig.path(),
+        )
+        .await
+        .unwrap();
+        wait_lines(&rig, "hung.txt", 2).await;
+        assert_eq!(log(&rig, "stdin.txt"), prompt);
+        // Same model, effort and folder as any other turn.
+        assert!(log(&rig, "args.txt").contains(CLAUDE_MODEL));
+        assert!(log(&rig, "env.txt").contains(&format!("CLAUDE_CODE_EFFORT_LEVEL={CLAUDE_EFFORT}")));
+        assert_eq!(
+            Path::new(log(&rig, "cwd.txt").trim())
+                .canonicalize()
+                .unwrap(),
+            Path::new(&rig.folder).canonicalize().unwrap()
+        );
+        assert_eq!(rig.chat.items(&t.id)[0].text, prompt);
+        stop_turn(rig.chat.clone(), &t.id);
+        stop_turn(rig.chat.clone(), &other.id);
+        idle(&rig.chat, &t.id).await;
+        idle(&rig.chat, &other.id).await;
+    }
+
     /// Live: runs the real Claude Code once in a scratch folder. `cargo test -- --ignored live`.
     #[tokio::test]
     #[ignore]
