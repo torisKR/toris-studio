@@ -4,6 +4,7 @@
 use crate::project_chat::{
     self, ChatAgent, ChatMode, HostedAssistant, Item, ItemKind, ProjectChat, MAX_PROMPT_BYTES,
 };
+use crate::project_worktrees;
 use crate::reason_agents::{checked_folder, typed_path};
 use crate::reason_network::{ReasonNetwork, MAX_SEND_BYTES};
 use serde::Deserialize;
@@ -324,6 +325,117 @@ pub async fn project_chat_link_worktree(
     })
     .await
     .map_err(|_| "폴더 확인 창을 열지 못했습니다.".to_owned())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeRecordInput {
+    record_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeResumeInput {
+    record_id: String,
+    thread_id: String,
+}
+
+/// The folder, branch and base commit Studio would create for an unstarted
+/// thread. Read-only; names come from the thread ID, never from the window.
+#[tauri::command]
+pub async fn project_chat_worktree_plan(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    input: ThreadInput,
+) -> Result<project_worktrees::WorktreePlan, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || project_worktrees::plan(&chat, &input.thread_id))
+        .await
+        .map_err(|_| "worktree 계획을 만들지 못했습니다.".to_owned())?
+}
+
+/// Creates a new branch and worktree from the committed HEAD for an unstarted
+/// thread after an OS confirmation that names them, then links it.
+#[tauri::command]
+pub async fn project_chat_create_worktree(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    input: ThreadInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let created = project_worktrees::create(&chat, &input.thread_id, |plan| {
+            crate::reason_native::confirm(
+                &app,
+                "이 대화용 새 브랜치와 worktree를 만들까요?",
+                project_worktrees::confirm_message(plan),
+                "만들기",
+            )
+        })?;
+        Ok(match created {
+            Some(thread) => json!({"cancelled": false, "thread": thread}),
+            None => json!({"cancelled": true}),
+        })
+    })
+    .await
+    .map_err(|_| "worktree를 만들지 못했습니다.".to_owned())?
+}
+
+/// Creations that did not finish, with what is on disk and what to do.
+#[tauri::command]
+pub async fn project_chat_worktree_pending(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+) -> Result<Vec<project_worktrees::PendingWorktree>, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || project_worktrees::pending(&chat))
+        .await
+        .map_err(|_| "worktree 생성 기록을 읽지 못했습니다.".to_owned())
+}
+
+/// Links a worktree Studio created but did not save to an unstarted thread,
+/// after an OS confirmation.
+#[tauri::command]
+pub async fn project_chat_worktree_resume(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    chat: Chat<'_>,
+    input: WorktreeResumeInput,
+) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let chat = chat.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let record = project_worktrees::pending(&chat)
+            .into_iter()
+            .find(|r| r.id == input.record_id)
+            .ok_or("그 생성 기록을 찾지 못했습니다. 목록을 새로고침하세요.")?;
+        let message = format!(
+            "작업 폴더(worktree): {}\n브랜치: {}\n\n앞서 Studio가 만들었지만 대화에 저장하지 못한 worktree입니다. 이 대화의 작업 폴더로 연결합니다. 첫 메시지를 보낸 뒤에는 바꿀 수 없습니다.",
+            record.path, record.branch
+        );
+        if !crate::reason_native::confirm(&app, "남은 worktree를 이 대화에 연결할까요?", message, "연결") {
+            return Ok(json!({"cancelled": true}));
+        }
+        let thread = project_worktrees::resume(&chat, &record.id, &input.thread_id)?;
+        Ok(json!({"cancelled": false, "thread": thread}))
+    })
+    .await
+    .map_err(|_| "worktree를 연결하지 못했습니다.".to_owned())?
+}
+
+/// Drops a pending creation record; the folder and branch are left alone.
+#[tauri::command]
+pub async fn project_chat_worktree_forget(
+    window: tauri::WebviewWindow,
+    chat: Chat<'_>,
+    input: WorktreeRecordInput,
+) -> Result<(), String> {
+    crate::updater::authorize(&window)?;
+    project_worktrees::forget(&chat, &input.record_id)
 }
 
 #[tauri::command]

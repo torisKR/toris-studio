@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BridgeInvoke } from "../desktop/src/ai-client";
 import {
-  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread
+  addProject, askHosted, askPeer, awaitingPlanner, linkMessage, linkWorktree, readChanges, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, threadStarted, diffLines, implementationPrompt, listProjects, mergeItems, normalizeEvent, normalizeItem, readThread, sendMessage, searchKey, searchProjects, toRows, checkPreviewUrl, setThreadPreview, PREVIEW_URL_ERROR, normalizeThread, type ChatItem, type Project, type Thread
 } from "../desktop/src/projects/project-chat-client";
 
 const item = (id: string, kind: ChatItem["kind"], extra: Partial<ChatItem> = {}): ChatItem => ({ id, kind, text: id, at: "2026-11-14T00:00:00Z", ...extra });
@@ -216,4 +216,27 @@ test("a thread keeps only a valid preview address, and saving sends only the thr
   const saved = await setThreadPreview("t1", "http://127.0.0.1:3000", call);
   assert.equal(saved.previewUrl, "http://127.0.0.1:3000/");
   assert.deepEqual(calls, [["project_chat_thread_preview", { input: { threadId: "t1", url: "http://127.0.0.1:3000" } }]]);
+});
+
+test("an isolated thread sends only IDs; the host names the folder and branch and confirms", async () => {
+  const base = "c".repeat(40);
+  const shown = recorder({ threadId: "t1", projectFolder: "/w/app", path: "/w/app-worktrees/abcd1234", branch: "studio/abcd1234", base });
+  assert.deepEqual(await planWorktree("t1", shown.call), { threadId: "t1", projectFolder: "/w/app", path: "/w/app-worktrees/abcd1234", branch: "studio/abcd1234", base });
+  assert.deepEqual(shown.calls, [["project_chat_worktree_plan", { input: { threadId: "t1" } }]]);
+  await assert.rejects(planWorktree("t1", recorder({ path: "rel", projectFolder: "/w/app", branch: "b", base }).call));
+  const made = recorder({ cancelled: false, thread: { id: "t1", projectId: "p1", agent: "claude", mode: "edit", worktree: { path: "/w/app-worktrees/abcd1234", branch: "studio/abcd1234", base } } });
+  assert.equal((await createWorktree("t1", made.call))?.worktree?.branch, "studio/abcd1234");
+  assert.deepEqual(made.calls, [["project_chat_create_worktree", { input: { threadId: "t1" } }]]);
+  assert.equal(await createWorktree("t1", recorder({ cancelled: true }).call), null);
+});
+
+test("leftover creations are listed with the host's guidance and resolved by ID", async () => {
+  const list = recorder([{ id: "r1", projectId: "p1", threadId: "t0", path: "/w/app-worktrees/x", branch: "studio/x", base: "d".repeat(40), startedAt: "s", state: "ready", guidance: "g" },
+    { id: "r2", projectId: "p1", path: "/w/y", branch: "studio/y", state: "weird" }, { id: "r3", path: "rel" }]);
+  const left = await pendingWorktrees(list.call);
+  assert.deepEqual(left.map(l => [l.id, l.state]), [["r1", "ready"], ["r2", "unknown"]]);
+  const r = recorder({ cancelled: true });
+  assert.equal(await resumeWorktree("r1", "t9", r.call), null);
+  await forgetWorktree("r1", r.call);
+  assert.deepEqual(r.calls, [["project_chat_worktree_resume", { input: { recordId: "r1", threadId: "t9" } }], ["project_chat_worktree_forget", { input: { recordId: "r1" } }]]);
 });
