@@ -1,7 +1,7 @@
 //! Reason Network is a message transport. Only an explicit local-window action
 //! can turn a validated request into a video plan or send a reply to its sender.
 use crate::reason_agents::{AgentKind, AgentSession, ReasonAgents};
-use crate::reason_network::{Message, ReasonNetwork, Receipt, Snapshot};
+use crate::reason_network::{Message, ReasonNetwork, Receipt};
 use crate::reason_pipeline::{self, Action, PipelineView, Stage};
 use crate::reason_project;
 use crate::reason_video::{self, VideoRequest};
@@ -120,9 +120,10 @@ async fn linked_job(
 pub async fn reason_network_refresh(
     window: tauri::WebviewWindow,
     network: Network<'_>,
-) -> Result<Snapshot, String> {
+) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let mut snapshot = network.refresh().await;
+    let identity = network.identity().await.ok();
     // Preserve the transport's error/missing state. Old received requests can
     // still open their local jobs while a remote peer is offline.
     if let Ok(identity) = network.identity().await {
@@ -144,7 +145,12 @@ pub async fn reason_network_refresh(
             }
         }
     }
-    Ok(snapshot)
+    // SNS plans are classified natively with the issued handoff codes.
+    Ok(crate::reason_sns_native::annotate(
+        &network,
+        identity.as_deref(),
+        snapshot,
+    ))
 }
 
 #[tauri::command]

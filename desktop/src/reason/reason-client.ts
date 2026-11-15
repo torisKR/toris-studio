@@ -1,5 +1,6 @@
 import { nativeInvoke, type BridgeInvoke } from "../ai-client";
 import type { ProductionInput } from "../production/production-client";
+import { snsImport, snsRequest } from "./sns-client";
 import type { NetworkSnapshot, NetworkState, ReasonMessage, ReasonPeer, SendReceipt, StoryboardPreview, VideoRequest, VideoResult } from "./types";
 
 type Rec = Record<string, unknown>;
@@ -60,13 +61,18 @@ function peer(value: unknown): ReasonPeer | null {
   try { singleTarget(str(r.id)); } catch { return null; }
   return { id: str(r.id), name: str(r.name) || str(r.id), kind: str(r.kind) || "agent", machine: nullable(r.machine), cwd: nullable(r.cwd), branch: nullable(r.branch), busy: r.busy === true };
 }
+function snsFields(r: Rec): Pick<ReasonMessage, "sns" | "snsVia" | "snsImport"> {
+  const sns = snsRequest(r.sns);
+  return { sns, snsVia: sns ? nullable(r.snsVia) : null, snsImport: sns ? snsImport(r.snsImport) : null };
+}
 function message(value: unknown): ReasonMessage | null {
   const r = rec(value);
   if (!str(r.id) || !str(r.from)) return null;
   const video = videoRequest(r.video);
   return {
     id: str(r.id), from: str(r.from), fromName: nullable(r.fromName), text: str(r.text), createdAt: nullable(r.createdAt), replyTo: nullable(r.replyTo),
-    video, requestError: nullable(r.requestError) ?? (r.video && !video ? "영상 요청 형식을 읽지 못했습니다. 요청 예시의 형식으로 다시 보내 주세요." : null), jobId: nullable(r.jobId)
+    video, requestError: nullable(r.requestError) ?? (r.video && !video ? "영상 요청 형식을 읽지 못했습니다. 요청 예시의 형식으로 다시 보내 주세요." : null), jobId: nullable(r.jobId),
+    ...snsFields(r)
   };
 }
 export function normalizeSnapshot(value: unknown): NetworkSnapshot {

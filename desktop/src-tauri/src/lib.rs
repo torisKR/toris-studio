@@ -81,6 +81,9 @@ mod reason_native;
 pub mod reason_network;
 pub mod reason_pipeline;
 pub mod reason_project;
+pub mod reason_sns;
+#[cfg(feature = "desktop")]
+mod reason_sns_native;
 pub mod reason_video;
 pub mod scheduler;
 pub mod social;
