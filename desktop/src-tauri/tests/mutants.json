@@ -1478,5 +1478,53 @@
    "project_chat_contract"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-sns-code-steal",
+  "file": "desktop/src-tauri/src/reason_sns.rs",
+  "find": "} else if handoff.from.as_deref().is_some_and(|bound| bound != from) {",
+  "replace": "} else if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_sns_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-sns-x-auto-post",
+  "file": "desktop/src-tauri/src/reason_sns.rs",
+  "find": "(true, _) => (\"manual_handoff\", Value::Null),",
+  "replace": "(true, _) => (\"manual\", Value::Null),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_sns_contract"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.reason-sns-stranger-json",
+  "file": "desktop/src-tauri/src/reason_sns.rs",
+  "find": "Ok(Some(_)) if !known_peer => Classified {",
+  "replace": "Ok(Some(_)) if false => Classified {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--test",
+   "reason_sns_contract"
+  ],
+  "timeoutMs": 900000
  }
 ]

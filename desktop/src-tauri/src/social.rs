@@ -427,6 +427,23 @@ pub async fn create_content(config: &AppConfig, input: &Value) -> Result<SocialC
     Ok(result)
 }
 
+/// Validates and inserts one SNS content row inside the caller's transaction.
+/// Used by Reason Network SNS imports, which save all drafts atomically.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) async fn insert_content_in(
+    tx: &tokio_postgres::Transaction<'_>,
+    input: &Value,
+) -> Result<String, String> {
+    let data = validate_content(input)?;
+    let (channel_id, scheduled_at) = parsed_fields(&data)?;
+    assert_channel(tx, channel_id, &data.platform).await?;
+    let id = Uuid::new_v4();
+    db_result(tx.execute(
+        "INSERT INTO social_content(id,platform,channel_id,title,body,status,scheduled_at,url) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        &[&id, &data.platform, &channel_id, &data.title, &data.body, &data.status, &scheduled_at, &data.url]).await)?;
+    Ok(id.to_string())
+}
+
 pub async fn update_content(
     config: &AppConfig,
     id: &str,

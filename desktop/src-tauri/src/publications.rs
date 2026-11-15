@@ -489,6 +489,34 @@ pub async fn save(config: &AppConfig, input: Value) -> Result<Value, String> {
     db(tx.commit().await)?;
     get(config, &id.to_string()).await
 }
+/// Validates and inserts a NEW publication draft inside the caller's transaction.
+/// Creates no job: posting still requires preflight and explicit approval.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) async fn insert_draft_in(
+    tx: &tokio_postgres::Transaction<'_>,
+    id: Uuid,
+    input: &Value,
+) -> Result<(), String> {
+    let payload = normalize(input)?;
+    db(tx
+        .execute(
+            "INSERT INTO publications(id,payload)VALUES($1,$2)",
+            &[&id, &payload],
+        )
+        .await)?;
+    Ok(())
+}
+/// Whether a publication row exists (used to settle an interrupted import).
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+pub(crate) async fn exists(config: &AppConfig, raw: &str) -> Result<bool, String> {
+    let id = uuid(raw)?;
+    let dbs = crate::social::database(config).await?;
+    Ok(db(dbs
+        .client
+        .query_opt("SELECT id FROM publications WHERE id=$1", &[&id])
+        .await)?
+    .is_some())
+}
 fn selection(publication: &Value, input: &Value) -> Result<Vec<String>, String> {
     let available = publication["targets"]
         .as_array()

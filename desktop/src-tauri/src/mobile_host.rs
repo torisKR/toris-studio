@@ -2,8 +2,9 @@
 //! It does not use the system SSH daemon, shell, forwarding, or authorized_keys.
 use crate::{
     agent_runtime::AgentRuntime,
-    mobile_registry::{DeviceView, MobileRegistry, Scope},
+    mobile_registry::{ChatAccess, DeviceView, MobileRegistry, Scope},
     mobile_service::{Identity, MobileService},
+    project_chat::ProjectChat,
 };
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use rand::rngs::OsRng;
@@ -55,10 +56,18 @@ pub struct HostStatus {
     pub devices: Vec<DeviceView>,
     pub pending: Option<crate::mobile_pairing::PendingView>,
     pub projects: Vec<ProjectName>,
+    /// Project chat projects the Mac can open to a device (names only).
+    pub chat_projects: Vec<ChatProjectName>,
 }
 
 #[derive(Clone, Serialize)]
 pub struct ProjectName {
+    pub name: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ChatProjectName {
+    pub id: String,
     pub name: String,
 }
 
@@ -89,6 +98,7 @@ pub struct MobileHost {
     active: Mutex<Option<Running>>,
     clients: Clients,
     qr: Arc<StdMutex<Option<QrImage>>>,
+    chat: Option<Arc<ProjectChat>>,
 }
 
 impl MobileHost {
@@ -100,7 +110,14 @@ impl MobileHost {
             active: Mutex::new(None),
             clients: Arc::new(Mutex::new(HashMap::new())),
             qr: Arc::new(StdMutex::new(None)),
+            chat: None,
         }
+    }
+
+    /// Lets paired devices read (and, if allowed, answer) project chat.
+    pub fn with_chat(mut self, chat: Arc<ProjectChat>) -> Self {
+        self.chat = Some(chat);
+        self
     }
 
     fn service(&self) -> Result<Arc<MobileService>, String> {
@@ -111,10 +128,11 @@ impl MobileHost {
                     .ok_or("기기 저장 위치를 확인하세요.")?
                     .join("mobile");
                 let registry = MobileRegistry::open(dir.join("devices.json"))?;
-                Ok(Arc::new(MobileService::new(
-                    registry,
-                    Arc::clone(&self.runtime),
-                )))
+                let service = MobileService::new(registry, Arc::clone(&self.runtime));
+                Ok(Arc::new(match &self.chat {
+                    Some(chat) => service.with_chat(Arc::clone(chat), None),
+                    None => service,
+                }))
             })
             .clone()
     }
@@ -165,7 +183,46 @@ impl MobileHost {
             devices,
             pending,
             projects,
+            chat_projects: self.chat_projects(),
         })
+    }
+
+    fn chat_projects(&self) -> Vec<ChatProjectName> {
+        let Some(chat) = &self.chat else {
+            return Vec::new();
+        };
+        chat.projects()
+            .0
+            .into_iter()
+            .map(|project| ChatProjectName {
+                id: project.id,
+                name: project.name,
+            })
+            .collect()
+    }
+
+    /// Mac-only: which chat projects a device may read and whether it may reply.
+    pub async fn set_chat_access(
+        &self,
+        device: Uuid,
+        projects: &[String],
+        reply: bool,
+    ) -> Result<(), String> {
+        let known = self.chat_projects();
+        let mut seen = HashSet::new();
+        if projects
+            .iter()
+            .any(|id| !known.iter().any(|p| &p.id == id) || !seen.insert(id))
+        {
+            return Err("허용할 대화 프로젝트를 확인하세요.".into());
+        }
+        self.service()?.registry.lock().await.set_chat_access(
+            device,
+            &ChatAccess {
+                projects: projects.to_vec(),
+                reply,
+            },
+        )
     }
 
     pub async fn enable(&self, address: Ipv4Addr) -> Result<(), String> {

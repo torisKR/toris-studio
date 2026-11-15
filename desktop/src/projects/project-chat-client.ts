@@ -406,7 +406,8 @@ export type CommitChange = "modified" | "added" | "deleted" | "typechange";
 /** A changed file the host listed; `fingerprint` is the content it reviewed (`<mode>:<blob>` or `deleted`). */
 export type CommitFile = { path: string; change: CommitChange; fingerprint: string; diff: string; truncated: boolean; refused: string | null };
 export type CommitReview = { threadId: string; folder: string; branch: string; head: string; files: CommitFile[]; blocked: string | null; more: boolean };
-export type CommitDone = { sha: string; branch: string; folder: string; files: string[]; indexUpdated: boolean };
+/** `receiptWarning`: the commit landed but its receipt could not be kept in the thread's history. Still a success. */
+export type CommitDone = { sha: string; branch: string; folder: string; files: string[]; indexUpdated: boolean; receiptWarning: string | null };
 export const MAX_COMMIT_MESSAGE = 4000;
 export const MAX_COMMIT_FILES = 100;
 const CHANGES: CommitChange[] = ["modified", "added", "deleted", "typechange"];
@@ -434,7 +435,8 @@ export function normalizeCommitReview(value: unknown): CommitReview | null {
 export function normalizeCommitDone(value: unknown): CommitDone | null {
   const r = rec(value);
   return SHA.test(str(r.sha)) && str(r.branch)
-    ? { sha: str(r.sha), branch: str(r.branch), folder: str(r.folder), files: list(r.files).map(str).filter(Boolean), indexUpdated: r.indexUpdated === true } : null;
+    ? { sha: str(r.sha), branch: str(r.branch), folder: str(r.folder), files: list(r.files).map(str).filter(Boolean), indexUpdated: r.indexUpdated === true,
+      receiptWarning: str(r.receiptWarning) || null } : null;
 }
 /** Why a commit message cannot be used, or "" when it can. The host applies the same rules. */
 export function commitMessageProblem(text: string): string {

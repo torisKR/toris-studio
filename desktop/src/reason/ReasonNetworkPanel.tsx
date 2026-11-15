@@ -4,15 +4,16 @@ import { External } from "../External";
 import { DevAgentLauncher } from "./DevAgentLauncher";
 import { ReasonInbox } from "./ReasonInbox";
 import { ReasonPipeline } from "./ReasonPipeline";
+import { SnsHandoffPanel } from "./SnsHandoffPanel";
 import { STORYBOARD_REQUEST_EXAMPLE, VIDEO_REQUEST_EXAMPLE } from "./reason-client";
 import { useReasonNetwork } from "./useReasonNetwork";
 import type { ReasonMessage } from "./types";
 import "./ReasonNetworkPanel.css";
 
 const STATE_LABELS = { missing: "설치 필요", setup_required: "로그인·네트워크 설정 필요", connected: "연결됨", error: "연결 확인 필요" } as const;
-type Props = { active: boolean; onOpenProduction: (jobId: string) => void };
+type Props = { active: boolean; onOpenProduction: (jobId: string) => void; onOpenPublications?: () => void };
 
-export function ReasonNetworkPanel({ active, onOpenProduction }: Props) {
+export function ReasonNetworkPanel({ active, onOpenProduction, onOpenPublications }: Props) {
   const network = useReasonNetwork(active);
   const { snapshot, busy, refreshing } = network;
   const [target, setTarget] = useState("");
@@ -33,7 +34,7 @@ export function ReasonNetworkPanel({ active, onOpenProduction }: Props) {
 
   return <section className="reason-panel" aria-labelledby="reason-network-title" aria-busy={refreshing}>
     <header className="reason-header">
-      <div><h2 id="reason-network-title"><Link2 size={18} />Reason Network</h2><p>Claude·Codex·피클·Muse·Grok Bot·Dots에게 단계별로 작업을 맡기고, 영상 요청을 Studio 제작으로 이어갑니다.</p></div>
+      <div><h2 id="reason-network-title"><Link2 size={18} />Reason Network</h2><p>Claude·Codex·피클·Muse·Grok Bot·Dots에게 단계별로 작업을 맡기고, 영상 요청과 SNS 게시 기획을 Studio 제작·발행 초안으로 이어갑니다.</p></div>
       <div className="reason-header-actions">
         <span className={"reason-status " + (snapshot?.state ?? "loading")} role="status">{snapshot ? STATE_LABELS[snapshot.state] : "연결 확인 중"}</span>
         <button type="button" className="social-button compact" disabled={refreshing || locked} onClick={() => void network.refresh()}>{refreshing ? <LoaderCircle size={14} className="social-spin" /> : <RefreshCw size={14} />}연결·받은 요청 확인</button>
@@ -82,10 +83,13 @@ export function ReasonNetworkPanel({ active, onOpenProduction }: Props) {
           <button type="button" className="social-button compact" disabled={locked} onClick={() => void network.copy(STORYBOARD_REQUEST_EXAMPLE)}><Copy size={14} />스토리보드 요청 예시 복사</button>
           <p>원격 AI의 Reason 커넥터 주소: <code>https://mcp.reasonmachines.com/mcp</code></p>
         </details>
+        <SnsHandoffPanel connected={connected} busy={locked} handoff={network.handoff}
+          onCreate={(assistant, brief, platforms) => void network.createHandoff(assistant, brief, platforms)} onCopy={text => void network.copy(text)} />
       </section>
       <ReasonInbox messages={snapshot?.messages ?? []} results={network.results} busy={locked} connected={connected}
         onAccept={messageId => void network.accept(messageId)} onReply={replyTo} onInspect={messageId => void network.inspect(messageId)}
-        onSendResult={messageId => void network.sendResult(messageId)} onOpenProduction={onOpenProduction} />
+        onSendResult={messageId => void network.sendResult(messageId)} onOpenProduction={onOpenProduction}
+        onImportSns={input => void network.importSns(input)} onSendSnsResult={messageId => void network.sendSns(messageId)} onOpenPublications={onOpenPublications} />
     </div>
     <footer className="reason-footer"><span>Studio와 연결된 컴퓨터가 켜져 있어야 요청을 처리합니다.</span><span>영상은 스토리보드 승인 뒤 생성하며, 외부 게시는 발행 화면에서 승인합니다.</span>{snapshot?.version && <small>Reason {snapshot.version}</small>}</footer>
   </section>;

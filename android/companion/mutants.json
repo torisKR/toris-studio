@@ -267,5 +267,99 @@
       "com.toris.studio.remote.RemoteControllerTest"
     ],
     "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.chat-resend-new-id",
+    "file": "android/companion/app/src/main/java/com/toris/studio/remote/RemoteService.kt",
+    "find": "return sendReply(pending, Protocol.chatReply(pending.threadId, pending.requestId, pending.text))",
+    "replace": "return sendReply(pending, Protocol.chatReply(pending.threadId, newId(), pending.text))",
+    "cmd": [
+      "android/companion/gradlew",
+      "-p",
+      "android/companion",
+      ":app:testDebugUnitTest",
+      "--tests",
+      "com.toris.studio.remote.ChatReplyTest"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.chat-composer-ungated",
+    "file": "android/companion/app/src/main/java/com/toris/studio/remote/RemoteController.kt",
+    "find": "return current.canReply && current.conversation.status != \"running\" && saved.reply == null",
+    "replace": "return saved.reply == null",
+    "cmd": [
+      "android/companion/gradlew",
+      "-p",
+      "android/companion",
+      ":app:testDebugUnitTest",
+      "--tests",
+      "com.toris.studio.remote.ChatReplyTest"
+    ],
+    "timeoutMs": 300000
+  },
+  {
+    "id": "mobile.chat-reply-ungated",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "        if !self.chat_access(device)?.reply {\n            return Err(CHAT_REPLY_DENIED.into());\n        }\n        if request_key",
+    "replace": "        // Mutant: ignore the Mac's reply permission.\n        if request_key",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_registry::tests::chat_access_is_off_by_default_and_reply_request_ids_are_idempotent"
+    ],
+    "timeoutMs": 600000
+  },
+  {
+    "id": "mobile.chat-reply-resend-runs-twice",
+    "file": "desktop/src-tauri/src/mobile_registry.rs",
+    "find": "            return Ok(true);\n        }\n        self.change(|data| {\n            if data.chat_replies.len()",
+    "replace": "            return Ok(false);\n        }\n        self.change(|data| {\n            if data.chat_replies.len()",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_service::tests::chat_replies_need_the_mac_permission_run_once_per_request_and_wait_for_the_turn"
+    ],
+    "timeoutMs": 600000
+  },
+  {
+    "id": "mobile.chat-raw-error-to-phone",
+    "file": "desktop/src-tauri/src/mobile_chat.rs",
+    "find": "            \"이번 턴이 실패했습니다. 자세한 내용은 Mac에서 확인하세요.\".to_owned(),",
+    "replace": "            item.text.clone(),",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_chat::tests::detail_keeps_conversation_and_planner_cards_and_drops_raw_work"
+    ],
+    "timeoutMs": 600000
+  },
+  {
+    "id": "mobile.chat-absolute-path-leak",
+    "file": "desktop/src-tauri/src/mobile_chat.rs",
+    "find": "    } else if is_path(core) {\n        HIDDEN_PATH.to_owned()",
+    "replace": "    } else if false && is_path(core) {\n        HIDDEN_PATH.to_owned()",
+    "cmd": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "desktop/src-tauri/Cargo.toml",
+      "--no-default-features",
+      "--lib",
+      "mobile_chat::tests::phone_text_hides_absolute_paths_and_credentials_but_keeps_prose"
+    ],
+    "timeoutMs": 600000
   }
 ]
