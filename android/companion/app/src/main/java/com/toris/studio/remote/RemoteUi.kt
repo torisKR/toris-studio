@@ -36,7 +36,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 
-private enum class Screen { WORK, CREATE, CONNECTION, DETAIL }
+private enum class Screen { WORK, CHAT, CHAT_DETAIL, CREATE, CONNECTION, DETAIL }
 
 @Composable
 internal fun RemoteScreen(controller: RemoteController) {
@@ -50,17 +50,23 @@ internal fun RemoteScreen(controller: RemoteController) {
     fun goToCreate() {
         if (controller.prepareNew()) screen = Screen.CREATE else showNewWarning = true
     }
+    fun closeChat() { controller.closeChat(); screen = Screen.CHAT }
+    fun openChats() { if (screen != Screen.CHAT) { screen = Screen.CHAT; controller.refreshChats() } }
     BackHandler(enabled = screen == Screen.DETAIL) { screen = Screen.WORK }
+    BackHandler(enabled = screen == Screen.CHAT_DETAIL) { closeChat() }
     LaunchedEffect(controller.saved.mac) {
         if (controller.saved.mac != null && !hadMac) screen = Screen.WORK
         hadMac = controller.saved.mac != null
     }
-    LaunchedEffect(owner, screen, controller.selectedRunId, controller.run?.terminal) {
+    val chatRunning = controller.chat?.conversation?.status == "running"
+    LaunchedEffect(owner, screen, controller.selectedRunId, controller.run?.terminal, controller.selectedThreadId, chatRunning) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                delay(if (screen == Screen.DETAIL) 4000 else 10000)
+                delay(if (screen == Screen.DETAIL || (screen == Screen.CHAT_DETAIL && chatRunning)) 4000 else 10000)
                 if (screen == Screen.DETAIL && controller.selectedRunId != null && controller.run?.terminal != true) controller.pollSelected()
                 if (screen == Screen.WORK) controller.pollDashboard()
+                if (screen == Screen.CHAT) controller.pollChats()
+                if (screen == Screen.CHAT_DETAIL) controller.refreshChat(silent = true)
             }
         }
     }
@@ -68,7 +74,11 @@ internal fun RemoteScreen(controller: RemoteController) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Column(Modifier.statusBarsPadding()) {
-                StudioHeader(onBack = if (screen == Screen.DETAIL) ({ screen = Screen.WORK }) else null)
+                StudioHeader(onBack = when (screen) {
+                    Screen.DETAIL -> ({ screen = Screen.WORK })
+                    Screen.CHAT_DETAIL -> ({ closeChat() })
+                    else -> null
+                }, backLabel = if (screen == Screen.CHAT_DETAIL) "대화" else "작업")
                 if (controller.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
         },
@@ -76,6 +86,8 @@ internal fun RemoteScreen(controller: RemoteController) {
             if (controller.saved.mac != null && !controller.scanning) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 NavigationBarItem(selected = screen == Screen.WORK || screen == Screen.DETAIL,
                     onClick = { screen = Screen.WORK }, icon = { Text("▤", Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.titleLarge) }, label = { Text("작업") })
+                NavigationBarItem(selected = screen == Screen.CHAT || screen == Screen.CHAT_DETAIL, onClick = ::openChats,
+                    icon = { Text("☰", Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.titleLarge) }, label = { Text("대화") })
                 NavigationBarItem(selected = screen == Screen.CREATE, onClick = ::goToCreate,
                     icon = { Text("+", Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.titleLarge) }, label = { Text("새 작업") })
                 NavigationBarItem(selected = screen == Screen.CONNECTION, onClick = { screen = Screen.CONNECTION },
@@ -94,6 +106,8 @@ internal fun RemoteScreen(controller: RemoteController) {
             }
             when (screen) {
                 Screen.WORK -> WorkHome(controller, onNew = ::goToCreate, onOpen = { id -> controller.openRun(id); screen = Screen.DETAIL }, onConnect = { screen = Screen.CONNECTION })
+                Screen.CHAT -> ChatHome(controller, onOpen = { id -> controller.openChat(id); screen = Screen.CHAT_DETAIL })
+                Screen.CHAT_DETAIL -> ChatDetailScreen(controller, onBack = ::closeChat)
                 Screen.CREATE -> CreateWork(controller, onStart = { controller.startOrRetry(); screen = Screen.DETAIL }, onRecover = { controller.recover(); screen = Screen.DETAIL })
                 Screen.CONNECTION -> ConnectionScreen(controller, onLicenses = { showLicenses = true })
                 Screen.DETAIL -> WorkDetail(controller, onBack = { screen = Screen.WORK }, onCancel = { showCancel = true }, onNew = ::goToCreate)
@@ -118,10 +132,10 @@ internal fun RemoteScreen(controller: RemoteController) {
 }
 
 @Composable
-private fun StudioHeader(onBack: (() -> Unit)?) {
+private fun StudioHeader(onBack: (() -> Unit)?, backLabel: String) {
     Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) TextButton(onClick = onBack) { Text("‹  작업") }
+        if (onBack != null) TextButton(onClick = onBack) { Text("‹  $backLabel") }
         else Box(Modifier.size(34.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
             Text("T", Modifier.clearAndSetSemantics { }, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Bold)
         }

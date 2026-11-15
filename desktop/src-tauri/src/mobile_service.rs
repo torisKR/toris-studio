@@ -2,9 +2,10 @@
 //! a Device identity; enrollment identities can never invoke factory methods.
 use crate::{
     agent_runtime::AgentRuntime,
-    factory,
+    factory, mobile_chat,
     mobile_pairing::{EnrollmentStatus, PairingGate},
-    mobile_registry::MobileRegistry,
+    mobile_registry::{MobileRegistry, CHAT_REPLY_DENIED},
+    project_chat::ProjectChat,
 };
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
+    path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
     time::{Duration, Instant},
 };
@@ -103,6 +105,25 @@ pub enum Request {
         #[serde(rename = "runId")]
         run_id: Uuid,
     },
+    #[serde(rename = "chat.list")]
+    ChatList {
+        offset: usize,
+        #[serde(rename = "needsInput")]
+        needs_input: bool,
+    },
+    #[serde(rename = "chat.detail")]
+    ChatDetail {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+    },
+    #[serde(rename = "chat.reply")]
+    ChatReply {
+        #[serde(rename = "threadId")]
+        thread_id: String,
+        #[serde(rename = "requestId")]
+        request_id: Uuid,
+        text: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -137,6 +158,10 @@ pub struct MobileService {
     runtime: Arc<AgentRuntime>,
     starts: Mutex<()>,
     watching: StdMutex<HashSet<(Uuid, Uuid)>>,
+    chat: Option<Arc<ProjectChat>>,
+    /// Where the chat agents' CLIs are looked up; the app's search path.
+    chat_path: Option<Vec<PathBuf>>,
+    replies: Mutex<()>,
 }
 
 impl MobileService {
@@ -147,7 +172,98 @@ impl MobileService {
             runtime,
             starts: Mutex::new(()),
             watching: StdMutex::new(HashSet::new()),
+            chat: None,
+            chat_path: None,
+            replies: Mutex::new(()),
         }
+    }
+
+    /// Serves project chat from the app's own store. `path` overrides the CLI
+    /// search path (tests only); `None` uses the app's search path.
+    pub fn with_chat(mut self, chat: Arc<ProjectChat>, path: Option<Vec<PathBuf>>) -> Self {
+        self.chat = Some(chat);
+        self.chat_path = path;
+        self
+    }
+
+    fn chat(&self) -> Result<Arc<ProjectChat>, String> {
+        self.chat
+            .clone()
+            .ok_or_else(|| "Mac에서 프로젝트 채팅을 사용할 수 없습니다.".into())
+    }
+
+    /// Runs blocking chat-store reads with the device's current chat grants.
+    async fn chat_read(
+        &self,
+        device: Uuid,
+        read: impl FnOnce(&ProjectChat, &[String]) -> Result<Value, String> + Send + 'static,
+    ) -> Result<Value, String> {
+        let access = self.registry.lock().await.chat_access(device)?;
+        let chat = self.chat()?;
+        let mut value = tokio::task::spawn_blocking(move || read(&chat, &access.projects))
+            .await
+            .map_err(|_| "대화를 읽지 못했습니다.".to_owned())??;
+        // Grants may change while the store is read: answer with the current ones.
+        let access = self.registry.lock().await.chat_access(device)?;
+        value["canReply"] = json!(access.reply);
+        Ok(value)
+    }
+
+    async fn chat_reply(
+        &self,
+        device: Uuid,
+        thread_id: String,
+        request_id: Uuid,
+        text: String,
+    ) -> Result<Value, String> {
+        let _one_at_a_time = self.replies.lock().await;
+        let access = self.registry.lock().await.chat_access(device)?;
+        if !access.reply {
+            return Err(CHAT_REPLY_DENIED.into());
+        }
+        let text = mobile_chat::clean_reply(&text)?;
+        let chat = self.chat()?;
+        let (project, thread) = {
+            let (chat, id, allowed) = (chat.clone(), thread_id.clone(), access.projects.clone());
+            tokio::task::spawn_blocking(move || mobile_chat::visible(&chat, &allowed, &id))
+                .await
+                .map_err(|_| "대화를 읽지 못했습니다.".to_owned())??
+        };
+        let hash = format!(
+            "{:x}",
+            Sha256::digest(format!("{}\n{}", thread.id, text).as_bytes())
+        );
+        let existing = self
+            .registry
+            .lock()
+            .await
+            .reserve_chat_reply(device, request_id, &thread.id, &hash)?;
+        if !existing {
+            let path = self
+                .chat_path
+                .clone()
+                .unwrap_or_else(crate::agent_runtime::search_path);
+            if let Err(error) =
+                mobile_chat::reply(chat.clone(), project, thread.clone(), text, path).await
+            {
+                self.registry
+                    .lock()
+                    .await
+                    .release_chat_reply(device, request_id)?;
+                return Err(error);
+            }
+        }
+        let id = thread.id.clone();
+        let mut value = self
+            .chat_read(device, move |chat, allowed| {
+                mobile_chat::detail(chat, allowed, &id)
+            })
+            .await?;
+        Ok(json!({
+            "conversation": value["conversation"].take(),
+            "duplicate": existing,
+            "canReply": value["canReply"].take(),
+        }))
     }
 
     pub fn parse(bytes: &[u8]) -> Result<Request, String> {
@@ -166,6 +282,9 @@ impl MobileService {
             Some("factory.start") => &["method", "projectId", "requestId", "input"],
             Some("factory.recover") => &["method", "requestId"],
             Some("factory.status" | "factory.cancel") => &["method", "runId"],
+            Some("chat.list") => &["method", "offset", "needsInput"],
+            Some("chat.detail") => &["method", "threadId"],
+            Some("chat.reply") => &["method", "threadId", "requestId", "text"],
             _ => return Err("지원하지 않는 요청입니다.".into()),
         };
         if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str()))
@@ -394,6 +513,38 @@ impl MobileService {
                     .cache_snapshots(device, &[(run_id, safe.clone())])?;
                 Ok(Reply::value(safe))
             }
+            (
+                Identity::Device(device),
+                Request::ChatList {
+                    offset,
+                    needs_input,
+                },
+            ) => {
+                let value = self
+                    .chat_read(device, move |chat, allowed| {
+                        mobile_chat::list(chat, allowed, offset, needs_input)
+                    })
+                    .await?;
+                Ok(Reply::value(value))
+            }
+            (Identity::Device(device), Request::ChatDetail { thread_id }) => {
+                let value = self
+                    .chat_read(device, move |chat, allowed| {
+                        mobile_chat::detail(chat, allowed, &thread_id)
+                    })
+                    .await?;
+                Ok(Reply::value(value))
+            }
+            (
+                Identity::Device(device),
+                Request::ChatReply {
+                    thread_id,
+                    request_id,
+                    text,
+                },
+            ) => Ok(Reply::value(
+                self.chat_reply(device, thread_id, request_id, text).await?,
+            )),
             _ => Err("이 연결에서 허용되지 않은 요청입니다.".into()),
         }
     }
@@ -718,6 +869,188 @@ mod tests {
                 "{request}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn chat_replies_need_the_mac_permission_run_once_per_request_and_wait_for_the_turn() {
+        use crate::mobile_registry::ChatAccess;
+        use crate::project_chat::{ChatAgent, ChatMode, ItemKind};
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let folder = dir.path().join("app");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        let folder = std::fs::canonicalize(folder).unwrap();
+        let log = dir.path().join("runs.txt");
+        let claude = format!(
+            "#!/bin/sh\nprintf '%s ' \"$@\" >> '{log}'\necho >> '{log}'\ncat > /dev/null\nsleep 1\n\
+echo '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"반영했습니다\"}}]}}}}'\n\
+echo '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}'\n",
+            log = log.display()
+        );
+        std::fs::write(bin.join("claude"), claude).unwrap();
+        std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        let chat = Arc::new(ProjectChat::new(dir.path().join("store")));
+        let project = chat.add_project(folder.to_str().unwrap()).unwrap();
+        let thread = chat
+            .create_thread(&project.id, ChatAgent::Claude, ChatMode::Plan)
+            .unwrap();
+        let key = || {
+            PrivateKey::random(
+                &mut OsRng,
+                Algorithm::Ecdsa {
+                    curve: EcdsaCurve::NistP256,
+                },
+            )
+            .unwrap()
+            .public_key()
+            .to_bytes()
+            .unwrap()
+        };
+        let scope = Scope {
+            name: "새 프로젝트 만들기".into(),
+            slug: None,
+        };
+        let mut registry = MobileRegistry::open(dir.path().join("devices.json")).unwrap();
+        let owner = registry
+            .register("기기", &key(), std::slice::from_ref(&scope))
+            .unwrap();
+        let other = registry.register("다른 기기", &key(), &[scope]).unwrap();
+        let runtime = Arc::new(AgentRuntime::with_launcher(
+            crate::agent_runtime::node_path().unwrap(),
+            vec!["-e".into(), "setInterval(()=>{},1000)".into()],
+            Box::new(|| Ok(json!({}))),
+        ));
+        let service = Arc::new(MobileService::new(registry, runtime.clone()).with_chat(
+            chat.clone(),
+            Some(vec![bin.clone(), "/usr/bin".into(), "/bin".into()]),
+        ));
+        let send = |device: Uuid, request: Uuid, text: &str| {
+            let body =
+                json!({"method":"chat.reply","threadId":thread.id,"requestId":request,"text":text});
+            let service = Arc::clone(&service);
+            async move {
+                let request = MobileService::parse(&serde_json::to_vec(&body).unwrap())?;
+                service
+                    .handle(Identity::Device(device), request)
+                    .await
+                    .map(|reply| reply.value)
+            }
+        };
+        // Nothing is visible and nothing can be sent until the Mac opens it.
+        let list = MobileService::parse(br#"{"method":"chat.list","offset":0,"needsInput":false}"#)
+            .unwrap();
+        let empty = service
+            .handle(Identity::Device(owner), list)
+            .await
+            .unwrap()
+            .value;
+        assert!(empty["conversations"].as_array().unwrap().is_empty());
+        assert_eq!(empty["canReply"], false);
+        let first = Uuid::new_v4();
+        assert_eq!(
+            send(owner, first, "계속").await.unwrap_err(),
+            CHAT_REPLY_DENIED
+        );
+        service
+            .registry
+            .lock()
+            .await
+            .set_chat_access(
+                owner,
+                &ChatAccess {
+                    projects: vec![project.id.clone()],
+                    reply: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            send(owner, first, "계속").await.unwrap_err(),
+            CHAT_REPLY_DENIED
+        );
+        let detail = MobileService::parse(
+            &serde_json::to_vec(&json!({"method":"chat.detail","threadId":thread.id})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            service
+                .handle(Identity::Device(owner), detail)
+                .await
+                .unwrap()
+                .value["canReply"],
+            false
+        );
+        service
+            .registry
+            .lock()
+            .await
+            .set_chat_access(
+                owner,
+                &ChatAccess {
+                    projects: vec![project.id.clone()],
+                    reply: true,
+                },
+            )
+            .unwrap();
+        // The phone cannot smuggle a mode, attachment or path into a reply.
+        for extra in [
+            json!({"method":"chat.reply","threadId":thread.id,"requestId":first,"text":"x","mode":"edit"}),
+            json!({"method":"chat.reply","threadId":thread.id,"requestId":first,"text":"x","attachments":["a"]}),
+            json!({"method":"chat.list","offset":0}),
+        ] {
+            assert!(MobileService::parse(&serde_json::to_vec(&extra).unwrap()).is_err());
+        }
+        let started = send(owner, first, "계속 진행해줘").await.unwrap();
+        assert_eq!(started["duplicate"], false);
+        assert_eq!(started["conversation"]["status"], "running");
+        assert_eq!(started["conversation"]["mode"], "plan");
+        // A lost reply resent with the same ID starts nothing new.
+        assert_eq!(
+            send(owner, first, "계속 진행해줘").await.unwrap()["duplicate"],
+            true
+        );
+        assert!(send(owner, first, "다른 내용").await.is_err());
+        let second = Uuid::new_v4();
+        assert_eq!(
+            send(owner, second, "하나 더").await.unwrap_err(),
+            mobile_chat::RUNNING
+        );
+        assert_eq!(
+            send(other, Uuid::new_v4(), "남의 대화").await.unwrap_err(),
+            CHAT_REPLY_DENIED
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while chat.is_running(&thread.id) {
+            assert!(Instant::now() < deadline, "turn did not finish");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        // The refused ID was released, so the same request now runs.
+        assert_eq!(
+            send(owner, second, "하나 더").await.unwrap()["duplicate"],
+            false
+        );
+        while chat.is_running(&thread.id) {
+            assert!(Instant::now() < deadline, "turn did not finish");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let runs = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(runs.lines().count(), 2, "{runs}");
+        assert!(runs
+            .lines()
+            .all(|line| line.contains("--permission-mode plan")));
+        let users: Vec<String> = chat
+            .items(&thread.id)
+            .into_iter()
+            .filter(|item| item.kind == ItemKind::User)
+            .map(|item| item.text)
+            .collect();
+        assert_eq!(users, ["계속 진행해줘", "하나 더"]);
+        assert_eq!(chat.thread(&thread.id).unwrap().mode, ChatMode::Plan);
+        service.registry.lock().await.revoke(owner).unwrap();
+        assert!(send(owner, Uuid::new_v4(), "x").await.is_err());
+        runtime.stop().await;
     }
 
     #[test]

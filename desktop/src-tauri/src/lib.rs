@@ -23,6 +23,8 @@ pub mod mcp_bridge;
 pub mod media;
 pub mod media_runtime;
 #[cfg(target_os = "macos")]
+pub mod mobile_chat;
+#[cfg(target_os = "macos")]
 pub mod mobile_host;
 #[cfg(feature = "desktop")]
 mod mobile_native;
@@ -81,6 +83,9 @@ mod reason_native;
 pub mod reason_network;
 pub mod reason_pipeline;
 pub mod reason_project;
+pub mod reason_sns;
+#[cfg(feature = "desktop")]
+mod reason_sns_native;
 pub mod reason_video;
 pub mod scheduler;
 pub mod social;
@@ -744,12 +749,15 @@ mod desktop {
     pub fn launch(config: config::AppConfig) {
         let state = Arc::new(AppState::new(config));
         let runtime = agent_runtime::shared();
+        let project_chat = project_chat_native::shared();
         // An explicit debug-only QA run must not trigger the user's scheduled
         // uploads, collection, synchronization, or recovery while testing pairing.
         let suspend_automation = cfg!(all(debug_assertions, target_os = "macos"))
             && std::env::var("TORIS_MOBILE_QA_NO_AUTOMATION").as_deref() == Ok("1");
         #[cfg(target_os = "macos")]
-        let mobile = Arc::new(crate::mobile_host::MobileHost::new(runtime.clone()));
+        let mobile = Arc::new(
+            crate::mobile_host::MobileHost::new(runtime.clone()).with_chat(project_chat.clone()),
+        );
         let builder = tauri::Builder::default()
             .plugin(tauri_plugin_single_instance::init(|app, _, _| {
                 crate::tray::show(app)
@@ -766,7 +774,7 @@ mod desktop {
             .manage(production::shared())
             .manage(reason_network::shared())
             .manage(Arc::new(reason_agents::ReasonAgents::default()))
-            .manage(project_chat_native::shared())
+            .manage(project_chat)
             .manage(Arc::new(native_windows::NativeWindows::default()))
             .register_asynchronous_uri_scheme_protocol(
                 native_windows::PREVIEW_SCHEME,

@@ -23,6 +23,10 @@ const messages = [
   { id: "invalid-message", from: "toris/other@cloud", fromName: "다른 에이전트", text: '{"schema":"toris-studio.video.v1","command":"sh"}', createdAt: null, replyTo: null, video: null, requestError: "영상 요청에 허용되지 않은 필드가 있습니다.", jobId: null },
   { id: "storyboard-message", from: "toris/dots", fromName: "Dots", text: JSON.stringify(importedRequest), createdAt: null, replyTo: null, video: importedRequest, requestError: null, jobId: null }
 ];
+const snsPlan = { schema: "toris-studio.sns.v1", requestId: "sns-launch-1", title: "단월 업데이트 홍보",
+  posts: [{ platform: "threads", text: "새 장비가 나왔어요. <img src=x onerror=alert(2)>", hashtags: ["단월"] }, { platform: "x", text: "단월 업데이트", hashtags: ["단월"] }],
+  media: null, scheduleAt: null };
+messages.push({ id: "sns-message", from: "toris/muse-mcp", fromName: null, text: "[TS-0123456789]\n" + JSON.stringify(snsPlan), createdAt: null, replyTo: null, video: null, requestError: null, jobId: null, sns: snsPlan, snsVia: "Muse", snsImport: null });
 const peers = [
   { id: "toris/grok@cloud", name: "Grok Bot", kind: "grok", machine: "cloud", cwd: null, branch: null, busy: false },
   { id: "toris/muse@cloud", name: "Muse", kind: "muse", machine: "cloud", cwd: null, branch: null, busy: true }
@@ -104,6 +108,18 @@ try {
       assert.deepEqual(args, { input: { messageId: "video-message" } });
       return { messageIds: ["result-sent-1"] };
     }
+    if (command === "reason_network_sns_handoff") {
+      assert.deepEqual(Object.keys(args.input).sort(), ["assistant", "brief", "platforms"], "the page never supplies the Studio address or code");
+      return { code: "TS-0123456789", assistant: "OpenAI Dots", prompt: "[Toris Studio SNS 기획 요청 · TS-0123456789]\n`toris/studio@mac-mini`" };
+    }
+    if (command === "reason_network_import_sns") {
+      assert.equal(args.input.messageId, "sns-message");
+      assert.equal(args.input.posts.some(post => "platform" in post && !["threads", "x"].includes(post.platform)), false);
+      const message = messages.find(m => m.id === "sns-message");
+      message.snsImport = { state: "imported", platforms: args.input.posts.map(p => p.platform), contentDrafts: args.input.posts.length, publicationDrafts: 1, mediaAttached: false, updatedAt: "2026-11-13T05:10:00Z" };
+      return { reused: false, import: message.snsImport, warning: null };
+    }
+    if (command === "reason_network_send_sns_result") { assert.deepEqual(args, { input: { messageId: "sns-message" } }); return { messageIds: ["sns-result-1"] }; }
     if (command === "copy_text") { copies.push(args.text); return null; }
     if (command === "reason_pipeline_list") return pipelines().map(p => pipelineView(p));
     if (command === "reason_project_start") {
@@ -423,6 +439,37 @@ try {
   await page.keyboard.press("Tab");
   assert.equal(await panel.getByLabel("보낼 메시지", { exact: true }).evaluate(el => document.activeElement === el), true);
   report.checks.push("Panel fits 320/768/1024/1440 widths and form is keyboard navigable.");
+
+  // SNS plan from a hosted assistant: review, edit, import as drafts, reply. Nothing posts.
+  assert.equal(count("reason_network_import_sns"), 0, "receiving a plan imports nothing");
+  const sns = panel.getByRole("article", { name: "toris/muse-mcp의 요청", exact: true });
+  await sns.getByText("SNS 게시 기획 · Muse 전달문").waitFor();
+  assert.equal(await sns.locator("img").count(), 0, "untrusted plan text stays plain text");
+  await sns.screenshot({ path: resolve(out, "reason-sns-review.png") });
+  await sns.getByLabel("X 본문", { exact: true }).fill("가".repeat(290));
+  assert.ok(await sns.getByRole("button", { name: "SNS 초안으로 가져오기" }).isDisabled(), "over-long X post cannot be imported");
+  await sns.getByLabel("X 본문", { exact: true }).fill("편집한 X 문구");
+  await sns.getByLabel("Threads 본문", { exact: true }).fill("편집한 스레드 문구");
+  await sns.getByRole("button", { name: "SNS 초안으로 가져오기" }).click();
+  await sns.getByText(/SNS 콘텐츠 초안 2개와 발행 계획 초안 1개로 저장했습니다/).waitFor();
+  const snsImported = last("reason_network_import_sns").args.input;
+  assert.deepEqual(snsImported.posts.map(p => p.text), ["편집한 스레드 문구", "편집한 X 문구"]);
+  await sns.screenshot({ path: resolve(out, "reason-sns-imported.png") });
+  await sns.getByRole("button", { name: "가져오기 결과 보내기" }).click();
+  await panel.getByText(/가져오기 결과를 요청자에게 보냈습니다/).waitFor();
+  assert.equal(count("reason_network_send_sns_result"), 1);
+  await panel.getByText("SNS 게시 기획 맡기기 (Muse·OpenAI Dots·Grok Bot)").click();
+  await panel.getByRole("button", { name: "SNS 기획 요청 예시 복사" }).click();
+  assert.match(copies.at(-1), /toris-studio\.sns\.v1/);
+  await panel.getByLabel("맡길 어시스턴트").selectOption("dots");
+  await panel.getByLabel("기획 요청").fill("이번 주 업데이트 홍보 글");
+  await panel.getByRole("button", { name: "전달문 만들기" }).click();
+  await panel.getByText("OpenAI Dots에게 붙여넣을 전달문 · 코드").waitFor();
+  assert.deepEqual(last("reason_network_sns_handoff").args.input, { assistant: "dots", brief: "이번 주 업데이트 홍보 글", platforms: ["threads", "instagram", "x"] });
+  await panel.getByRole("button", { name: "전달문 복사" }).click();
+  assert.match(copies.at(-1), /TS-0123456789/);
+  await panel.locator(".reason-sns-handoff").screenshot({ path: resolve(out, "reason-sns-handoff.png") });
+  report.checks.push("SNS plan: review/edit, over-limit guard, import as drafts only, status reply, example copy and hosted-assistant handoff.");
 
   state = "missing"; await refresh();
   await panel.getByText("이 컴퓨터에 Reason Network가 필요합니다.", { exact: true }).waitFor();

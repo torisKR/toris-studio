@@ -20,7 +20,7 @@ pub async fn mobile_status(window: tauri::WebviewWindow) -> Result<Value, String
     }
     #[cfg(not(target_os = "macos"))]
     Ok(
-        json!({"available":false,"enabled":false,"interfaces":[],"devices":[],"projects":[],"pending":null}),
+        json!({"available":false,"enabled":false,"interfaces":[],"devices":[],"projects":[],"chatProjects":[],"pending":null}),
     )
 }
 
@@ -133,6 +133,31 @@ pub async fn mobile_set_permissions(
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (device_id, projects, allow_create);
+        Err(unsupported())
+    }
+}
+
+/// Mac-only: which project chat projects a device may read and whether it may
+/// send replies ("대화 답장 허용"). The phone has no route to change this.
+#[tauri::command]
+pub async fn mobile_set_chat_access(
+    window: tauri::WebviewWindow,
+    device_id: String,
+    projects: Vec<String>,
+    reply: bool,
+) -> Result<(), String> {
+    crate::updater::authorize(&window)?;
+    #[cfg(target_os = "macos")]
+    {
+        let device = uuid::Uuid::parse_str(&device_id).map_err(|_| "기기를 확인하세요.")?;
+        let host = window
+            .app_handle()
+            .state::<std::sync::Arc<crate::mobile_host::MobileHost>>();
+        return host.set_chat_access(device, &projects, reply).await;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (device_id, projects, reply);
         Err(unsupported())
     }
 }

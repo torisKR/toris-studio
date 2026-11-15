@@ -80,6 +80,9 @@ macro_rules! app_command_registry {
             [crate::reason_native] reason_network_accept_video,
             [crate::reason_native] reason_network_video_result,
             [crate::reason_native] reason_network_send_result,
+            [crate::reason_sns_native] reason_network_sns_handoff,
+            [crate::reason_sns_native] reason_network_import_sns,
+            [crate::reason_sns_native] reason_network_send_sns_result,
             [crate::reason_native] reason_pipeline_list,
             [crate::reason_native] reason_pipeline_create,
             [crate::reason_native] reason_pipeline_update,
@@ -205,6 +208,7 @@ macro_rules! app_command_registry {
             [crate::mobile_native] mobile_approve,
             [crate::mobile_native] mobile_set_permissions,
             [crate::mobile_native] mobile_revoke,
+            [crate::mobile_native] mobile_set_chat_access,
         }
     };
 }

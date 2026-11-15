@@ -10,7 +10,7 @@ import "./AgentPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function AgentPanel({ active, onOpenProduction }: { active: boolean; onOpenProduction: (jobId: string) => void }) {
+export function AgentPanel({ active, onOpenProduction, onOpenPublications }: { active: boolean; onOpenProduction: (jobId: string) => void; onOpenPublications?: () => void }) {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
   const [view, setView] = useState<SettingsView | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -119,7 +119,7 @@ export function AgentPanel({ active, onOpenProduction }: { active: boolean; onOp
     {error && <div className="social-notice error" role="alert"><span>{error}</span></div>}
     {notice && <div className="social-notice success" role="status"><span>{notice}</span></div>}
 
-    <ReasonNetworkPanel active={active} onOpenProduction={onOpenProduction} />
+    <ReasonNetworkPanel active={active} onOpenProduction={onOpenProduction} onOpenPublications={onOpenPublications} />
     <div className="agent-layout">
       <div className="agent-column">
         <section className="agent-card" aria-label="프로젝트">
