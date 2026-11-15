@@ -812,6 +812,7 @@ pub async fn project_chat_link_message(
 }
 
 /// Asks the network for new mail, then adds replies that belong to this thread.
+/// A failed check is reported, not shown as "no new replies".
 #[tauri::command]
 pub async fn project_chat_sync_peers(
     window: tauri::WebviewWindow,
@@ -820,8 +821,14 @@ pub async fn project_chat_sync_peers(
     input: ThreadInput,
 ) -> Result<Vec<Item>, String> {
     crate::updater::authorize(&window)?;
+    let thread = chat.thread(&input.thread_id)?;
     let snapshot = network.refresh().await;
-    chat.sync_replies(&input.thread_id, &snapshot.messages)
+    if let Some(error) = snapshot.error {
+        return Err(format!(
+            "기획 답장을 확인하지 못했습니다(Reason Network): {error}"
+        ));
+    }
+    chat.sync_replies(&thread.id, &snapshot.messages)
 }
 
 #[derive(Deserialize)]

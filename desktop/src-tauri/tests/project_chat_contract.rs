@@ -902,22 +902,54 @@ fn project_chat_links_only_replies_from_the_asked_planner() {
     let mut request = Item::new(ItemKind::PeerRequest, "로그인 기획해줘");
     request.peer = Some("muse@mac".into());
     request.message_id = Some("sent-1".into());
-    chat.append(&t.id, &[request]).unwrap();
+    let mut second = Item::new(ItemKind::PeerRequest, "결제 기획해줘");
+    second.peer = Some("grok@mac".into());
+    second.message_id = Some("sent-2".into());
+    chat.append(&t.id, &[request.clone(), second.clone()])
+        .unwrap();
+
+    // The second request's answer arrives first; it closes only that request.
+    let early = [message("g1", "grok@mac", Some("sent-2"))];
+    let fresh = chat.sync_replies(&t.id, &early).unwrap();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].request_id.as_deref(), Some(second.id.as_str()));
 
     let mail = [
         message("m1", "muse@mac", Some("sent-1")),
         message("m2", "dots@mac", Some("sent-1")),
         message("m3", "muse@mac", Some("other")),
         message("m4", "muse@elsewhere", Some("sent-1")),
+        message("m5", "muse@mac", Some("sent-2")),
+        message("g1", "grok@mac", Some("sent-2")),
     ];
     let fresh = chat.sync_replies(&t.id, &mail).unwrap();
-    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh.len(), 1, "only the asked planner, once");
     assert_eq!(fresh[0].message_id.as_deref(), Some("m1"));
     assert_eq!(fresh[0].kind, ItemKind::PeerReply);
+    assert_eq!(fresh[0].request_id.as_deref(), Some(request.id.as_str()));
+    assert!(!fresh[0].unmatched);
     assert!(
         chat.sync_replies(&t.id, &mail).unwrap().is_empty(),
         "no duplicates"
     );
+    let stored = chat.reply_item(&t.id, "m1").unwrap();
+    assert_eq!(stored.request_id.as_deref(), Some(request.id.as_str()));
+
+    // A message picked by hand from a sender nobody asked closes no request.
+    let picked = chat.link_message(&t.id, &mail[1]).unwrap().unwrap();
+    assert_eq!(picked.request_id, None);
+    assert!(picked.unmatched);
+
+    // Records written before requests were tracked load without an association
+    // and are not given one.
+    let legacy: Item = serde_json::from_value(
+        json!({"id":"old","kind":"peer_reply","text":"예전 기획","messageId":"x","at":""}),
+    )
+    .unwrap();
+    assert_eq!(legacy.request_id, None);
+    assert!(!legacy.unmatched);
+    let wire = serde_json::to_value(&legacy).unwrap();
+    assert!(wire.get("requestId").is_none() && wire.get("unmatched").is_none());
 }
 
 fn mail(id: &str, from: &str, text: &str) -> Message {
@@ -990,7 +1022,21 @@ fn project_chat_files_hosted_replies_by_code_and_answers_their_sender() {
     let mut request = Item::new(ItemKind::HostedRequest, "로그인 기획");
     request.code = Some("TS-AAAA000011".into());
     request.peer_name = Some("OpenAI Dots".into());
-    chat.append(&t.id, &[request]).unwrap();
+    let request_id = request.id.clone();
+    // A second hosted request whose answer comes first.
+    let mut later = Item::new(ItemKind::HostedRequest, "결제 기획");
+    later.code = Some("TS-CCCC000011".into());
+    later.peer_name = Some("Grok Bot".into());
+    let later_id = later.id.clone();
+    chat.append(&t.id, &[request, later]).unwrap();
+    let first = chat
+        .sync_replies(
+            &t.id,
+            &[mail("c1", "toris/grok", "[TS-CCCC000011]\n결제 기획안")],
+        )
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].request_id.as_deref(), Some(later_id.as_str()));
 
     let inbox = [
         mail(
@@ -1004,6 +1050,7 @@ fn project_chat_files_hosted_replies_by_code_and_answers_their_sender() {
     let fresh = chat.sync_replies(&t.id, &inbox).unwrap();
     assert_eq!(fresh.len(), 1);
     assert_eq!(fresh[0].kind, ItemKind::PeerReply);
+    assert_eq!(fresh[0].request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(fresh[0].text, "## 로그인 기획\n1. 이메일");
     assert_eq!(
         fresh[0].peer.as_deref(),
@@ -1032,11 +1079,20 @@ fn project_chat_files_hosted_replies_by_code_and_answers_their_sender() {
     let fresh = chat.sync_replies(&t.id, &[follow]).unwrap();
     assert_eq!(fresh.len(), 1);
     assert_eq!(fresh[0].text, "결제 기획");
+    let answer_id = chat
+        .items(&t.id)
+        .into_iter()
+        .find(|i| i.message_id.as_deref() == Some("sent-9"))
+        .unwrap()
+        .id;
+    assert_eq!(fresh[0].request_id.as_deref(), Some(answer_id.as_str()));
 
     // A message without a code can be filed by hand, once.
     let linked = chat.link_message(&other.id, &inbox[1]).unwrap().unwrap();
     assert_eq!(linked.kind, ItemKind::PeerReply);
     assert_eq!(linked.peer.as_deref(), Some("toris/chatgpt"));
+    assert_eq!(linked.request_id, None, "no code: no request");
+    assert!(linked.unmatched);
     assert!(chat.link_message(&other.id, &inbox[1]).unwrap().is_none());
 }
 

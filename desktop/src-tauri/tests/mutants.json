@@ -1434,8 +1434,8 @@
  {
   "id": "rs.project-chat-reply-any-sender",
   "file": "desktop/src-tauri/src/project_chat.rs",
-  "find": "m.reply_to.as_deref() == Some(*sent) && same_sender(&m.from, peer)",
-  "replace": "m.reply_to.as_deref() == Some(*sent)",
+  "find": ".is_some_and(|peer| same_sender(&m.from, peer))",
+  "replace": ".is_some()",
   "cmd": [
    "cargo",
    "test",

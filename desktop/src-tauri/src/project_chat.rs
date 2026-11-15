@@ -202,6 +202,15 @@ pub struct Item {
     /// The prompt the user copies into the hosted assistant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// On a planner reply Studio filed itself: the ID of the request item it
+    /// answers, decided by the host (a network reply to that request from the
+    /// peer asked, or that request's handoff code on the first line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// On a planner reply the user filed by hand: Studio found no request it
+    /// answers, so it closes none. Older records carry neither field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmatched: bool,
     /// Files from the work folder sent with this message (their contents went
     /// to the agent or the hosted prompt; only names and sizes are kept here).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -223,6 +232,8 @@ impl Item {
             peer_name: None,
             code: None,
             prompt: None,
+            request_id: None,
+            unmatched: false,
             attachments: vec![],
             at: now(),
         }
@@ -1063,18 +1074,9 @@ impl ProjectChat {
     /// Adds planner replies this thread does not hold yet: answers to its
     /// network requests from the peer asked, and messages from anyone that
     /// carry one of its hosted-assistant handoff codes on their first line.
+    /// Each reply keeps the ID of the request it answers.
     pub fn sync_replies(&self, thread: &str, messages: &[Message]) -> Result<Vec<Item>, String> {
         let items = self.items(thread);
-        let requests: Vec<(&str, &str)> = items
-            .iter()
-            .filter(|i| i.kind == ItemKind::PeerRequest)
-            .filter_map(|i| Some((i.message_id.as_deref()?, i.peer.as_deref()?)))
-            .collect();
-        let codes: Vec<&str> = items
-            .iter()
-            .filter(|i| i.kind == ItemKind::HostedRequest)
-            .filter_map(|i| i.code.as_deref())
-            .collect();
         let known: Vec<&str> = items
             .iter()
             .filter(|i| i.kind == ItemKind::PeerReply)
@@ -1089,20 +1091,11 @@ impl ProjectChat {
             {
                 continue;
             }
-            let answered = requests.iter().any(|(sent, peer)| {
-                m.reply_to.as_deref() == Some(*sent) && same_sender(&m.from, peer)
-            });
-            let text = if answered {
-                Some(m.text.clone())
-            } else {
-                codes.iter().find_map(|code| strip_code(&m.text, code))
+            let Some((request, text)) = answered_request(&items, m) else {
+                continue;
             };
-            let Some(text) = text else { continue };
-            let mut item = Item::new(ItemKind::PeerReply, cut(&text, MAX_ITEM_BYTES));
-            // The address is what a reply goes back to; the name is only shown.
-            item.peer = Some(m.from.clone());
-            item.peer_name = Some(cut(m.from_name.as_deref().unwrap_or(&m.from), 120));
-            item.message_id = Some(m.id.clone());
+            let mut item = reply_from(m, &text);
+            item.request_id = Some(request);
             fresh.push(item);
         }
         self.append(thread, &fresh)?;
@@ -1110,15 +1103,25 @@ impl ProjectChat {
     }
 
     /// Files one network message the user picked as a planner reply in `thread`.
+    /// It is tied to a request only when it answers one the way
+    /// [`Self::sync_replies`] would; otherwise it is marked unmatched.
     /// Returns nothing when the thread already holds it.
     pub fn link_message(&self, thread: &str, m: &Message) -> Result<Option<Item>, String> {
         if self.reply_item(thread, &m.id).is_some() {
             return Ok(None);
         }
-        let mut item = Item::new(ItemKind::PeerReply, cut(&m.text, MAX_ITEM_BYTES));
-        item.peer = Some(m.from.clone());
-        item.peer_name = Some(cut(m.from_name.as_deref().unwrap_or(&m.from), 120));
-        item.message_id = Some(m.id.clone());
+        let item = match answered_request(&self.items(thread), m) {
+            Some((request, text)) => {
+                let mut item = reply_from(m, &text);
+                item.request_id = Some(request);
+                item
+            }
+            None => {
+                let mut item = reply_from(m, &m.text);
+                item.unmatched = true;
+                item
+            }
+        };
         self.append(thread, std::slice::from_ref(&item))?;
         Ok(Some(item))
     }
@@ -1129,6 +1132,39 @@ impl ProjectChat {
             .into_iter()
             .find(|i| i.kind == ItemKind::PeerReply && i.message_id.as_deref() == Some(id))
     }
+}
+
+/// The request in `items` that message `m` answers, with the reply text: a
+/// network reply to a request from the peer that was asked, or a message whose
+/// first line carries a hosted request's handoff code (the code only sorts the
+/// reply; it does not prove who sent it).
+fn answered_request(items: &[Item], m: &Message) -> Option<(String, String)> {
+    let asked = items.iter().find(|i| {
+        i.kind == ItemKind::PeerRequest
+            && i.message_id.is_some()
+            && m.reply_to.is_some()
+            && i.message_id == m.reply_to
+            && i.peer
+                .as_deref()
+                .is_some_and(|peer| same_sender(&m.from, peer))
+    });
+    if let Some(request) = asked {
+        return Some((request.id.clone(), m.text.clone()));
+    }
+    items
+        .iter()
+        .filter(|i| i.kind == ItemKind::HostedRequest)
+        .find_map(|i| Some((i.id.clone(), strip_code(&m.text, i.code.as_deref()?)?)))
+}
+
+/// A planner reply item for network message `m` showing `text`.
+fn reply_from(m: &Message, text: &str) -> Item {
+    let mut item = Item::new(ItemKind::PeerReply, cut(text, MAX_ITEM_BYTES));
+    // The address is what a reply goes back to; the name is only shown.
+    item.peer = Some(m.from.clone());
+    item.peer_name = Some(cut(m.from_name.as_deref().unwrap_or(&m.from), 120));
+    item.message_id = Some(m.id.clone());
+    item
 }
 
 fn slot_free(

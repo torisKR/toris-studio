@@ -5,9 +5,9 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { refreshNetwork } from "../reason/reason-client";
 import type { ReasonMessage, ReasonPeer } from "../reason/types";
 import {
-  addProject, AGENT_LABELS, askHosted, askPeer, awaitingPlanner, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, implementationPrompt, listProjects, MODE_LABELS, normalizeEvent, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
+  addProject, AGENT_LABELS, askHosted, askPeer, plannerRequests, replyLink, HOSTED_ASSISTANTS, HOSTED_LABELS, linkMessage, linkWorktree, threadStarted, planWorktree, createWorktree, pendingWorktrees, resumeWorktree, forgetWorktree, createThread, deleteThread, implementationPrompt, listProjects, MODE_LABELS, normalizeEvent, attachFile, attachmentBlock, attachmentsAllowed, detachFile, formatBytes, MAX_ATTACHMENTS, MAX_ATTACHMENTS_BYTES, JOB_LABELS, jobRows, MAX_RUNNING,
   readThread, removeProject, searchProjects, sendMessage, sortThreads, stopTurn, syncPeers, toRows, updateThread,
-  type ChatAgent, type ChatItem, type HostedAssistant, type ChatMode, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
+  type ChatAgent, type ChatItem, type PlannerRequest, type HostedAssistant, type ChatMode, type Project, type SearchHit, type Thread, type WorktreePlan, type PendingWorktree, type Attachment, type AttachmentRef, type Job
 } from "./project-chat-client";
 import { addItems, applySnapshot, EMPTY_TRANSCRIPT, failureText, itemsFor, ViewTracker, type Failure, type Ticket, type Transcript } from "./project-view-state";
 import { ThreadPreview } from "./ThreadPreview";
@@ -96,17 +96,39 @@ function PendingAttachments({ files, busy, onRemove }: { files: Attachment[]; bu
   </div>;
 }
 
-function HostedRequestCard({ item }: { item: ChatItem }) {
+/** What Studio knows of a request's answer. A hosted request is never shown as sent or received:
+ * Studio only made the prompt the user pastes. */
+function RequestState({ request, hosted }: { request?: PlannerRequest; hosted: boolean }) {
+  if (!request) return null;
+  const text = request.state === "answered" ? `답장 ${request.replies}개 받음`
+    : request.state === "unknown" ? "이전 기록 · 답장 연관 확인 불가"
+      : hosted ? "답장 대기 · 전달문을 보냈는지는 Studio가 알 수 없습니다" : "답장 대기";
+  return <span className={"pc-request-state " + request.state}>{request.state === "answered" ? <CircleCheck size={11} /> : request.state === "unknown" ? <CircleSlash size={11} /> : <LoaderCircle size={11} />}{text}</span>;
+}
+
+/** Which request a planner reply answers, as the host decided it; a reply it could not tie to a
+ * request says so instead of guessing. */
+function ReplyFor({ item, requests }: { item: ChatItem; requests: PlannerRequest[] }) {
+  const link = replyLink(item, requests);
+  if (link.kind === "unmatched") return <span className="pc-reply-for unmatched">요청 연관 미확인 · 직접 가져온 메시지라 어느 요청도 닫지 않습니다</span>;
+  if (link.kind === "legacy") return <span className="pc-reply-for unmatched">요청 연관 정보 없음 (이전 기록)</span>;
+  if (!link.request) return <span className="pc-reply-for unmatched">요청 연관 미확인</span>;
+  const r = link.request;
+  return <span className="pc-reply-for" title={r.text}>↳ {r.name}에게 보낸 요청 “{r.text.length > 40 ? r.text.slice(0, 40) + "…" : r.text}”의 답장{r.code ? ` · 전달 코드 ${r.code}로 분류` : ""}</span>;
+}
+
+function HostedRequestCard({ item, request }: { item: ChatItem; request?: PlannerRequest }) {
   const [copied, setCopied] = useState("");
   const copy = () => void invoke("copy_text", { text: item.prompt ?? "" })
-    .then(() => setCopied("복사했습니다. " + (item.peerName ?? "어시스턴트") + "에 붙여넣으세요."))
+    .then(() => setCopied("복사했습니다. " + (item.peerName ?? "어시스턴트") + "에 붙여넣어 보내세요. 복사만으로는 보내지지 않습니다."))
     .catch(cause => setCopied(errorText(cause)));
   return <div className="pc-msg user peer hosted">
-    <span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? "어시스턴트"}에게 기획 요청 · <code>{item.code}</code></span>
+    <span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? "어시스턴트"}에게 기획 요청 · <code title="답장을 이 요청에 분류하는 표시일 뿐, 보낸 쪽의 신원을 인증하지 않습니다">{item.code}</code></span>
+    <RequestState request={request} hosted />
     <div className="pc-bubble">{item.text}</div>
     <Attached files={item.attachments} />
     <div className="pc-hosted">
-      <p>{item.peerName ?? "어시스턴트"}는 이름으로 메시지를 받을 수 없어서, 이 전달문을 그 앱에 붙여넣어야 합니다. 첫 줄에 코드를 붙여 Studio로 보낸 기획만 이 대화에 표시됩니다.</p>
+      <p>{item.peerName ?? "어시스턴트"}는 이름으로 메시지를 받을 수 없어서, 이 전달문을 그 앱에 붙여넣어야 합니다. 첫 줄에 코드를 붙여 Studio로 보낸 기획만 이 대화에 표시됩니다. 코드는 답장을 분류할 뿐 보낸 쪽의 신원을 인증하지 않습니다.</p>
       <details><summary>전달문 보기</summary><pre>{item.prompt}</pre></details>
       <div className="pc-hosted-actions">
         <button type="button" className="social-button compact primary" onClick={copy} disabled={!item.prompt}>{copied.startsWith("복사") ? <Check size={13} /> : <Copy size={13} />}전달문 복사</button>
@@ -116,7 +138,8 @@ function HostedRequestCard({ item }: { item: ChatItem }) {
   </div>;
 }
 
-function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: (item: ChatItem) => void; onReply: (item: ChatItem) => void }) {
+function ItemRow({ item, requests, onImplement, onReply }: { item: ChatItem; requests: PlannerRequest[]; onImplement: (item: ChatItem) => void; onReply: (item: ChatItem) => void }) {
+  const request = requests.find(r => r.id === item.id);
   switch (item.kind) {
     case "user": return <div className="pc-msg user"><div className="pc-bubble">{item.text}</div><Attached files={item.attachments} /></div>;
     case "assistant": return <div className="pc-msg assistant"><Markdown text={item.text} /></div>;
@@ -125,10 +148,11 @@ function ItemRow({ item, onImplement, onReply }: { item: ChatItem; onImplement: 
     case "notice": return <div className={"pc-notice" + (item.isError ? " warn" : "")}>{item.text}</div>;
     case "error": return <div className="pc-notice error" role="alert"><CircleAlert size={14} />{item.text}</div>;
     case "tool_result": return <div className={"pc-tool" + (item.isError ? " error" : "")}><pre>{item.text}</pre></div>;
-    case "peer_request": return <div className="pc-msg user peer"><span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? item.peer}에게 보냄</span><div className="pc-bubble">{item.text}</div></div>;
-    case "hosted_request": return <HostedRequestCard item={item} />;
+    case "peer_request": return <div className="pc-msg user peer"><span className="pc-peer-label"><Sparkles size={12} />{item.peerName ?? item.peer}에게 보냄</span><RequestState request={request} hosted={false} /><div className="pc-bubble">{item.text}</div></div>;
+    case "hosted_request": return <HostedRequestCard item={item} request={request} />;
     case "peer_reply": return <div className="pc-msg peer-reply">
       <span className="pc-peer-label" title={item.peer}><Sparkles size={12} />{item.peerName ?? item.peer}의 기획 · {time(item.at)}</span>
+      <ReplyFor item={item} requests={requests} />
       <Markdown text={item.text} />
       <div className="pc-reply-actions">
         <button type="button" className="social-button compact primary" onClick={() => onImplement(item)}><Wrench size={13} />이 기획으로 구현</button>
@@ -263,8 +287,21 @@ export function ProjectChat({ active }: Props) {
   // An empty thread shows its start screen from the top; only a transcript follows its end.
   useEffect(() => { if (items.length) endRef.current?.scrollIntoView({ block: "end" }); else endRef.current?.parentElement?.scrollTo({ top: 0 }); }, [items.length, threadId]);
 
-  // Planner replies arrive through Reason Network; check while a request is unanswered.
-  const waitingPeer = useMemo(() => awaitingPlanner(items), [items]);
+  // Planner replies arrive through Reason Network; check while a request is unanswered. Each
+  // request closes only when the host files a reply it tied to that request.
+  const requests = useMemo(() => plannerRequests(items), [items]);
+  const openRequests = requests.filter(r => r.state === "waiting").length;
+  const waitingPeer = openRequests > 0;
+  // The last check of one thread: shown only on that thread's screen.
+  const [check, setCheck] = useState<{ threadId: string; checking: boolean; error: string | null; found: number | null; at: string } | null>(null);
+  const checkReplies = (id: string, manual: boolean) => {
+    if (manual) setCheck({ threadId: id, checking: true, error: null, found: null, at: "" });
+    return syncPeers(id).then(fresh => {
+      if (fresh.length) addTo(id, fresh);
+      setCheck(c => manual || c?.threadId === id ? { threadId: id, checking: false, error: null, found: manual ? fresh.length : c?.found ?? null, at: new Date().toISOString() } : c);
+    }).catch(cause => setCheck(c => manual || !c || c.threadId === id ? { threadId: id, checking: false, error: errorText(cause), found: null, at: new Date().toISOString() } : c));
+  };
+  const shownCheck = check?.threadId === threadId ? check : null;
   useEffect(() => { setReplyTo(null); setShowInbox(false); }, [threadId]);
   const linked = useMemo(() => new Set(items.filter(i => i.kind === "peer_reply").map(i => i.messageId)), [items]);
   const unlinked = useMemo(() => inbox.filter(m => !linked.has(m.id)).slice(-20).reverse(), [inbox, linked]);
@@ -275,7 +312,7 @@ export function ProjectChat({ active }: Props) {
   });
   useEffect(() => {
     if (!active || !threadId || !waitingPeer) return;
-    const timer = window.setInterval(() => { void syncPeers(threadId).then(fresh => fresh.length && addTo(threadId, fresh)).catch(() => {}); }, 8000);
+    const timer = window.setInterval(() => { void checkReplies(threadId, false); }, 8000);
     return () => window.clearInterval(timer);
   }, [active, threadId, waitingPeer]);
 
@@ -578,9 +615,18 @@ export function ProjectChat({ active }: Props) {
               <li><button type="button" onClick={() => setText("테스트를 실행하고 실패하는 것을 고쳐줘.")}>테스트 실행 후 실패 수정</button></li>
             </ul>
           </div>}
-          {rows.map(row => row.type === "tool" ? <ToolRow key={row.call.id} call={row.call} result={row.result} /> : <ItemRow key={row.item.id} item={row.item} onImplement={implement} onReply={answer} />)}
+          {rows.map(row => row.type === "tool" ? <ToolRow key={row.call.id} call={row.call} result={row.result} /> : <ItemRow key={row.item.id} item={row.item} requests={requests} onImplement={implement} onReply={answer} />)}
           {thread?.running && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />{AGENT_LABELS[thread.agent]}이(가) 작업 중입니다</div>}
-          {waitingPeer && <div className="pc-working"><LoaderCircle size={14} className="social-spin" />기획 답장을 기다리는 중입니다 (Reason Network, 8초마다 확인)</div>}
+          {thread && requests.length > 0 && <div className="pc-planner-check" aria-label="기획 답장 확인">
+            <div className="pc-working">
+              {waitingPeer ? <><LoaderCircle size={14} className="social-spin" />기획 답장을 기다리는 중입니다 · 남은 요청 {openRequests}/{requests.length}개 (Reason Network, 8초마다 확인)</>
+                : <><CircleCheck size={14} />기다리는 기획 요청이 없습니다 ({requests.length}개 중 남은 요청 0개)</>}
+              <button type="button" className="social-button compact" disabled={!!shownCheck?.checking} onClick={() => void checkReplies(thread.id, true)}>
+                {shownCheck?.checking ? <LoaderCircle size={12} className="social-spin" /> : <RefreshCw size={12} />}기획 답장 확인</button>
+            </div>
+            {shownCheck?.error && <p className="pc-error" role="alert"><CircleAlert size={14} />{shownCheck.error}</p>}
+            {shownCheck && !shownCheck.error && shownCheck.found !== null && !shownCheck.checking && <p className="pc-muted" role="status">{shownCheck.found ? `새 기획 답장 ${shownCheck.found}개를 가져왔습니다` : "새 기획 답장이 없습니다"} · {time(shownCheck.at)} 확인</p>}
+          </div>}
           <div ref={endRef} />
         </div>
         {error && <p className="pc-error" role="alert"><CircleAlert size={14} />{error}<button type="button" className="pc-icon subtle" aria-label="닫기" onClick={() => setFailure(null)}><X size={12} /></button></p>}
