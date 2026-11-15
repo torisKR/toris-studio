@@ -1,0 +1,7 @@
+{
+  "identifier": "kr.toris.studio.qa",
+  "productName": "Toris Studio QA",
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}

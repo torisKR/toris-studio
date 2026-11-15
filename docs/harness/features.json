@@ -35,6 +35,7 @@
     "tests/project-chat-client.test.ts",
     "scripts/verify-project-chat-ui.mjs",
     "scripts/verify-project-drafts-ui.mjs",
+    "scripts/verify-project-chat-native-preflight.mjs",
     "docs/PROJECT_CHAT.md"
    ],
    "verify": [
@@ -42,7 +43,8 @@
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --test project_chat_contract",
     "node scripts/verify-project-chat-ui.mjs",
     "node --import tsx --test tests/composer-keys.test.ts tests/project-drafts.test.ts",
-    "node scripts/verify-project-drafts-ui.mjs"
+    "node scripts/verify-project-drafts-ui.mjs",
+    "node --check scripts/verify-project-chat-native-preflight.mjs"
    ],
    "mutants": [
     "desktop/src-tauri/tests/mutants.json"
