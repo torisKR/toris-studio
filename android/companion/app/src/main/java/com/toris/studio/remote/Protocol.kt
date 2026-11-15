@@ -43,7 +43,26 @@ internal data class RunSnapshot(
 }
 internal data class RunPage(val runs: List<RunSnapshot>, val nextOffset: Int?)
 
-internal class RemoteError(message: String) : Exception(message)
+internal open class RemoteError(message: String) : Exception(message)
+/** The Mac answered with an error envelope: the request was received and refused, not lost. */
+internal class RemoteRejection(message: String) : RemoteError(message)
+
+internal data class ChatConversation(
+    val threadId: String, val projectName: String, val title: String, val agent: String?, val mode: String?,
+    val status: String, val lastActivity: String?, val preview: String?,
+)
+internal data class ChatMessage(
+    val id: String, val kind: String, val text: String, val planner: String?, val at: String?, val answered: Boolean?,
+)
+internal data class ChatPage(
+    val conversations: List<ChatConversation>, val nextOffset: Int?, val canReply: Boolean,
+    val running: Int, val needsInput: Int,
+)
+internal data class ChatDetail(
+    val conversation: ChatConversation, val messages: List<ChatMessage>, val truncated: Boolean, val canReply: Boolean,
+)
+internal data class ChatReplyResult(val conversation: ChatConversation, val duplicate: Boolean)
+internal data class PendingReply(val requestId: String, val threadId: String, val text: String)
 
 internal object Protocol {
     private fun request(method: String) = JSONObject().put("method", method)
@@ -61,6 +80,26 @@ internal object Protocol {
     fun recover(requestId: String) = request("factory.recover").put("requestId", uuidV4(requestId))
     fun status(runId: String) = request("factory.status").put("runId", uuid(runId))
     fun cancel(runId: String) = request("factory.cancel").put("runId", uuid(runId))
+    fun chatList(offset: Int, needsInput: Boolean) = request("chat.list").put("offset", offset.also {
+        require(it in 0..4096) { "대화 목록 위치를 확인하세요." }
+    }).put("needsInput", needsInput)
+    fun chatDetail(threadId: String) = request("chat.detail").put("threadId", threadId(threadId))
+    fun chatReply(threadId: String, requestId: String, text: String) = request("chat.reply")
+        .put("threadId", threadId(threadId)).put("requestId", uuidV4(requestId)).put("text", replyText(text))
+
+    private val threadPattern = Regex("[A-Za-z0-9-]{1,64}")
+    fun threadId(value: String): String =
+        value.takeIf { it.matches(threadPattern) } ?: throw RemoteError("대화 식별자를 확인하세요.")
+    /** The phone sends only plain text: trimmed, 1..2,000 code points and at most 6,000 UTF-8 bytes, no control characters except line breaks and tabs. */
+    fun replyText(value: String): String {
+        val clean = value.trim()
+        require(clean.isNotEmpty()) { "답장 내용을 입력하세요." }
+        require(clean.codePointCount(0, clean.length) <= 2000 && clean.toByteArray(Charsets.UTF_8).size <= 6000) {
+            "답장은 2,000자(6KB) 이하로 줄이세요."
+        }
+        require(clean.none { it.isISOControl() && it !in "\n\r\t" }) { "답장에 제어 문자를 넣을 수 없습니다." }
+        return clean
+    }
 
     fun uuid(value: String): String {
         val parsed = try { UUID.fromString(value) } catch (_: Exception) { throw RemoteError("서버의 식별자를 확인하세요.") }
@@ -75,7 +114,7 @@ internal object Protocol {
         val root = try { JSONObject(line) } catch (_: Exception) { throw RemoteError("Mac의 응답 형식을 확인하세요.") }
         return when (root.opt("ok")) {
             true -> root.optJSONObject("result") ?: throw RemoteError("Mac의 응답 형식을 확인하세요.")
-            false -> throw RemoteError((root.opt("error") as? String)?.take(1000)?.takeIf { it.isNotBlank() }
+            false -> throw RemoteRejection((root.opt("error") as? String)?.take(1000)?.takeIf { it.isNotBlank() }
                 ?: "Mac에서 요청을 거부했습니다.")
             else -> throw RemoteError("Mac의 응답 형식을 확인하세요.")
         }
@@ -157,5 +196,69 @@ internal object Protocol {
             value
         }
         return RunPage(runs, next)
+    }
+
+    val chatStatuses = setOf("running", "needs_input", "done", "failed", "idle")
+    val chatKinds = setOf("user", "assistant", "planner_request", "planner_reply", "hosted_request", "notice", "error", "result")
+    private fun text(value: JSONObject, key: String, limit: Int): String? =
+        (value.opt(key) as? String)?.take(limit)?.takeIf { it.isNotBlank() }
+
+    /** Unknown agents, modes, statuses and message kinds are kept as "unknown" rather than guessed. */
+    fun conversation(value: JSONObject): ChatConversation {
+        val threadId = threadId(value.opt("threadId") as? String ?: "")
+        return ChatConversation(
+            threadId, text(value, "projectName", 200) ?: "프로젝트", text(value, "title", 300) ?: "제목 없는 대화",
+            (value.opt("agent") as? String)?.takeIf { it in setOf("claude", "codex") },
+            (value.opt("mode") as? String)?.takeIf { it in setOf("plan", "edit") },
+            (value.opt("status") as? String)?.takeIf { it in chatStatuses } ?: "unknown",
+            text(value, "lastActivity", 64), text(value, "preview", 500),
+        )
+    }
+    private fun canReply(result: JSONObject) = result.opt("canReply") == true
+    private fun count(value: JSONObject?, key: String): Int =
+        ((value?.opt(key) as? Number)?.toInt() ?: 0).coerceIn(0, 100_000)
+
+    fun chatPage(result: JSONObject, offset: Int): ChatPage {
+        val values = result.optJSONArray("conversations") ?: throw RemoteError("대화 목록을 확인하세요.")
+        if (values.length() > 20) throw RemoteError("대화 목록이 너무 큽니다.")
+        val conversations = (0 until values.length()).map { index ->
+            conversation(values.optJSONObject(index) ?: throw RemoteError("대화 목록을 확인하세요."))
+        }
+        if (conversations.map { it.threadId }.distinct().size != conversations.size) throw RemoteError("중복된 대화를 확인하세요.")
+        val nextValue = result.opt("nextOffset")
+        val next = if (nextValue == null || nextValue == JSONObject.NULL) null else {
+            val number = nextValue as? Number ?: throw RemoteError("대화 목록 위치를 확인하세요.")
+            val value = number.toInt()
+            if (number.toDouble() != value.toDouble() || value <= offset || value > 4096) throw RemoteError("대화 목록 위치를 확인하세요.")
+            value
+        }
+        val counts = result.optJSONObject("counts")
+        return ChatPage(conversations, next, canReply(result), count(counts, "running"), count(counts, "needsInput"))
+    }
+
+    fun chatMessage(value: JSONObject): ChatMessage {
+        val id = (value.opt("id") as? String)?.takeIf { it.isNotEmpty() && it.length <= 128 }
+            ?: throw RemoteError("대화 메시지를 확인하세요.")
+        val kind = (value.opt("kind") as? String)?.takeIf { it in chatKinds } ?: "unknown"
+        return ChatMessage(id, kind, (value.opt("text") as? String)?.take(20_000) ?: "",
+            text(value, "planner", 80), text(value, "at", 64),
+            if (kind == "hosted_request") value.opt("answered") as? Boolean else null)
+    }
+
+    fun chatDetail(result: JSONObject, threadId: String): ChatDetail {
+        val conversation = conversation(result.optJSONObject("conversation") ?: throw RemoteError("대화를 확인하세요."))
+        if (conversation.threadId != threadId) throw RemoteError("Mac이 다른 대화를 반환했습니다.")
+        val values = result.optJSONArray("messages") ?: throw RemoteError("대화 메시지를 확인하세요.")
+        if (values.length() > 40) throw RemoteError("대화 메시지가 너무 많습니다.")
+        val messages = (0 until values.length()).map { index ->
+            chatMessage(values.optJSONObject(index) ?: throw RemoteError("대화 메시지를 확인하세요."))
+        }
+        return ChatDetail(conversation, messages, result.opt("truncated") == true, canReply(result))
+    }
+
+    fun chatReply(result: JSONObject, threadId: String): ChatReplyResult {
+        val conversation = conversation(result.optJSONObject("conversation") ?: throw RemoteError("대화를 확인하세요."))
+        if (conversation.threadId != threadId) throw RemoteError("Mac이 다른 대화를 반환했습니다.")
+        return ChatReplyResult(conversation, result.opt("duplicate") == true)
     }
 }

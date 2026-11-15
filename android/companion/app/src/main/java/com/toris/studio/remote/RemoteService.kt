@@ -5,7 +5,10 @@ import java.io.Closeable
 import java.util.Base64
 import java.util.UUID
 
-internal data class SavedState(val mac: MacAddress? = null, val requestId: String? = null, val runId: String? = null)
+internal data class SavedState(
+    val mac: MacAddress? = null, val requestId: String? = null, val runId: String? = null,
+    val reply: PendingReply? = null,
+)
 internal interface RemoteStore {
     fun read(): SavedState
     fun save(state: SavedState)
@@ -144,6 +147,43 @@ internal class RemoteService(
         require(saved.requestId != null)
         store.save(saved.copy(requestId = null, runId = null))
     }
+    fun chats(offset: Int = 0, needsInput: Boolean = false) =
+        Protocol.chatPage(call(Protocol.chatList(offset, needsInput)), offset)
+    fun chat(threadId: String) = Protocol.chatDetail(call(Protocol.chatDetail(threadId)), threadId)
+
+    /** Commit the reply id before a byte can be sent, so a lost answer is resent with the same id. */
+    fun reply(threadId: String, text: String): ChatReplyResult {
+        val before = store.read()
+        if (before.mac == null) throw RemoteError("먼저 Mac을 연결하세요.")
+        if (before.reply != null) throw RemoteError("보내지 못한 답장이 있습니다. 먼저 다시 보내거나 보내지 않기를 선택하세요.")
+        val id = Protocol.uuidV4(newId())
+        val request = Protocol.chatReply(threadId, id, text)
+        val pending = PendingReply(id, request.getString("threadId"), request.getString("text"))
+        store.save(before.copy(reply = pending))
+        return sendReply(pending, request)
+    }
+    fun resendReply(): ChatReplyResult {
+        val pending = store.read().reply ?: throw RemoteError("다시 보낼 답장이 없습니다.")
+        return sendReply(pending, Protocol.chatReply(pending.threadId, pending.requestId, pending.text))
+    }
+    /** Returns the discarded text so the user can edit it again. */
+    fun discardReply(): PendingReply? {
+        val saved = store.read()
+        val pending = saved.reply ?: return null
+        store.save(saved.copy(reply = null))
+        return pending
+    }
+    private fun sendReply(pending: PendingReply, request: JSONObject): ChatReplyResult {
+        // Only a Mac answer settles the request: a refusal or a success clears it, a lost answer keeps it.
+        val result = try { call(request) } catch (rejected: RemoteRejection) { clearReply(pending); throw rejected }
+        clearReply(pending)
+        return Protocol.chatReply(result, pending.threadId)
+    }
+    private fun clearReply(pending: PendingReply) {
+        val current = store.read()
+        if (current.reply?.requestId == pending.requestId) store.save(current.copy(reply = null))
+    }
+
     private fun saveRun(requestId: String, snapshot: RunSnapshot) {
         val current = store.read()
         if (current.requestId != requestId || (current.runId != null && current.runId != snapshot.runId)) {

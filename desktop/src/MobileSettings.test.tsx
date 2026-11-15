@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MobileDeviceItem, PendingApproval } from "./MobileSettingsPermissions";
-import { approvalArgs, expiryTime, isPrivateAddress, isQrImageUrl, MobileQrQueue, permissionArgs, projectChoices } from "./MobileSettingsModel";
+import { approvalArgs, chatAccessArgs, expiryTime, isPrivateAddress, isQrImageUrl, MobileQrQueue, permissionArgs, projectChoices } from "./MobileSettingsModel";
 
 const projects = [{ name: "낚시 게임" }, { name: "일정 앱" }];
 const pending = { id: "attempt-1", name: "내 휴대폰", fingerprint: "SHA256:device", confirmationCode: "123456" };
@@ -74,4 +74,21 @@ test("turning the host off blocks editing a missing project catalog but still pe
   assert.match(markup, /<button[^>]*disabled[^>]*>권한 수정<\/button>/);
   assert.match(markup, /<button(?![^>]*disabled)[^>]*>.*등록 해제<\/button>/);
   assert.match(markup, /모바일 연결을 켜고 프로젝트 목록을 확인/);
+});
+
+test("chat access is Mac-only, off by default and limited to listed chat projects", () => {
+  const chatProjects = [{ id: "chat-1", name: "토리스 앱" }, { id: "chat-2", name: "블로그" }];
+  assert.deepEqual(chatAccessArgs(chatProjects, ["chat-1"], false), { projects: ["chat-1"], reply: false });
+  assert.deepEqual(chatAccessArgs(chatProjects, [], true), { projects: [], reply: true });
+  assert.equal(chatAccessArgs(chatProjects, ["chat-9"], true), null);
+  assert.equal(chatAccessArgs(chatProjects, ["chat-1", "chat-1"], true), null);
+  const base = { id: "device-1", name: "내 휴대폰", fingerprint: "SHA256:device", lastConnected: null, projects: [] };
+  const off = renderToStaticMarkup(<MobileDeviceItem device={base} projects={[]} chatProjects={chatProjects} disabled={false} permissionsDisabled onPermissions={async () => true} onChatAccess={async () => true} onRevoke={async () => true} />);
+  assert.match(off, /대화 답장<\/dt><dd>허용 안 함/);
+  assert.match(off, /공개한 대화<\/dt><dd>없음/);
+  // The host being off does not block chat permissions; they live in the device registry.
+  assert.match(off, /<button(?![^>]*disabled)[^>]*>대화 권한 수정<\/button>/);
+  const on = renderToStaticMarkup(<MobileDeviceItem device={{ ...base, chatProjects: ["chat-2", "gone"], chatReply: true }} projects={[]} chatProjects={chatProjects} disabled={false} onPermissions={async () => true} onChatAccess={async () => true} onRevoke={async () => true} />);
+  assert.match(on, /공개한 대화<\/dt><dd>블로그<\/dd>/);
+  assert.match(on, /대화 답장<\/dt><dd>허용<\/dd>/);
 });

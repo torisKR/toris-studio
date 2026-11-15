@@ -6,7 +6,12 @@ export type MobileDevice = {
   fingerprint: string;
   lastConnected: string | null;
   projects: { id: string; name: string }[];
+  /** Project chat projects this device may read (chat project IDs). */
+  chatProjects?: string[];
+  /** "대화 답장 허용" — off unless turned on here on the Mac. */
+  chatReply?: boolean;
 };
+export type MobileChatProject = { id: string; name: string };
 export type MobilePending = { id: string; name: string; fingerprint: string; confirmationCode: string };
 export type MobileStatus = {
   available: boolean;
@@ -18,6 +23,7 @@ export type MobileStatus = {
   devices: MobileDevice[];
   pending: MobilePending | null;
   projects: MobileProject[];
+  chatProjects?: MobileChatProject[];
 };
 export type MobileQr = { url: string; expiresAt: string | number };
 
@@ -57,6 +63,13 @@ export function permissionArgs(projects: MobileProject[], selected: string[], al
   const choices = new Set(projectChoices(projects).names);
   if (allowCreate === null || new Set(selected).size !== selected.length || selected.some(name => !choices.has(name))) return null;
   return { projects: selected, allowCreate };
+}
+
+/** Only listed chat projects, each once; reply is an explicit boolean. */
+export function chatAccessArgs(chatProjects: MobileChatProject[], selected: string[], reply: boolean) {
+  const known = new Set(chatProjects.map(project => project.id));
+  if (new Set(selected).size !== selected.length || selected.some(id => !known.has(id))) return null;
+  return { projects: selected, reply };
 }
 
 export function approvalArgs(

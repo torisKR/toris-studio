@@ -42,9 +42,9 @@ internal fun SectionHeading(title: String, subtitle: String? = null) {
 internal fun StatusBadge(text: String, state: String?) {
     val color = when (state) {
         "done", "passed", "pass" -> Color(0xFF90D5B1)
-        "awaiting_approval", "waiting_approval", "blocked", "incomplete" -> Color(0xFFFFD087)
+        "awaiting_approval", "waiting_approval", "blocked", "incomplete", "needs_input" -> Color(0xFFFFD087)
         "failed", "fail" -> MaterialTheme.colorScheme.error
-        "cancelled", "unavailable", "not_run", "interrupted" -> MaterialTheme.colorScheme.onSurfaceVariant
+        "cancelled", "unavailable", "not_run", "interrupted", "idle", "unknown" -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.primary
     }
     Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(7.dp)) {

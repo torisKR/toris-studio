@@ -66,6 +66,24 @@ internal class RemoteController(
     var view by mutableStateOf<String?>(null); private set
     var orientation by mutableStateOf<String?>(null); private set
 
+    var chats by mutableStateOf<List<ChatConversation>>(emptyList()); private set
+    var chatNextOffset by mutableStateOf<Int?>(null); private set
+    var chatNeedsInputOnly by mutableStateOf(false); private set
+    var chatCounts by mutableStateOf(0 to 0); private set
+    var chatLoaded by mutableStateOf(false); private set
+    var chatListError by mutableStateOf<String?>(null); private set
+    var chatCanReply by mutableStateOf(false); private set
+    var selectedThreadId by mutableStateOf<String?>(null); private set
+    var chat by mutableStateOf<ChatDetail?>(null); private set
+    var chatError by mutableStateOf<String?>(null); private set
+    var draft by mutableStateOf(""); private set
+
+    /** The composer is offered only when the Mac allows replies, the agent is idle and no reply is unconfirmed. */
+    val canCompose: Boolean get() {
+        val current = chat ?: return false
+        return current.canReply && current.conversation.status != "running" && saved.reply == null
+    }
+
     fun onStart() {
         foreground = true
         service.startForeground()
@@ -242,6 +260,96 @@ internal class RemoteController(
             else value.copy(projectName = value.projectName ?: previous?.projectName)
         runs = if (previous == null) listOf(merged) + runs else runs.map { if (it.runId == value.runId) merged else it }
         if (select) { selectedRunId = value.runId; run = merged }
+    }
+
+    private suspend fun loadChatPage(offset: Int, reset: Boolean) {
+        val filter = chatNeedsInputOnly
+        val page = try { withContext(Dispatchers.IO) { service.chats(offset, filter) } }
+            catch (error: RemoteError) { if (!chatLoaded) chatListError = error.message; throw error }
+        if (filter != chatNeedsInputOnly) return
+        chats = if (reset) page.conversations else (chats + page.conversations).distinctBy { it.threadId }
+        chatNextOffset = page.nextOffset
+        chatCounts = page.running to page.needsInput
+        chatCanReply = page.canReply
+        chatLoaded = true; chatListError = null
+        markOnline()
+    }
+    fun refreshChats() = action { loadChatPage(0, reset = true) }
+    fun pollChats() {
+        if (chats.size > 20 || saved.mac == null) return
+        action(silent = true) { loadChatPage(0, reset = true) }
+    }
+    fun loadMoreChats() {
+        val offset = chatNextOffset ?: return
+        action { loadChatPage(offset, reset = false) }
+    }
+    fun setNeedsInputOnly(value: Boolean) {
+        if (chatNeedsInputOnly == value) return
+        chatNeedsInputOnly = value
+        chats = emptyList(); chatNextOffset = null; chatLoaded = false; chatListError = null
+        refreshChats()
+    }
+
+    fun openChat(threadId: String) {
+        if (selectedThreadId != threadId) { chat = null; chatError = null }
+        selectedThreadId = threadId
+        action { loadChat(threadId) }
+    }
+    fun closeChat() { selectedThreadId = null; chat = null; chatError = null }
+    fun refreshChat(silent: Boolean = false) {
+        val id = selectedThreadId ?: return
+        action(silent = silent) { loadChat(id) }
+    }
+    private suspend fun loadChat(threadId: String) {
+        val detail = try { withContext(Dispatchers.IO) { service.chat(threadId) } }
+            catch (error: RemoteError) { if (selectedThreadId == threadId && chat == null) chatError = error.message; throw error }
+        if (selectedThreadId != threadId) return
+        chat = detail; chatError = null
+        chatCanReply = detail.canReply
+        updateChat(detail.conversation)
+        markOnline()
+    }
+    private fun updateChat(value: ChatConversation) {
+        chats = chats.map { if (it.threadId == value.threadId) value else it }
+        chat?.let { if (it.conversation.threadId == value.threadId) chat = it.copy(conversation = value) }
+    }
+    fun changeDraft(value: String) { draft = value.take(4000) }
+    fun sendReply() {
+        val id = selectedThreadId ?: return
+        if (!canCompose || chat?.conversation?.threadId != id) return
+        val text = draft
+        action {
+            try {
+                val result = withContext(Dispatchers.IO) { service.reply(id, text) }
+                draft = ""
+                afterReply(result)
+            } finally {
+                saved = service.saved()
+                // An unconfirmed reply now lives in the resend card; a Mac refusal keeps the typed text.
+                if (saved.reply?.threadId == id) draft = ""
+            }
+        }
+    }
+    fun resendReply() {
+        if (saved.reply == null) return
+        action {
+            try { afterReply(withContext(Dispatchers.IO) { service.resendReply() }) }
+            finally { saved = service.saved() }
+        }
+    }
+    fun discardReply() {
+        val pending = try { service.discardReply() } catch (error: RemoteError) { message = error.message; return }
+        saved = service.saved()
+        if (pending != null && pending.threadId == selectedThreadId && draft.isBlank()) draft = pending.text
+    }
+    private suspend fun afterReply(result: ChatReplyResult) {
+        saved = service.saved()
+        updateChat(result.conversation)
+        markOnline()
+        if (result.duplicate) message = "이미 보낸 답장입니다. Mac에서 한 번만 처리했습니다."
+        if (selectedThreadId == result.conversation.threadId) {
+            try { loadChat(result.conversation.threadId) } catch (_: RemoteError) { /* the reply was accepted */ }
+        }
     }
 
     private fun markOnline() {

@@ -37,6 +37,24 @@ struct Device {
     projects: Vec<ProjectGrant>,
     #[serde(default)]
     retired_projects: Vec<ProjectGrant>,
+    /// Project chat projects (by chat project ID) this device may read.
+    /// Chosen on the Mac only; absent in older registries means none.
+    #[serde(default)]
+    chat_projects: Vec<String>,
+    /// "대화 답장 허용": off unless the Mac turns it on for this device.
+    #[serde(default)]
+    chat_reply: bool,
+}
+
+/// One reply the phone sent into a chat thread, kept so a resend of the same
+/// request ID never starts a second turn.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatReplyBinding {
+    device_id: Uuid,
+    request_key: Uuid,
+    thread_id: String,
+    request_hash: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,6 +78,8 @@ struct Data {
     host_port: Option<u16>,
     devices: Vec<Device>,
     runs: Vec<RunBinding>,
+    #[serde(default)]
+    chat_replies: Vec<ChatReplyBinding>,
 }
 impl Default for Data {
     fn default() -> Self {
@@ -68,8 +88,19 @@ impl Default for Data {
             host_port: None,
             devices: Vec::new(),
             runs: Vec::new(),
+            chat_replies: Vec::new(),
         }
     }
+}
+
+/// How many reply request IDs are remembered; the oldest are forgotten first.
+const MAX_CHAT_REPLIES: usize = 2048;
+
+/// What a device may do with project chat, decided on the Mac.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChatAccess {
+    pub projects: Vec<String>,
+    pub reply: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -87,6 +118,8 @@ pub struct DeviceView {
     pub fingerprint: String,
     pub last_connected: Option<String>,
     pub projects: Vec<ProjectView>,
+    pub chat_projects: Vec<String>,
+    pub chat_reply: bool,
 }
 
 /// `slug` comes from a Mac-validated catalog, never from a remote request.
@@ -217,6 +250,8 @@ impl MobileRegistry {
                 last_connected: None,
                 projects,
                 retired_projects: Vec::new(),
+                chat_projects: Vec::new(),
+                chat_reply: false,
             });
             Ok(id)
         })
@@ -252,6 +287,8 @@ impl MobileRegistry {
             if data.devices.len() == old_len {
                 return Err("등록된 기기를 찾을 수 없습니다.".into());
             }
+            data.chat_replies
+                .retain(|reply| reply.device_id != device_id);
             Ok(())
         })
     }
@@ -498,6 +535,98 @@ impl MobileRegistry {
         Ok(())
     }
 
+    /// Sets which chat projects the device may read and whether it may reply.
+    /// Only the Mac's settings window calls this; the phone has no route here.
+    pub fn set_chat_access(&mut self, device_id: Uuid, access: &ChatAccess) -> Result<(), String> {
+        if access.projects.len() > 100 {
+            return Err("프로젝트가 너무 많습니다.".into());
+        }
+        let mut projects: Vec<String> = Vec::new();
+        for id in &access.projects {
+            let valid = !id.is_empty()
+                && id.len() <= 64
+                && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+            if !valid || projects.contains(id) {
+                return Err("허용할 대화 프로젝트를 확인하세요.".into());
+            }
+            projects.push(id.clone());
+        }
+        self.change(|data| {
+            let device = data
+                .devices
+                .iter_mut()
+                .find(|d| d.id == device_id)
+                .ok_or("등록된 기기를 찾을 수 없습니다.")?;
+            device.chat_projects = projects;
+            device.chat_reply = access.reply;
+            Ok(())
+        })
+    }
+
+    pub fn chat_access(&self, device: Uuid) -> Result<ChatAccess, String> {
+        let device = self.device(device)?;
+        Ok(ChatAccess {
+            projects: device.chat_projects.clone(),
+            reply: device.chat_reply,
+        })
+    }
+
+    /// Records a phone reply before its turn starts. `existing` means this
+    /// request ID was already used for the same thread and text: the caller
+    /// returns the conversation instead of starting another turn.
+    pub fn reserve_chat_reply(
+        &mut self,
+        device: Uuid,
+        request_key: Uuid,
+        thread_id: &str,
+        request_hash: &str,
+    ) -> Result<bool, String> {
+        if !self.chat_access(device)?.reply {
+            return Err(CHAT_REPLY_DENIED.into());
+        }
+        if request_key.get_version_num() != 4
+            || request_hash.len() != 64
+            || !request_hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err("답장 요청 식별자를 확인하세요.".into());
+        }
+        if let Some(reply) = self
+            .data
+            .chat_replies
+            .iter()
+            .find(|reply| reply.device_id == device && reply.request_key == request_key)
+        {
+            if reply.thread_id != thread_id || reply.request_hash != request_hash {
+                return Err("이미 사용한 요청 식별자입니다.".into());
+            }
+            return Ok(true);
+        }
+        self.change(|data| {
+            if data.chat_replies.len() >= MAX_CHAT_REPLIES {
+                data.chat_replies.remove(0);
+            }
+            data.chat_replies.push(ChatReplyBinding {
+                device_id: device,
+                request_key,
+                thread_id: thread_id.into(),
+                request_hash: request_hash.into(),
+            });
+            Ok(false)
+        })
+    }
+
+    /// Forgets a reservation whose turn did not start, so the same request ID
+    /// can be retried once the cause (a running turn, a missing CLI) is gone.
+    pub fn release_chat_reply(&mut self, device: Uuid, request_key: Uuid) -> Result<(), String> {
+        self.change(|data| {
+            data.chat_replies
+                .retain(|reply| !(reply.device_id == device && reply.request_key == request_key));
+            Ok(())
+        })
+    }
+
     fn device(&self, id: Uuid) -> Result<&Device, String> {
         self.data
             .devices
@@ -553,8 +682,13 @@ fn device_view(device: &Device) -> DeviceView {
         fingerprint: device.fingerprint.clone(),
         last_connected: device.last_connected.clone(),
         projects: device.projects.iter().map(project_view).collect(),
+        chat_projects: device.chat_projects.clone(),
+        chat_reply: device.chat_reply,
     }
 }
+
+pub const CHAT_REPLY_DENIED: &str =
+    "이 기기는 대화 답장이 허용되지 않았습니다. Mac의 설정 → 모바일 연결에서 '대화 답장 허용'을 켜세요.";
 
 fn save(path: &Path, data: &Data) -> Result<(), String> {
     let dir = path.parent().ok_or("기기 저장 위치를 확인하세요.")?;
@@ -729,6 +863,58 @@ mod tests {
         assert!(reopened.authorize_run(first, reserved.run_id).is_err());
         reopened.revoke(first).unwrap();
         assert!(reopened.authenticate(&first_key).is_err());
+    }
+
+    #[test]
+    fn chat_access_is_off_by_default_and_reply_request_ids_are_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        // An older registry without chat fields loads with chat closed.
+        let mut registry = MobileRegistry::open(path.clone()).unwrap();
+        let device = registry.register("기기", &key(), &[scope()]).unwrap();
+        let other = registry.register("다른 기기", &key(), &[scope()]).unwrap();
+        assert_eq!(registry.chat_access(device).unwrap(), ChatAccess::default());
+        let request = Uuid::new_v4();
+        let hash = "c".repeat(64);
+        assert_eq!(
+            registry.reserve_chat_reply(device, request, "thread-1", &hash),
+            Err(CHAT_REPLY_DENIED.to_string())
+        );
+        let access = ChatAccess {
+            projects: vec!["project-1".into()],
+            reply: true,
+        };
+        registry.set_chat_access(device, &access).unwrap();
+        assert!(registry
+            .set_chat_access(
+                device,
+                &ChatAccess {
+                    projects: vec!["../x".into()],
+                    reply: true
+                }
+            )
+            .is_err());
+        assert!(!registry
+            .reserve_chat_reply(device, request, "thread-1", &hash)
+            .unwrap());
+        assert!(registry
+            .reserve_chat_reply(device, request, "thread-1", &hash)
+            .unwrap());
+        assert!(registry
+            .reserve_chat_reply(device, request, "thread-2", &hash)
+            .is_err());
+        assert!(registry
+            .reserve_chat_reply(other, Uuid::new_v4(), "thread-1", &hash)
+            .is_err());
+        let reopened = MobileRegistry::open(path.clone()).unwrap();
+        assert_eq!(reopened.chat_access(device).unwrap(), access);
+        assert!(reopened.devices()[0].chat_reply);
+        registry.release_chat_reply(device, request).unwrap();
+        assert!(!registry
+            .reserve_chat_reply(device, request, "thread-1", &hash)
+            .unwrap());
+        registry.revoke(device).unwrap();
+        assert!(registry.chat_access(device).is_err());
     }
 
     #[test]
