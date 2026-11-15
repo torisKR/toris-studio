@@ -205,6 +205,7 @@ macro_rules! app_command_registry {
             [crate::mobile_native] mobile_approve,
             [crate::mobile_native] mobile_set_permissions,
             [crate::mobile_native] mobile_revoke,
+            [crate::mobile_native] mobile_set_chat_access,
         }
     };
 }
