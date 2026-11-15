@@ -2,7 +2,7 @@
 //! Studio created for a thread. Every repository is a scratch one in a temp
 //! folder; nothing is pushed and no agent runs.
 use std::{fs, path::Path, process::Command};
-use toris_studio_desktop::project_chat::{ChatAgent, ChatMode, ProjectChat};
+use toris_studio_desktop::project_chat::{ChatAgent, ChatMode, ItemKind, ProjectChat};
 use toris_studio_desktop::project_git::{
     commit, commit_message, review, CommitRequest, CommitReview, PickedFile,
 };
@@ -581,6 +581,91 @@ fn project_git_cancel_changes_nothing() {
         .is_none());
     assert_eq!(head(&rig.wt), r.head);
     assert_eq!(status(&rig.wt), " M a.txt\n");
+}
+
+/// The thread's stored history, read by a fresh store object (as after a restart).
+fn reopened_items(rig: &Rig) -> Vec<toris_studio_desktop::project_chat::Item> {
+    ProjectChat::new(rig._dir.path().join("store")).items(&rig.thread)
+}
+
+#[test]
+fn project_git_commit_receipt_survives_reopen() {
+    let rig = rig();
+    fs::write(rig.wt.join("a.txt"), "a changed\n").unwrap();
+    fs::write(rig.wt.join("b.txt"), "b changed\n").unwrap();
+    let before_items = reopened_items(&rig).len();
+    let r = review(&rig.chat, &rig.thread).unwrap();
+
+    // Cancelled and failed commits leave no receipt.
+    assert!(commit(&rig.chat, &pick(&r, &["a.txt"], "x"), |_| false)
+        .unwrap()
+        .is_none());
+    let lock = rig.app.join(format!(".git/refs/heads/{}.lock", r.branch));
+    fs::write(&lock, "").unwrap();
+    assert!(commit(&rig.chat, &pick(&r, &["a.txt"], "x"), |_| true).is_err());
+    fs::remove_file(&lock).unwrap();
+    assert_eq!(reopened_items(&rig).len(), before_items, "no receipt yet");
+
+    let done = commit(&rig.chat, &pick(&r, &["a.txt"], "a만"), |_| true)
+        .unwrap()
+        .expect("committed");
+    assert_eq!(done.sha, head(&rig.wt));
+    // A new store object (a reopened thread or a restarted Studio) still has it.
+    let items = reopened_items(&rig);
+    assert_eq!(items.len(), before_items + 1);
+    let receipt = items.last().unwrap();
+    assert_eq!(receipt.kind, ItemKind::Notice);
+    assert!(!receipt.is_error);
+    for want in [done.sha.as_str(), done.branch.as_str(), "a.txt", "index"] {
+        assert!(receipt.text.contains(want), "{want} in {}", receipt.text);
+    }
+    assert!(!receipt.text.contains("b.txt"), "{}", receipt.text);
+    // The receipt is plain text: no markup or control characters other than line breaks.
+    assert!(!receipt.text.chars().any(|c| c.is_control() && c != '\n'));
+}
+
+#[test]
+fn project_git_receipt_failure_does_not_hide_success() {
+    let rig = rig();
+    fs::write(rig.wt.join("a.txt"), "a changed\n").unwrap();
+    let before = head(&rig.wt);
+    let r = review(&rig.chat, &rig.thread).unwrap();
+    // The history file cannot be appended to: a folder sits at its path.
+    let history = rig
+        ._dir
+        .path()
+        .join("store/threads")
+        .join(format!("{}.jsonl", rig.thread));
+    let _ = fs::remove_file(&history);
+    fs::create_dir_all(&history).unwrap();
+
+    let mut asked = 0;
+    let done = commit(&rig.chat, &pick(&r, &["a.txt"], "a만"), |_| {
+        asked += 1;
+        true
+    })
+    .expect("the commit itself succeeded")
+    .expect("committed");
+    assert_eq!(asked, 1);
+    let warning = done.receipt_warning.as_deref().expect("history warning");
+    assert!(warning.contains("기록"), "{warning}");
+    // Exactly one commit on top of the reviewed HEAD: nothing was retried.
+    assert_eq!(done.sha, head(&rig.wt));
+    assert_eq!(
+        git(&rig.wt, &["rev-parse", &format!("{}^", done.sha)]).trim(),
+        before
+    );
+    assert!(done.index_updated);
+    assert_eq!(status(&rig.wt), "");
+
+    // A normal commit afterwards reports no warning.
+    fs::remove_dir(&history).unwrap();
+    fs::write(rig.wt.join("b.txt"), "b changed\n").unwrap();
+    let r = review(&rig.chat, &rig.thread).unwrap();
+    let done = commit(&rig.chat, &pick(&r, &["b.txt"], "b"), |_| true)
+        .unwrap()
+        .unwrap();
+    assert!(done.receipt_warning.is_none());
 }
 
 #[test]

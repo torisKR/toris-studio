@@ -56,7 +56,7 @@ test("commit sends the reviewed HEAD and the shown fingerprints of the picked fi
   const done = await commitFiles(review, ["src/a.ts", "gone.txt", "src/a.ts"], "제목\n\n본문", call);
   assert.deepEqual(calls, [["project_chat_commit", { input: { threadId: "t1", head: sha, message: "제목\n\n본문",
     files: [{ path: "src/a.ts", fingerprint: "100644:" + blob }, { path: "gone.txt", fingerprint: "deleted" }] } }]]);
-  assert.deepEqual(done, { sha: blob, branch: "studio/abcd1234", folder: review.folder, files: ["src/a.ts"], indexUpdated: true });
+  assert.deepEqual(done, { sha: blob, branch: "studio/abcd1234", folder: review.folder, files: ["src/a.ts"], indexUpdated: true, receiptWarning: null });
 
   assert.equal(await commitFiles(review, ["src/a.ts"], "x", recorder({ cancelled: true }).call), null, "OS dialog cancelled");
   await assert.rejects(commitFiles(review, ["src/a.ts"], "x", recorder({ cancelled: false, commit: { sha: "nope" } }).call), /확인하지 못했습니다/, "no fake success");
@@ -68,6 +68,18 @@ test("commit sends the reviewed HEAD and the shown fingerprints of the picked fi
   await assert.rejects(commitFiles(review, ["src/a.ts"], "  \n ", refused.call), /메시지/);
   await assert.rejects(commitFiles({ ...review, blocked: "에이전트가 실행 중입니다." }, ["src/a.ts"], "x", refused.call), /실행 중/);
   assert.equal(refused.calls.length, 0, "nothing reaches the host when the page already knows it is refused");
+});
+
+test("a commit whose receipt could not be kept is still a success, with the warning", async () => {
+  const review = normalizeCommitReview(rawReview) as CommitReview;
+  const warning = "커밋은 완료됐지만 이 대화 기록에 영수증을 남기지 못했습니다: 대화 기록을 저장하지 못했습니다.";
+  const { calls, call } = recorder({ cancelled: false, commit: { sha: blob, branch: "studio/abcd1234", folder: review.folder, files: ["src/a.ts"], indexUpdated: false, receiptWarning: warning } });
+  const done = await commitFiles(review, ["src/a.ts"], "x", call);
+  assert.deepEqual(done, { sha: blob, branch: "studio/abcd1234", folder: review.folder, files: ["src/a.ts"], indexUpdated: false, receiptWarning: warning });
+  assert.equal(calls.length, 1, "never committed again");
+  // A malformed warning is dropped, never turned into a failure.
+  const odd = await commitFiles(review, ["src/a.ts"], "x", recorder({ cancelled: false, commit: { sha: blob, branch: "studio/abcd1234", files: [], indexUpdated: true, receiptWarning: 42 } }).call);
+  assert.equal(odd?.receiptWarning, null);
 });
 
 test("a file whose diff the host could not read is refused even when it carries a fingerprint", async () => {

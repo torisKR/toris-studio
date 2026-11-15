@@ -60,7 +60,8 @@ function CommitBox({ thread, onCommitted, onClose }: { thread: Thread; onCommitt
       <button type="button" className="pc-icon" aria-label="선택 커밋 닫기" onClick={onClose}><X size={13} /></button>
     </header>
     {review && <p className="pc-muted pc-commit-where" title={review.folder}><GitBranch size={11} />{review.branch} · HEAD {review.head.slice(0, 12)}</p>}
-    {done && <p className="pc-commit-done" role="status"><Check size={13} />커밋했습니다 <code title={done.sha}>{done.sha.slice(0, 12)}</code> · {done.branch} · 파일 {done.files.length}개{done.indexUpdated ? "" : " (작업 폴더 index는 갱신하지 못함)"}</p>}
+    {done && <p className="pc-commit-done" role="status"><Check size={13} />커밋했습니다 <code title={done.sha}>{done.sha.slice(0, 12)}</code> · {done.branch} · 파일 {done.files.length}개{done.indexUpdated ? "" : " (작업 폴더 index는 갱신하지 못함)"}{done.receiptWarning ? "" : " · 대화 기록에 영수증을 남겼습니다"}</p>}
+    {done?.receiptWarning && <p className="pc-error" role="alert">{done.receiptWarning} 커밋은 그대로 남아 있으니 다시 커밋하지 마세요.</p>}
     {review?.blocked && <p className="pc-error" role="alert">{review.blocked}</p>}
     {running && !review?.blocked && <p className="pc-error" role="alert">에이전트가 실행 중입니다. 끝나거나 중지한 뒤 커밋하세요.</p>}
     {error && <p className="pc-error" role="alert">{error}{stale && <> <button type="button" className="social-button compact" onClick={() => void load()}>다시 검토</button></>}</p>}
