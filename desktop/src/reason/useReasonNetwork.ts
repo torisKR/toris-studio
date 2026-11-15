@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nativeInvoke, type BridgeInvoke } from "../ai-client";
 import { acceptVideoRequest, readVideoResult, refreshNetwork, sendNetworkMessage, sendVideoResult } from "./reason-client";
-import type { NetworkSnapshot, VideoResult } from "./types";
+import { createSnsHandoff, importSnsRequest, sendSnsResult, type SnsImportInput } from "./sns-client";
+import type { HostedAssistant, NetworkSnapshot, SnsHandoff, SnsPlatform, VideoResult } from "./types";
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value);
 
@@ -13,6 +14,7 @@ export function useReasonNetwork(active: boolean, call: BridgeInvoke = nativeInv
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [results, setResults] = useState<Record<string, VideoResult>>({});
+  const [handoff, setHandoff] = useState<SnsHandoff | null>(null);
   const mounted = useRef(false);
   const refreshingRef = useRef(false);
   const busyRef = useRef(false);
@@ -77,9 +79,27 @@ export function useReasonNetwork(active: boolean, call: BridgeInvoke = nativeInv
     if (mounted.current) setNotice("영상 작업의 최신 상태 요약을 요청자에게 보냈습니다.");
     return receipt;
   });
+  const importSns = (input: SnsImportInput) => perform("sns-import:" + input.messageId, async () => {
+    const result = await importSnsRequest(input, call);
+    if (mounted.current) {
+      setSnapshot(current => current ? { ...current, messages: current.messages.map(message => message.id === input.messageId ? { ...message, snsImport: result.import } : message) } : current);
+      setNotice((result.reused ? "이 기획은 이미 가져왔습니다. " : "SNS 콘텐츠 초안과 발행 계획 초안으로 저장했습니다. ") + "게시는 발행 화면에서 계정을 고르고 승인해야 합니다." + (result.warning ? " (" + result.warning + ")" : ""));
+    }
+    return result;
+  });
+  const sendSns = (messageId: string) => perform("sns-result:" + messageId, async () => {
+    const receipt = await sendSnsResult(messageId, call);
+    if (mounted.current) setNotice("SNS 기획 가져오기 결과를 요청자에게 보냈습니다.");
+    return receipt;
+  });
+  const createHandoff = (assistant: HostedAssistant, brief: string, platforms: SnsPlatform[]) => perform("sns-handoff", async () => {
+    const created = await createSnsHandoff(assistant, brief, platforms, call);
+    if (mounted.current) { setHandoff(created); setNotice(created.assistant + "에게 붙여넣을 전달문을 만들었습니다. 복사해서 그 앱에 붙여넣으세요."); }
+    return created;
+  });
   const copy = (text: string) => perform("copy", async () => {
     await call("copy_text", { text });
     if (mounted.current) setNotice("복사했습니다.");
   });
-  return { snapshot, refreshing, busy, error, notice, results, refresh, send, accept, inspect, sendResult, copy };
+  return { snapshot, refreshing, busy, error, notice, results, handoff, refresh, send, accept, inspect, sendResult, importSns, sendSns, createHandoff, copy };
 }

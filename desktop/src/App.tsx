@@ -495,7 +495,7 @@ export function App() {
           <div hidden={tab !== "publications"}><PublicationPanel active={tab === "publications"} refreshKey={assetRefreshKey} seed={publicationSeed} onOpenOAuth={() => setTab("sns")} onOpenAgent={() => setTab("agent")} onOpenAssets={() => setTab("assets")} /></div>
           <div hidden={tab !== "assets"}><AssetStudio active={tab === "assets"} refreshKey={assetRefreshKey} queueRequest={assetQueueRequest} /></div>
           <div hidden={tab !== "video"}><VideoPanel active={tab === "video"} onOpenSettings={() => setTab("settings")} onOpenKeywords={() => setTab("keywords")} productionSelection={productionSelection} /></div>
-          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} onOpenProduction={jobId => { setProductionSelection(current => ({ jobId, requestId: (current?.requestId ?? 0) + 1 })); setTab("video"); }} /></div>
+          <div hidden={tab !== "agent"}><AgentPanel active={tab === "agent"} onOpenProduction={jobId => { setProductionSelection(current => ({ jobId, requestId: (current?.requestId ?? 0) + 1 })); setTab("video"); }} onOpenPublications={() => setTab("publications")} /></div>
           <div hidden={tab !== "factory"}><Suspense fallback={<p role="status">앱·게임 팩토리를 불러오는 중입니다.</p>}><FactoryHome active={tab === "factory"} onOpenAgent={() => setTab("agent")} /></Suspense></div>
           <div hidden={tab !== "planner"}><PlannerPanel active={tab === "planner"} databaseConnected={dashboard.database.connected} onOpenPublications={() => setTab("publications")} /></div>
           <div hidden={tab !== "ops"}><OpsPanel active={tab === "ops"} databaseConnected={dashboard.database.connected} onOpenPlanner={() => setTab("planner")} /></div>

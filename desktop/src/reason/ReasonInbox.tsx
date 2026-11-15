@@ -1,18 +1,21 @@
 import { Clapperboard, CornerUpLeft, RefreshCw, Send } from "lucide-react";
 import { JOB_STATUS_LABELS, STYLES } from "../production/production-model";
+import { SnsRequestReview } from "./SnsRequestReview";
+import type { SnsImportInput } from "./sns-client";
 import type { ReasonMessage, VideoResult } from "./types";
 
 type Props = {
   messages: ReasonMessage[]; results: Record<string, VideoResult>; busy: boolean; connected: boolean;
   onAccept: (messageId: string) => void; onReply: (message: ReasonMessage) => void;
   onInspect: (messageId: string) => void; onSendResult: (messageId: string) => void; onOpenProduction: (jobId: string) => void;
+  onImportSns: (input: SnsImportInput) => void; onSendSnsResult: (messageId: string) => void; onOpenPublications?: () => void;
 };
 function dateLabel(raw: string | null): string | null {
   if (!raw) return null;
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? null : date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-export function ReasonInbox({ messages, results, busy, connected, onAccept, onReply, onInspect, onSendResult, onOpenProduction }: Props) {
+export function ReasonInbox({ messages, results, busy, connected, onAccept, onReply, onInspect, onSendResult, onOpenProduction, onImportSns, onSendSnsResult, onOpenPublications }: Props) {
   return <section className="reason-inbox" aria-labelledby="reason-inbox-title">
     <div className="reason-section-heading"><h3 id="reason-inbox-title">받은 요청</h3><span>{messages.length}개</span></div>
     {!messages.length ? <p className="reason-empty">받은 메시지가 없습니다. 연결된 AI에게 이 Studio 주소로 요청을 보내 달라고 하세요.</p>
@@ -37,8 +40,9 @@ export function ReasonInbox({ messages, results, busy, connected, onAccept, onRe
                 </li>)}</ol>
               </details>}
               {!message.jobId && <p className="reason-note">{storyboard ? "받은 대본과 장면 구성을 그대로 가져와 검토합니다. 스토리보드 승인 후 이 컴퓨터에서 영상을 생성합니다." : "Agent 탭의 모델로 기획하며, 모델이 없으면 기본 템플릿을 사용합니다. 스토리보드 승인 후 이 컴퓨터에서 영상을 생성합니다."}</p>}
-            </div> : <pre className="reason-message-text">{message.text || "본문 없는 메시지"}</pre>}
-            {request && <details className="reason-original"><summary>원본 메시지 보기</summary><pre>{message.text}</pre></details>}
+            </div> : message.sns ? <SnsRequestReview key={message.id + (message.snsImport?.state ?? "")} message={message} busy={busy} connected={connected} onImport={onImportSns} onSendResult={onSendSnsResult} onOpenPublications={onOpenPublications} />
+              : <pre className="reason-message-text">{message.text || "본문 없는 메시지"}</pre>}
+            {(request || message.sns) && <details className="reason-original"><summary>원본 메시지 보기</summary><pre>{message.text}</pre></details>}
             {message.requestError && <p className="reason-request-error" role="note">{message.requestError}</p>}
             <div className="reason-actions">
               {request && !message.requestError && !message.jobId && <button type="button" className="social-button compact primary" disabled={busy || !connected} onClick={() => onAccept(message.id)}><Clapperboard size={14} />{storyboard ? "스토리보드 가져오기" : "영상 기획 만들기"}</button>}

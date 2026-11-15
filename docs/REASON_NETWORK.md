@@ -1,6 +1,6 @@
 # Reason Network 연결
 
-Toris Studio의 **Agent → Reason Network**에서 외부 에이전트와 메시지를 주고받고, 받은 영상 요청을 기존 영상 제작 작업으로 가져온다. 디자인·기획·개발·음향·배포는 **단계별 작업 맡기기**로 연결된 에이전트(Claude·Codex·피클·Muse·Grok Bot·OpenAI Dots 등)에게 차례로 넘기고, 영상 제작은 Studio의 기획·스토리보드 승인·로컬 생성·QA·게시 초안 흐름을 사용한다.
+Toris Studio의 **Agent → Reason Network**에서 외부 에이전트와 메시지를 주고받고, 받은 영상 요청을 기존 영상 제작 작업으로, SNS 게시 기획을 SNS 콘텐츠·발행 계획 초안으로 가져온다. 디자인·기획·개발·음향·배포는 **단계별 작업 맡기기**로 연결된 에이전트(Claude·Codex·피클·Muse·Grok Bot·OpenAI Dots 등)에게 차례로 넘기고, 영상 제작은 Studio의 기획·스토리보드 승인·로컬 생성·QA·게시 초안 흐름을 사용한다.
 
 > 앱 폴더에서 Claude Code·Codex와 바로 채팅하며 기획·구현하려면 주 메뉴 **프로젝트**를 쓴다([프로젝트 채팅](PROJECT_CHAT.md)). 거기서도 Muse·OpenAI Dots에게 기획을 요청하고 답장을 구현으로 넘길 수 있다.
 
@@ -184,6 +184,85 @@ reason network serve codex --name <컴퓨터>-codex-<폴더>-<경로 해시 4자
 
 이는 영상 작업 중복 방지다. 네트워크가 메시지를 정확히 한 번만 전달한다는 의미는 아니다.
 
+## SNS 게시 기획 요청
+
+영상 요청과 같은 방식으로 SNS 게시 기획을 받아 **SNS 콘텐츠 초안과 발행 계획 초안**으로 가져온다. 가져오기는 게시하지 않는다. 실제 게시·예약은 기존 발행 화면에서 계정을 고르고 미리 확인·승인할 때만 실행되며, X·네이버 블로그·네이버 클립은 지금처럼 수동 게시 인계로 남는다.
+
+### 요청 형식 (`toris-studio.sns.v1`)
+
+메시지 본문은 JSON 객체 하나다. 코드 블록이나 앞뒤 설명을 붙이지 않는다. 화면의 **SNS 기획 요청 예시 복사** 버튼으로 같은 형식을 복사할 수 있다.
+
+```json
+{
+  "schema": "toris-studio.sns.v1",
+  "requestId": "sns-demo-001",
+  "title": "단월 업데이트 홍보",
+  "posts": [
+    { "platform": "threads", "text": "단월에 새로운 장비와 성장 시스템이 추가됐어요.", "hashtags": ["단월", "업데이트"] },
+    { "platform": "x", "text": "단월 업데이트: 새 장비와 성장 시스템을 만나 보세요.", "hashtags": ["단월"] },
+    { "platform": "naver_blog", "title": "단월 업데이트 정리", "text": "블로그 본문", "hashtags": [] }
+  ],
+  "media": { "kind": "videoJob", "id": "Studio 영상 작업 UUID" },
+  "scheduleAt": "2026-06-01T19:00:00+09:00"
+}
+```
+
+검증 기준:
+
+- `schema`는 `toris-studio.sns.v1`, `requestId`는 영문·숫자·밑줄·하이픈 1–80자. 요청 JSON은 32 KiB 이하이며 중복 키와 알려지지 않은 필드(게시·승인 플래그, 명령 등)를 거부한다.
+- `title`은 1–120자. `posts`는 1–8개이며 플랫폼마다 하나씩. 플랫폼은 Studio가 이미 지원하는 `youtube`, `instagram`, `facebook`, `threads`, `tiktok`, `naver_blog`, `naver_clip`, `x`만 받는다.
+- 본문과 Studio가 덧붙이는 `#태그`를 합친 길이: X 280자, Threads 500자, Instagram·TikTok 2,200자, 네이버 클립 1,000자, YouTube·Facebook 5,000자, 네이버 블로그 20,000자 이하. 선택 `title`은 100자 이하.
+- 해시태그는 플랫폼마다 30개까지, 글자·숫자·밑줄 1–50자. 앞의 `#`은 떼어 저장하고 중복은 거부한다.
+- 모든 문자열은 줄바꿈을 `\n`으로 통일하고 제어 문자·보이지 않는 유니코드 문자를 제거한다(단계 파이프라인 답장과 같은 정리).
+- `media`는 선택이며 **이미 Studio에 있는 것**만 가리킨다: `videoJob`(영상 제작 작업 UUID, 완료된 작업의 완성 MP4를 게시 미디어로 복사) 또는 `media`(게시 미디어 저장소의 UUID). 파일 경로·URL·외부 에셋 ID는 받지 않는다.
+- `scheduleAt`은 선택이며 시간대가 있는 RFC 3339 날짜. 가져올 때 미래이고 1년 이내여야 한다.
+
+### 누가 보낼 수 있나
+
+- **연결된 에이전트(피어)**: 위 JSON을 그대로 보낸다. 받을 때 발신자가 연결된 에이전트 목록과 일치해야 SNS 기획으로 인정한다. 목록에 없는 발신자의 코드 없는 JSON은 메시지로만 보이고 오류 안내가 붙는다.
+- **호스팅 어시스턴트(Muse·OpenAI Dots·Grok Bot)**: 이들은 Reason MCP의 `send_message`로만 Studio에 보낼 수 있고 피어 목록에 나타나지 않는다. 그래서 프로젝트 채팅과 같은 **전달문 코드** 방식을 쓴다.
+  1. **SNS 게시 기획 맡기기**에서 어시스턴트, 대상 플랫폼, 기획 요청을 고르고 **전달문 만들기**를 누른다. Studio는 아무것도 보내지 않는다.
+  2. 전달문에는 요청, 대상 플랫폼, Studio 주소(`selfId`), 새로 만든 코드(`TS-XXXXXXXXXX`), JSON 형식과 길이 제한이 들어 있다. **전달문 복사** 후 그 앱에 붙여넣는다.
+  3. 어시스턴트가 첫 줄에 `[TS-…]`, 다음 줄에 JSON 객체를 담아 보낸 메시지만 SNS 기획으로 인정한다(코드는 대소문자 무시).
+  4. 코드는 **처음 사용한 발신자에게 묶인다.** 다른 발신자가 같은 코드로 보내면 거부한다. 코드는 30일 뒤 만료되며 최근 50개만 보관한다(`reason-network/sns-handoffs.json`).
+
+### 검토와 가져오기
+
+1. 받은 요청에서 **SNS 게시 기획** 카드를 연다. 플랫폼별 본문·해시태그·(YouTube·네이버 블로그) 제목이 편집 칸에 채워져 있고, 플랫폼마다 남은 글자 수가 표시된다.
+2. 플랫폼을 빼거나 문구를 고치고, 예약 희망 시간과 미디어 연결 여부를 정한다. 받은 기획에 없는 플랫폼은 추가할 수 없다.
+3. **SNS 초안으로 가져오기**를 누르면 네이티브 계층이 저장된 원본 메시지를 다시 검증하고, 편집 내용도 같은 규칙으로 다시 검증한 뒤 로컬 PostgreSQL에 **하나의 트랜잭션으로** 저장한다.
+   - 플랫폼마다 SNS 콘텐츠(`social_content`) 한 건: 상태 `draft`, 채널 미지정, 본문 끝에 해시태그, 예약 희망 시간은 기록용.
+   - 발행 계획 초안(`publications`): 네이버 블로그는 글(article) 초안, 나머지는 하나의 초안(Instagram·TikTok·YouTube·네이버 클립이 있거나 영상이 연결되면 영상, 아니면 텍스트)으로 묶는다. 플랫폼별 문구는 채널별 설정(overrides)에 들어간다.
+   - 게시 대상에는 **계정이 비어 있다.** 예약 희망 시간이 있으면 자동 게시 가능 플랫폼은 `scheduled`, 없으면 `manual`, X·네이버는 항상 `manual_handoff`다. 발행 작업(`publication_jobs`)은 만들지 않으므로 그 자체로는 아무것도 실행되지 않는다.
+4. **발행 화면 열기**에서 계정을 고르고 미디어·문구를 확인한 뒤 기존 사전 점검과 승인으로 게시한다. 영상 플랫폼은 영상을 연결해야 승인할 수 있다.
+5. 선택: **가져오기 결과 보내기**는 원래 발신자에게 상태만 답장한다.
+
+```json
+{
+  "schema": "toris-studio.sns-result.v1",
+  "requestId": "sns-demo-001",
+  "result": { "status": "imported", "platforms": ["threads", "x"], "contentDrafts": 2, "publicationDrafts": 1, "mediaAttached": false, "published": false, "summary": "…" }
+}
+```
+
+답장에는 로컬 ID·경로·계정 정보를 넣지 않는다. 수신, 새로고침, 가져오기만으로 메시지를 보내거나 게시하지 않는다.
+
+### 중복과 충돌
+
+- 네트워크 세션·실제 발신자·요청 ID로 요청을 식별하고, 가져오기 기록을 `reason-network/sns-imports.json`(최근 500개)에 둔다.
+- 같은 요청을 다시 가져오면 저장하지 않고 기존 결과를 돌려준다. 같은 요청 ID로 내용이 바뀌면 오류로 알리고 새 `requestId`를 요청한다.
+- 저장 전에 `pending` 기록을 남기고, 트랜잭션이 끝나면 `imported`로 바꾼다. 그 사이에 앱이 종료되면 다음 가져오기에서 DB에 첫 발행 초안이 있는지 확인해 완료로 정리하거나 처음부터 다시 저장한다. 가져오기는 한 번에 하나만 실행된다.
+
+### IPC
+
+| IPC | 동작 |
+| --- | --- |
+| `reason_network_sns_handoff` | 어시스턴트·브리프·플랫폼만 받아 코드를 발급하고 전달문을 돌려줌 (전송 없음) |
+| `reason_network_import_sns` | 메시지 ID와 검토한 제목·게시글·예약 희망 시간·미디어 연결 여부로 초안 저장 (게시 없음) |
+| `reason_network_send_sns_result` | 가져온 기록이 있을 때만 실제 발신자에게 상태 답장 |
+
+`reason_network_refresh` 응답의 각 메시지에는 네이티브 계층이 분류한 `sns`, `snsVia`, `snsImport`가 붙는다. 화면은 이 값으로 미리보기만 하고, 가져올 때는 메시지 ID만 보낸다.
+
 ## 작업 상태 회신
 
 받은 요청의 **작업 결과 확인**은 연결된 영상 작업을 읽는다. 별도의 **작업 상태 보내기** 버튼을 누르면 그 시점의 최신 상태를 다시 읽어 원래 발신자에게 답장한다.
@@ -212,7 +291,7 @@ reason network serve codex --name <컴퓨터>-codex-<폴더>-<경로 해시 4자
 
 ## 네이티브 연결 구조
 
-화면은 다음 열세 IPC만 호출한다. 모두 로컬 메인 창 권한을 확인한다.
+화면은 다음 열세 IPC와 위 "SNS 게시 기획 요청"의 세 IPC만 호출한다. 모두 로컬 메인 창 권한을 확인한다.
 
 | IPC | 동작 |
 | --- | --- |
@@ -272,8 +351,8 @@ pnpm verify:full
 
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
   --test reason_network_contract --test reason_video_contract --test reason_pipeline_contract \
-  --test reason_agents_contract --test ipc_acl_contract
-node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts tests/reason-project-client.test.ts
+  --test reason_agents_contract --test reason_sns_contract --test ipc_acl_contract
+node --import tsx --test tests/reason-network-client.test.ts tests/reason-pipeline-client.test.ts tests/reason-project-client.test.ts tests/reason-sns-client.test.ts
 node scripts/verify-reason-network-ui.mjs
 
 cargo run --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
@@ -289,4 +368,6 @@ cargo run --manifest-path desktop/src-tauri/Cargo.toml --no-default-features \
 
 - 앱 프로젝트 계약 테스트는 4단계 순서와 단계별 요청문, 프로젝트 현황 인용, 개발 담당 고정·건너뛰기 금지, 다른 파이프라인 단계 거부, 전송 한도, 저장 형식(이전 기록 호환), 현황 수집(숨김·`node_modules`·심볼릭 링크 제외, README 정리), 입력 경로 해석과 거부, Claude 세션의 모델·effort 환경 변수를 다룬다. UI 검사는 화면이 입력 경로와 세션 ID만 보내는지, 확인 창 취소 시 아무것도 시작하지 않는지, Muse·OpenAI Dots 추천, 개발 담당 고정을 확인한다.
 
-실제 외부 AI와의 왕복, 실제 `reason network serve` 세션 실행, 실제 영상 렌더, 실제 YouTube 게시는 각각 별도로 실행한 증거가 있어야 성공했다고 보고한다. 이 문서 작성 시점에 단계 파이프라인과 개발 에이전트 실행은 실제 에이전트로 왕복한 증거가 없다.
+- SNS 계약 테스트는 형식·필드·길이·해시태그·플랫폼 검증, 보이지 않는 문자 제거, 피어가 아닌 발신자의 코드 없는 JSON 거부, 전달문 코드 인식·첫 발신자 고정·만료, 코드 저장소 한도, 요청 키와 변경된 내용 충돌, 편집 재검증(새 플랫폼 추가·지난 시간·길이 초과 거부), 초안이 계정 없이 저장되고 X·네이버는 수동 인계로 남는지, 영상/텍스트/글 초안 구분, 답장에 로컬 ID가 없는지를 검사한다. DB 트랜잭션과 실제 미디어 복사는 자동 테스트 범위 밖이다. UI 검사는 받은 기획의 검토·편집, 길이 초과 시 가져오기 불가, 가져오기 IPC가 메시지 ID와 검토 내용만 보내는지, 결과 답장, 예시 복사, 전달문 만들기·복사를 고정 IPC로 확인한다.
+
+실제 외부 AI와의 왕복, 실제 `reason network serve` 세션 실행, 실제 영상 렌더, 실제 YouTube 게시는 각각 별도로 실행한 증거가 있어야 성공했다고 보고한다. 이 문서 작성 시점에 단계 파이프라인과 개발 에이전트 실행은 실제 에이전트로 왕복한 증거가 없다. SNS 게시 기획도 실제 Muse·OpenAI Dots·Grok Bot이나 피어와 왕복한 증거, 실제 로컬 DB에 저장한 증거가 없다.
