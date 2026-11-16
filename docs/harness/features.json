@@ -34,6 +34,8 @@
     "desktop/src-tauri/src/project_chat*.rs",
     "desktop/src-tauri/tests/project_chat_contract.rs",
     "tests/project-chat-client.test.ts",
+    "tests/composer-keys.test.ts",
+    "tests/project-drafts.test.ts",
     "scripts/verify-project-chat-ui.mjs",
     "scripts/verify-project-drafts-ui.mjs",
     "scripts/verify-project-chat-native-preflight.mjs",
@@ -45,10 +47,13 @@
     "node scripts/verify-project-chat-ui.mjs",
     "node --import tsx --test tests/composer-keys.test.ts tests/project-drafts.test.ts",
     "node scripts/verify-project-drafts-ui.mjs",
-    "node --check scripts/verify-project-chat-native-preflight.mjs"
+    "node --check scripts/verify-project-chat-native-preflight.mjs",
+    "node scripts/mutation-check.mjs desktop/agent-runtime/test/ui-mutants.json ui.composer-",
+    "node scripts/mutation-check.mjs desktop/agent-runtime/test/ui-mutants.json ui.draft-"
    ],
    "mutants": [
-    "desktop/src-tauri/tests/mutants.json"
+    "desktop/src-tauri/tests/mutants.json",
+    "desktop/agent-runtime/test/ui-mutants.json"
    ]
   },
   {

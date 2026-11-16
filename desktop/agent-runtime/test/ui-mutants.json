@@ -1,5 +1,26 @@
 [
 {
+ "id": "ui.composer-ime-commit-sends",
+ "file": "desktop/src/projects/composer-keys.ts",
+ "find": "const imeCommitted = committed;",
+ "replace": "const imeCommitted = false;",
+ "test": "tests/composer-keys.test.ts"
+},
+{
+ "id": "ui.draft-recovery-cross-project",
+ "file": "desktop/src/projects/project-drafts.ts",
+ "find": "t.id === d.threadId && t.projectId === d.projectId",
+ "replace": "t.id === d.threadId",
+ "test": "tests/project-drafts.test.ts"
+},
+{
+ "id": "ui.draft-discard-loses-on-write-failure",
+ "file": "desktop/src/projects/project-drafts.ts",
+ "find": "if (note) return note;",
+ "replace": "if (false) return note;",
+ "test": "tests/project-drafts.test.ts"
+},
+{
  "id": "ui.reason-storyboard-discarded",
  "file": "desktop/src/reason/reason-client.ts",
  "find": "...(storyboard ? { storyboard } : {})",
