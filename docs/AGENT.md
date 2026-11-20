@@ -77,6 +77,18 @@ START → supervisor ─▶ experts ┌ frontend 레인 ┐ ─▶ qa ─▶ fin
 
 이미지 생성은 OpenAI 또는 Gemini API 키가 필요합니다. 임베딩은 키 없이 쓰는 로컬 해시(이름 기반)부터 OpenAI·Gemini·Ollama까지 고를 수 있습니다.
 
+### 모델 자동 지정
+
+에이전트·콘텐츠 작성 모델이 둘 다 비어 있으면 앱이 시작할 때 구독 CLI를 Claude Code → Codex CLI → Gemini CLI → Cursor CLI → Kiro CLI 순서로 `models.check`(각 CLI의 로그인 상태 명령, 모델 호출 없음)하고, 처음 로그인된 CLI를 두 칸에 바로 저장합니다. 모델은 그 계정이 직접 내준 목록(`source:"account"`)의 첫 항목이고, 목록을 받지 못해 앱의 추천 목록만 있으면 계정에서 쓸 수 없는 모델일 수 있어 비워 두고 CLI 기본 모델을 씁니다(Claude Code는 항상 받는 별칭 `sonnet`). 화면 위에 "○○로 설정했습니다 · 변경"이 뜨고 **변경**은 이 탭의 모델 설정을 엽니다. 각 사용자는 자기 CLI 로그인으로 돌립니다. API 키는 건드리지 않습니다. 모델을 둘 다 비우고 저장하면 `modelAutoSelect=false`가 기록되어 다시 채우지 않습니다.
+
+### CLI 로그인 버튼
+
+모델 설정에서 구독 CLI가 "로그인 필요"면 **○○ 로그인** 버튼이 생깁니다. 누르면 시스템 터미널에서 그 CLI의 공식 로그인 명령만 실행합니다(IPC `agent_cli_login`, 닫힌 목록과 고정 argv: `claude auth login`, `codex login`, `gemini`, `cursor-agent login`, `kiro-cli login`, 운영 상태용 `gh auth login --hostname github.com --web`, `cf auth login`, `wrangler login`). macOS는 개인 임시 `.command` 파일(`exec '<경로>' …` 한 줄, 모든 단어 따옴표)로 Terminal을 열고 새로 만들기 전에 이전 로그인 파일을 지웁니다. Windows는 `cmd.exe`에 한 줄을 그대로(`/d /c start "" cmd.exe /d /s /k ""<경로>" …"`) 넘겨 경로를 한 번만 인용하고, npm이 설치한 `.cmd` 실행 파일도 찾습니다(같은 폴더에서는 `.exe` 우선). Windows 동작은 단위 테스트로만 확인했습니다. 로그인과 토큰 저장은 각 CLI가 하며 앱은 결과를 보지 않습니다. 이 창으로 돌아오면 상태를 다시 확인합니다.
+
+### 콘텐츠 작성 모델이 쓰이는 곳
+
+`complete`(AI 작업실·SNS 문구)와 함께 영상 스토리보드(`video-production`), 주간 콘텐츠 초안(`weekly-content`), 운영 점검(`ops-triage`)도 콘텐츠 작성 모델을 쓰고, 비어 있으면 에이전트 모델을 씁니다. 코드 작업과 앱·게임 팩토리는 에이전트 모델을 씁니다(`harness/registry.ts`의 `purpose`).
+
 ## 안전 장치
 
 - 경로는 프로젝트 기준 상대 경로만 받습니다. 프로젝트 밖을 가리키는 심볼릭 링크, `.env`·키 파일·`.git`은 읽거나 쓸 수 없습니다.
@@ -90,7 +102,7 @@ START → supervisor ─▶ experts ┌ frontend 레인 ┐ ─▶ qa ─▶ fin
 ## 사용
 
 1. Agent 탭 → **벡터 DB 실행** (Docker/OrbStack 필요, 처음엔 이미지 다운로드).
-2. **모델 설정**에서 에이전트 모델을 고르고 저장합니다. 구독 CLI는 터미널에서 먼저 로그인합니다 (`claude`, `codex login`, `gemini` 등).
+2. **모델 설정**을 확인합니다. 로그인된 구독 CLI가 있으면 자동으로 지정되어 있습니다. 로그인이 필요하면 **○○ 로그인** 버튼으로 터미널에서 로그인합니다.
 3. 프로젝트를 고르고 **코드 색인 만들기**. 이후엔 바뀐 파일만 다시 색인합니다.
 4. 작업을 적고 **에이전트 시작**. 승인 카드가 뜨면 diff나 명령을 보고 승인·거절합니다.
 

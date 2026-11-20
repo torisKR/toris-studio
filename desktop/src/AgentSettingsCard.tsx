@@ -1,7 +1,7 @@
 import { Check, CircleAlert, Eye, EyeOff, KeyRound, LoaderCircle, RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ModelChoice, ModelOption, ProviderCheck, ProviderInfo } from "./ai-client";
-import { KEY_PROVIDERS, agentCall, saveSettings, type AgentSettings, type SettingsView } from "./agent-client";
+import { CLI_LOGIN_TOOL, KEY_PROVIDERS, agentCall, saveSettings, startCliLogin, withAutoSelect, type AgentSettings, type SettingsView } from "./agent-client";
 
 type Props = { view: SettingsView; providers: ProviderInfo[]; busy: boolean; onSaved: (view: SettingsView) => void; onError: (message: string) => void };
 type Slot = "agentModel" | "contentModel";
@@ -39,8 +39,28 @@ function ConnectionStatus({ check, provider, onRetry }: { check: CheckState; pro
   return <small key={check.checkedAt} className={"agent-connection " + (ok ? "ok" : "warn")} role="status">
     {ok ? <Check size={13} aria-hidden="true" /> : <CircleAlert size={13} aria-hidden="true" />}
     <span><b>{STATE_LABEL[check.state]}</b>{check.account ? " · " + check.account : ""}{ok ? " · 모델 " + check.models.length + "개" + (check.source === "account" ? "" : " (추천 목록)") : ""}<br />{check.detail}</span>
+    {check.state === "signed-out" && CLI_LOGIN_TOOL[provider.id] && <LoginButton label={provider.label} tool={CLI_LOGIN_TOOL[provider.id]} onReturn={onRetry} />}
     <button type="button" className="agent-recheck" aria-label={provider.label + " 다시 확인"} title="다시 확인" onClick={onRetry}><RefreshCw size={12} /></button>
   </small>;
+}
+
+/** Opens the CLI's official login in a terminal; when the user comes back to this window, the status is checked again. */
+export function LoginButton({ label, tool, onReturn }: { label: string; tool: string; onReturn: () => void }) {
+  const [state, setState] = useState<"" | "opening" | "waiting" | "error">("");
+  const [error, setError] = useState("");
+  async function open() {
+    setState("opening"); setError("");
+    try {
+      await startCliLogin(tool);
+      setState("waiting");
+      window.addEventListener("focus", () => { setState(""); onReturn(); }, { once: true });
+    } catch (e) { setState("error"); setError(e instanceof Error ? e.message : String(e)); }
+  }
+  return <span className="agent-login">
+    <button type="button" className="social-button compact" disabled={state === "opening"} onClick={() => void open()}>{label} 로그인</button>
+    {state === "waiting" && <span>터미널에서 로그인을 마친 뒤 이 창으로 돌아오면 다시 확인합니다.</span>}
+    {state === "error" && <span role="alert">{error}</span>}
+  </span>;
 }
 
 function ModelPicker({ label, hint, value, providers, check, onCheck, onChange }: { label: string; hint: string; value: ModelChoice | null; providers: ProviderInfo[]; check: CheckState; onCheck: (provider: string) => void; onChange: (v: ModelChoice | null) => void }) {
@@ -89,7 +109,7 @@ export function AgentSettingsCard({ view, providers, busy, onSaved, onError }: P
 
   async function save() {
     setSaving(true);
-    try { onSaved(await saveSettings(draft, keys)); }
+    try { onSaved(await saveSettings(withAutoSelect(draft), keys)); }
     catch (error) { onError(error instanceof Error ? error.message : String(error)); }
     finally { setSaving(false); }
   }

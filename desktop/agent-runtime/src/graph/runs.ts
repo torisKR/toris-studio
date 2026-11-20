@@ -92,7 +92,9 @@ export class RunManager {
     const info = spec.needsProject ? describeProject(settings.projectsRoot, project) : { name: "", path: "", stacks: [], scripts: {}, git: false };
     // Hub workflows still run without a model: their nodes fall back to labelled template output.
     let model: ChatModel;
-    try { model = this.modelFactory(settings); }
+    // Content workflows write with the content model; the factory always reads agentModel.
+    const modelSettings = spec.purpose === "content" ? { ...settings, agentModel: settings.contentModel ?? settings.agentModel } : settings;
+    try { model = this.modelFactory(modelSettings); }
     catch (error) {
       if (spec.needsProject) throw error;
       const reason = errorText(error);

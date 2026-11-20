@@ -15,6 +15,28 @@ const CALLBACK_HTML = `<!doctype html>
   </main>
 </body>
 </html>`;
+// Meta only accepts HTTPS redirect URIs, so broker logins hand the browser to the desktop app's loopback listener.
+const META_CALLBACK = /^\/oauth\/(threads|instagram|facebook)\/callback$/;
+const APP_LOOPBACK = 'http://127.0.0.1:38471';
+const RELAYED_KEYS = ['code', 'state', 'error', 'error_reason'];
+const MAX_RELAYED_VALUE = 2048;
+const MAX_STATE_PAYLOAD = 512;
+const URL_SAFE = /^[A-Za-z0-9._~-]+$/;
+const BROKER_STATE = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
+const INVALID_CALLBACK_HTML = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toris Studio 로그인 확인</title>
+</head>
+<body>
+  <main>
+    <h1>Toris Studio 로그인 확인</h1>
+    <p>로그인 응답을 확인할 수 없습니다. Toris Studio 앱에서 로그인을 다시 시작하세요.</p>
+  </main>
+</body>
+</html>`;
 
 const CALLBACK_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
@@ -27,9 +49,56 @@ const CALLBACK_HEADERS = {
   'permissions-policy': 'camera=(), microphone=(), geolocation=()'
 };
 
+/**
+ * Routing only, not a security check: this Worker has no signing key, so it just recognizes the shape of a
+ * Toris broker state (base64url JSON payload "." signature) naming this platform. Anything else keeps the
+ * pre-relay behavior so developer-app and older-app logins are unchanged. The broker's PKCE verifier
+ * binding is what makes an intercepted code useless.
+ */
+function isBrokerState(params: URLSearchParams, platform: string): boolean {
+  const states = params.getAll('state');
+  const parts = states.length === 1 ? BROKER_STATE.exec(states[0]) : null;
+  if (!parts || parts[1].length > MAX_STATE_PAYLOAD) return false;
+  try {
+    const payload: unknown = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+    const { k, p, e } = payload as Record<string, unknown>;
+    return p === platform && typeof k === 'string' && Number.isSafeInteger(e);
+  } catch {
+    return false;
+  }
+}
+
+/** Returns the allowed callback values, or null when any is duplicated, oversized, or not URL-safe. */
+function relayQuery(params: URLSearchParams): URLSearchParams | null {
+  const out = new URLSearchParams();
+  for (const key of RELAYED_KEYS) {
+    const values = params.getAll(key);
+    if (values.length > 1) return null;
+    if (values.length === 0) continue;
+    if (values[0].length > MAX_RELAYED_VALUE || !URL_SAFE.test(values[0])) return null;
+    out.set(key, values[0]);
+  }
+  return out.has('state') && (out.has('code') || out.has('error')) ? out : null;
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const incomingUrl = new URL(request.url);
+
+    // Security review: for broker-shaped states only, this copies query values into a loopback redirect.
+    // Only code/state/error/error_reason pass, each validated; nothing reaches the Sites proxy or a log.
+    const meta = incomingUrl.hostname === 'toris.kr' ? META_CALLBACK.exec(incomingUrl.pathname) : null;
+    if (meta && (request.method === 'GET' || request.method === 'HEAD') && isBrokerState(incomingUrl.searchParams, meta[1])) {
+      const relayed = relayQuery(incomingUrl.searchParams);
+      if (!relayed) {
+        return new Response(request.method === 'HEAD' ? null : INVALID_CALLBACK_HTML, { status: 400, headers: CALLBACK_HEADERS });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { ...CALLBACK_HEADERS, location: `${APP_LOOPBACK}/oauth/${meta[1]}/callback?${relayed}` }
+      });
+    }
 
     // Never forward an Instagram authorization code or state to the Sites proxy.
     // This response is static: no query reflection, token exchange, assets, or logs.

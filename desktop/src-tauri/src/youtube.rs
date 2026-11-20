@@ -21,7 +21,8 @@ const INPUT_ERROR: &str =
     "youtube_invalid_query: @핸들, UC 채널 ID 또는 YouTube 채널 주소를 입력하세요.";
 const SOURCE_ERROR: &str =
     "youtube_invalid_response: YouTube 응답을 읽을 수 없습니다. 잠시 후 다시 시도하세요.";
-const KEY_MISSING: &str = "youtube_key_missing: 설정에서 YouTube Data API 키를 등록하세요.";
+const KEY_MISSING: &str = "youtube_key_missing: 설정에서 YouTube Data API 키를 등록하거나 SNS 관리에서 YouTube 계정을 연결하세요.";
+const TOKEN_REJECTED: &str = "youtube_token_rejected: YouTube 로그인을 다시 연결하세요.";
 const KEY_REJECTED: &str =
     "youtube_key_rejected: YouTube Data API 키와 Google Cloud의 API 제한 설정을 확인하세요.";
 const NOT_FOUND: &str = "youtube_channel_not_found: 공개 YouTube 채널을 찾지 못했습니다. 핸들 또는 채널 ID를 확인하세요.";
@@ -204,19 +205,40 @@ fn parse_query(raw: &str) -> Result<ChannelQuery, String> {
     }
 }
 
-fn api_key(config: &AppConfig) -> Result<HeaderValue, String> {
-    let raw = config
+/// How public YouTube data is read: the user's Data API key, else their YouTube login (youtube.readonly).
+enum Credential {
+    Key(HeaderValue),
+    Bearer(HeaderValue),
+}
+fn has_key(config: &AppConfig) -> bool {
+    config
+        .youtube_api_key
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+}
+fn credential(config: &AppConfig, token: Option<String>) -> Result<Credential, String> {
+    if let Some(raw) = config
         .youtube_api_key
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .ok_or(KEY_MISSING)?;
-    if raw.len() > 256 || !identifier(raw) {
-        return Err(KEY_REJECTED.into());
+    {
+        if raw.len() > 256 || !identifier(raw) {
+            return Err(KEY_REJECTED.into());
+        }
+        let mut value = HeaderValue::from_str(raw).map_err(|_| KEY_REJECTED)?;
+        value.set_sensitive(true);
+        return Ok(Credential::Key(value));
     }
-    let mut value = HeaderValue::from_str(raw).map_err(|_| KEY_REJECTED)?;
+    let token = token.ok_or(KEY_MISSING)?;
+    let mut value =
+        HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| TOKEN_REJECTED)?;
     value.set_sensitive(true);
-    Ok(value)
+    Ok(Credential::Bearer(value))
+}
+/// The signed-in YouTube account's read token, only when no Data API key is saved.
+async fn login_token() -> Option<String> {
+    crate::oauth::youtube_read_token().await.ok()
 }
 fn http_client() -> Result<Client, String> {
     Client::builder()
@@ -236,7 +258,7 @@ enum Resource {
 }
 fn request(
     client: &Client,
-    key: &HeaderValue,
+    key: &Credential,
     resource: Resource,
     parameters: &[(&str, &str)],
 ) -> RequestBuilder {
@@ -247,10 +269,11 @@ fn request(
     };
     // A sensitive Google standard API-key header avoids putting credentials in URLs.
     // https://docs.cloud.google.com/docs/authentication/api-keys-use#using_an_api_key_with_rest
-    client
-        .get(endpoint)
-        .header("x-goog-api-key", key.clone())
-        .query(parameters)
+    let builder = client.get(endpoint).query(parameters);
+    match key {
+        Credential::Key(value) => builder.header("x-goog-api-key", value.clone()),
+        Credential::Bearer(value) => builder.header("authorization", value.clone()),
+    }
 }
 
 fn provider_error(status: StatusCode, payload: Option<&Value>) -> String {
@@ -466,6 +489,17 @@ fn parse_videos(payload: &Value, channel_id: &str, order: &[String]) -> Result<V
 }
 
 pub async fn lookup_channel(config: &AppConfig, input: Value) -> Result<Value, String> {
+    lookup_channel_with(config, input, login_token).await
+}
+async fn lookup_channel_with<F, Fut>(
+    config: &AppConfig,
+    input: Value,
+    token: F,
+) -> Result<Value, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
     let object = input
         .as_object()
         .filter(|o| o.len() == 1)
@@ -476,7 +510,7 @@ pub async fn lookup_channel(config: &AppConfig, input: Value) -> Result<Value, S
             .and_then(Value::as_str)
             .ok_or(INPUT_ERROR)?,
     )?;
-    let key = api_key(config)?;
+    let key = credential(config, if has_key(config) { None } else { token().await })?;
     let client = http_client()?;
     let payload = fetch_json(request(
         &client,
@@ -493,10 +527,21 @@ pub async fn lookup_channel(config: &AppConfig, input: Value) -> Result<Value, S
 }
 
 pub async fn channel_videos(config: &AppConfig, id: String) -> Result<Value, String> {
+    channel_videos_with(config, id, login_token).await
+}
+async fn channel_videos_with<F, Fut>(
+    config: &AppConfig,
+    id: String,
+    token: F,
+) -> Result<Value, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
     if !channel_id(&id) {
         return Err(INPUT_ERROR.into());
     }
-    let key = api_key(config)?;
+    let key = credential(config, if has_key(config) { None } else { token().await })?;
     let client = http_client()?;
     let payload = fetch_json(request(
         &client,
@@ -671,7 +716,7 @@ mod tests {
             youtube_api_key: Some("fixture-private-value".into()),
             ..Default::default()
         };
-        let key = api_key(&config).unwrap();
+        let key = credential(&config, None).unwrap();
         let built = request(
             &http_client().unwrap(),
             &key,
@@ -699,30 +744,65 @@ mod tests {
         assert!(thumbnail.is_none());
     }
 
+    async fn no_token() -> Option<String> {
+        None
+    }
+    #[test]
+    fn the_users_key_comes_first_then_the_youtube_login_token() {
+        let keyed = AppConfig {
+            youtube_api_key: Some("fixture-key".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            credential(&keyed, Some("oauth-token".into())).unwrap(),
+            Credential::Key(_)
+        ));
+        let token = credential(&AppConfig::default(), Some("oauth-token".into())).unwrap();
+        let built = request(
+            &http_client().unwrap(),
+            &token,
+            Resource::Channels,
+            &[("part", "snippet")],
+        )
+        .build()
+        .unwrap();
+        assert_eq!(built.headers()["authorization"], "Bearer oauth-token");
+        assert!(built.headers()["authorization"].is_sensitive());
+        assert!(built.headers().get("x-goog-api-key").is_none());
+        assert!(!built.url().as_str().contains("oauth-token"));
+        assert_eq!(
+            credential(&AppConfig::default(), None).err().unwrap(),
+            KEY_MISSING
+        );
+        assert!(credential(&AppConfig::default(), Some("bad\ntoken".into())).is_err());
+    }
     #[tokio::test]
     async fn missing_key_and_bad_input_stop_before_any_network_call() {
         let config = AppConfig::default();
         assert_eq!(
-            lookup_channel(&config, json!({"query":"@toris"}))
+            lookup_channel_with(&config, json!({"query":"@toris"}), no_token)
                 .await
                 .unwrap_err(),
             KEY_MISSING
         );
         assert_eq!(
-            channel_videos(&config, CHANNEL.into()).await.unwrap_err(),
+            channel_videos_with(&config, CHANNEL.into(), no_token)
+                .await
+                .unwrap_err(),
             KEY_MISSING
         );
         assert_eq!(
-            lookup_channel(
+            lookup_channel_with(
                 &config,
-                json!({"query":"@toris","endpoint":"https://evil.example"})
+                json!({"query":"@toris","endpoint":"https://evil.example"}),
+                no_token
             )
             .await
             .unwrap_err(),
             INPUT_ERROR
         );
         assert_eq!(
-            channel_videos(&config, "not-a-channel-id".into())
+            channel_videos_with(&config, "not-a-channel-id".into(), no_token)
                 .await
                 .unwrap_err(),
             INPUT_ERROR

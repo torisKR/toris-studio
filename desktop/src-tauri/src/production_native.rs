@@ -85,7 +85,14 @@ pub async fn production_create(
 ) -> Result<Value, String> {
     crate::updater::authorize(&window)?;
     let settings = crate::production::parse_settings(&input)?;
-    let job = crate::production::new_job(&settings);
+    let mut job = crate::production::new_job(&settings);
+    // A saved reference is read from the store once and kept as the job's snapshot.
+    if settings.visual == "motion" && job["reference"].is_null() {
+        job["reference"] = json!(crate::motion_reference::get_at(
+            &crate::motion_reference::root_dir()?,
+            &settings.reference
+        )?);
+    }
     start_planning(&app, jobs.inner().clone(), agent.inner().clone(), job, None)
 }
 
@@ -113,12 +120,13 @@ pub(crate) fn start_planning(
     crate::production::write_json(&root.join(&id).join("job.json"), &job)?;
     let shown = view(app, &jobs, &job);
     let plan_id = id.clone();
+    let reference = job["reference"].clone();
     tauri::async_runtime::spawn(async move {
         // A received storyboard is already creative input. Preserve it exactly
         // through preparation; only settings-only requests need the local planner.
         let planned = match imported_storyboard {
             Some(storyboard) => Ok(storyboard),
-            None => plan(&agent, &settings).await,
+            None => plan(&agent, &settings, scene_seconds(&reference)).await,
         };
         // Stock jobs fetch photo candidates for every scene before the user reviews the storyboard.
         let candidates = match (&planned, settings.visual.as_str()) {
@@ -261,13 +269,23 @@ pub async fn production_find_images(
     Ok(view(&app, &jobs, &job))
 }
 
+/// Preferred scene length of a motion job's reference (the planner's scene count follows it).
+fn scene_seconds(reference: &Value) -> Option<f64> {
+    reference["rhythm"]["sceneSec"].as_f64()
+}
+
 async fn plan(
     agent: &Arc<crate::agent_runtime::AgentRuntime>,
     settings: &crate::production::Settings,
+    motion_scene_sec: Option<f64>,
 ) -> Result<Value, String> {
+    let mut input = json!({"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko",
+        "visual": settings.visual});
+    if let (Some(seconds), true) = (motion_scene_sec, settings.visual == "motion") {
+        input["motionSceneSec"] = json!(seconds);
+    }
     let run = agent.call("run.start", json!({"project": "", "task": settings.topic, "workflow": "video-production", "host": true,
-        "input": {"topic": settings.topic, "durationSec": settings.duration_sec, "aspect": settings.aspect, "style": settings.style, "narration": settings.narration, "language": "ko",
-            "visual": settings.visual}})).await?;
+        "input": input})).await?;
     let run_id = run["runId"]
         .as_str()
         .ok_or("기획 작업을 시작하지 못했습니다.")?
@@ -312,7 +330,7 @@ pub async fn production_approve(
     let id = job_id(&input)?;
     let settings =
         crate::production::read_job(&crate::production::root()?, &id)?["settings"].clone();
-    if settings["visual"] != "stock" {
+    if crate::production::needs_engine(settings["visual"].as_str().unwrap_or("ai")) {
         video.ready(settings["engine"].as_str().unwrap_or(""))?;
     }
     let job = jobs
@@ -375,7 +393,7 @@ pub async fn production_resume(
     if job["status"] == "done" {
         return Err("이미 완료된 영상입니다. 장면을 다시 만들려면 장면 재생성을 누르세요.".into());
     }
-    if job["settings"]["visual"] != "stock" {
+    if crate::production::needs_engine(job["settings"]["visual"].as_str().unwrap_or("ai")) {
         video.ready(job["settings"]["engine"].as_str().unwrap_or(""))?;
     }
     jobs.inner()

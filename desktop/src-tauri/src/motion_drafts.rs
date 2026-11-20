@@ -89,7 +89,20 @@ pub fn root_dir() -> Result<PathBuf, String> {
         .ok_or("모션 저장 경로 오류")?
         .join("motion-drafts"))
 }
-pub fn request(input: Value) -> Result<Value, String> {
+/// The window names a reference by id only; its closed data is read from the store here, so a
+/// caller can never hand the model an arbitrary "reference" object.
+pub fn request(mut input: Value) -> Result<Value, String> {
+    let reference = match input["referenceId"].as_str().filter(|id| !id.is_empty()) {
+        Some(id) => json!(crate::motion_reference::get_at(
+            &crate::motion_reference::root_dir()?,
+            id
+        )?),
+        None => Value::Null,
+    };
+    if let Some(object) = input.as_object_mut() {
+        object.remove("referenceId");
+        object.insert("reference".into(), reference);
+    }
     request_at(&root_dir()?, input)
 }
 pub fn list() -> Result<Value, String> {
@@ -135,7 +148,11 @@ pub fn request_at(root: &Path, input: Value) -> Result<Value, String> {
             return Err("선택한 요소가 없습니다.".into());
         }
     }
-    let r = json!({"id":Uuid::new_v4().to_string(),"projectId":p["id"],"baseHash":graphics::hash(p),"mode":mode,"instruction":instruction,"allowDataEdits":input["allowDataEdits"].as_bool().unwrap_or(false),"sceneIds":scene_ids,"elementIds":element_ids,"project":p,"status":"waiting","createdAt":Utc::now().to_rfc3339()});
+    let reference = match input.get("reference") {
+        None | Some(Value::Null) => Value::Null,
+        Some(value) => json!(crate::motion_reference::parse(value)?),
+    };
+    let r = json!({"id":Uuid::new_v4().to_string(),"projectId":p["id"],"baseHash":graphics::hash(p),"mode":mode,"instruction":instruction,"allowDataEdits":input["allowDataEdits"].as_bool().unwrap_or(false),"sceneIds":scene_ids,"elementIds":element_ids,"project":p,"reference":reference,"status":"waiting","createdAt":Utc::now().to_rfc3339()});
     access(root, |items| {
         if items.len() >= 40 {
             let index = items
@@ -288,6 +305,10 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
             };
         }
         scope(r, &input["draft"])?;
+        // Model drafts (motion_ai) and Studio MCP drafts land here: one palette rule for both.
+        if let Some(problem) = palette_problem(&input["draft"], &r["reference"]) {
+            return Err(problem);
+        }
         graphics::apply_patch(&r["project"], &input["draft"])?;
         r["draft"] = input["draft"].clone();
         r["status"] = json!("received");
@@ -295,6 +316,41 @@ pub fn receive_at(root: &Path, input: Value) -> Result<Value, String> {
         Ok(r.clone())
     })
 }
+/// With a reference, every colour the draft writes must be one of its five palette colours.
+pub fn palette_problem(draft: &Value, reference: &Value) -> Option<String> {
+    let palette: Vec<String> = ["background", "surface", "text", "accent", "accent2"]
+        .iter()
+        .filter_map(|k| {
+            reference["palette"][k]
+                .as_str()
+                .map(str::to_ascii_uppercase)
+        })
+        .collect();
+    if palette.is_empty() {
+        return None;
+    }
+    let mut colors = Vec::new();
+    for op in draft["operations"].as_array().into_iter().flatten() {
+        let scene = &op["scene"]["graphics"];
+        colors.extend(scene["background"].as_str());
+        for e in scene["elements"].as_array().into_iter().flatten() {
+            colors.extend(e["color"].as_str());
+        }
+        colors.extend(op["element"]["color"].as_str());
+    }
+    let outside: Vec<&str> = colors
+        .into_iter()
+        .filter(|c| !palette.contains(&c.to_ascii_uppercase()))
+        .collect();
+    (!outside.is_empty()).then(|| {
+        format!(
+            "레퍼런스 팔레트({})에 없는 색을 썼습니다: {}",
+            palette.join(", "),
+            outside.join(", ")
+        )
+    })
+}
+
 pub fn apply(id: &str, current: Value) -> Result<Value, String> {
     apply_at(&root_dir()?, id, current)
 }

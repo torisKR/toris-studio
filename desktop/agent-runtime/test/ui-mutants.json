@@ -288,5 +288,193 @@
  "find": "assignees.map(assignee => assignee ? onRoster(assignee, peers) : null), projectSessionId };",
  "replace": "assignees.map(assignee => assignee ? onRoster(assignee, peers) : null), projectSessionId, folder: \"/Users/toris\" };",
  "cmd": ["node", "--import", "tsx", "--test", "tests/reason-project-client.test.ts"]
+},
+{
+ "id": "ui.mg-production-motion-read-as-ai",
+ "file": "desktop/src/production/production-client.ts",
+ "find": "visual: s.visual === \"stock\" || s.visual === \"motion\" ? s.visual : \"ai\",",
+ "replace": "visual: s.visual === \"stock\" ? \"stock\" : \"ai\",",
+ "cmd": ["node", "scripts/verify-production-ui.mjs"]
+},
+{
+ "id": "ui.mg-production-square-motion",
+ "file": "desktop/src/production/ProductionStudio.tsx",
+ "find": "const blocked = motion && !MOTION_ASPECTS.includes(value as ComposerState[\"aspect\"]);",
+ "replace": "const blocked = false;",
+ "cmd": ["node", "scripts/verify-production-ui.mjs"]
+},
+{
+ "id": "ui.mg-motion-request-drops-reference",
+ "file": "desktop/src/motion/MotionStudio.tsx",
+ "find": ", ...(referenceId ? { referenceId } : {}) } });",
+ "replace": " } });",
+ "cmd": ["pnpm", "motion:verify:ui"]
+},
+{
+ "id": "a2.ui-auto-model-accepts-signed-out",
+ "file": "desktop/src/agent-client.ts",
+ "find": "checks.find(c => c.state === \"connected\")",
+ "replace": "checks.find(c => c.state !== \"missing\")",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
+},
+{
+ "id": "a2.ui-auto-model-ignores-opt-out",
+ "file": "desktop/src/agent-client.ts",
+ "find": " || settings.modelAutoSelect === false) return null;",
+ "replace": ") return null;",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
+},
+{
+ "id": "a2.ui-auto-model-drops-content-slot",
+ "file": "desktop/src/agent-client.ts",
+ "find": "agentModel: choice, contentModel: choice, modelAutoSelect: true",
+ "replace": "agentModel: choice, modelAutoSelect: true",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
+},
+{
+ "id": "a2.ui-auto-model-never-opts-out",
+ "file": "desktop/src/agent-client.ts",
+ "find": "modelAutoSelect: Boolean(settings.agentModel || settings.contentModel)",
+ "replace": "modelAutoSelect: true",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
+},
+{
+ "id": "a2.ui-auto-model-not-run-on-start",
+ "file": "desktop/src/App.tsx",
+ "find": "const assigned = await autoAssignModel().catch(() => null);",
+ "replace": "const assigned = null as null | { label: string };",
+ "cmd": ["node", "scripts/verify-agent-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-cli-login-wrong-tool",
+ "file": "desktop/src/agent-client.ts",
+ "find": "\"claude-cli\": \"claude\", \"codex-cli\"",
+ "replace": "\"claude-cli\": \"claude-cli\", \"codex-cli\"",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
+},
+{
+ "id": "a2.ui-cli-login-no-recheck",
+ "file": "desktop/src/AgentSettingsCard.tsx",
+ "find": "window.addEventListener(\"focus\", () => { setState(\"\"); onReturn(); }, { once: true });",
+ "replace": "",
+ "cmd": ["node", "scripts/verify-agent-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-calendar-builtin-shows-form",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "<details className=\"planner-own-client\"><summary>내 Google 클라이언트 사용</summary>",
+ "replace": "<details open className=\"planner-own-client\"><summary>내 Google 클라이언트 사용</summary>",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-calendar-no-testing-notice",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "provider.clientMode === \"google_builtin\" && provider.googleTesting &&",
+ "replace": "false &&",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-ops-cf-wrangler-swap",
+ "file": "desktop/src/ops-client.ts",
+ "find": "status.cf.installed || !status.wrangler.installed ?",
+ "replace": "status.wrangler.installed ?",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/ops-client.test.ts"]
+},
+{
+ "id": "a2.ui-ops-token-input-back",
+ "file": "desktop/src/ops-client.ts",
+ "find": "export const INPUT_SECRETS: SecretKind[] = [\"cloudflare_account\", \"play_service_account\"];",
+ "replace": "export const INPUT_SECRETS: SecretKind[] = [\"github_token\", \"cloudflare_token\", \"cloudflare_account\", \"play_service_account\"];",
+ "cmd": ["node", "scripts/verify-ops-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-ops-cli-no-recheck",
+ "file": "desktop/src/OpsPanel.tsx",
+ "find": "window.addEventListener(\"focus\", load, { once: true });",
+ "replace": "",
+ "cmd": ["node", "scripts/verify-ops-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "a2.ui-sns-toris-not-default",
+ "file": "desktop/src/sns/SnsConnections.tsx",
+ "find": ":toris?\"toris\":builtin?\"google_builtin\":\"developer\";",
+ "replace": ":builtin?\"google_builtin\":\"developer\";",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/publication-connection-mode.test.ts"]
+},
+{
+ "id": "a2.ui-sns-toris-skips-mode-save",
+ "file": "desktop/src/sns/SnsConnections.tsx",
+ "find": "if(mode!==\"developer\"&&how.stored!==mode){await invoke(",
+ "replace": "if(false){await invoke(",
+ "cmd": ["node", "scripts/verify-sns-workspace.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a2.ui-sns-secret-form-always",
+ "file": "desktop/src/sns/SnsConnections.tsx",
+ "find": "{(!how.offer||mode===\"developer\")&&<details",
+ "replace": "{true&&<details",
+ "cmd": ["node", "scripts/verify-sns-workspace.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a2.ui-pub-naver-compose-hidden",
+ "file": "desktop/src/publication-client.ts",
+ "find": "...(job.platform === \"naver_blog\" ? [\"naver_compose_title\", \"naver_compose_body\"] : []),",
+ "replace": "",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/publication-kinds.test.ts"]
+},
+{
+ "id": "a2.ui-pub-naver-compose-wrong-part",
+ "file": "desktop/src/PublicationPanel.tsx",
+ "find": "const part = action === \"naver_compose_title\" ? \"title\" : \"body\";",
+ "replace": "const part = \"body\";",
+ "cmd": ["node", "scripts/verify-publication-ui.mjs"],
+ "timeoutMs": 500000
+},
+{
+ "id": "a3.ui-readiness-youtube-fix-wrong",
+ "file": "desktop/src/SettingsReadiness.tsx",
+ "find": "input.youtubeKey || input.youtubeLogin, \"YouTube Data API 키 또는 YouTube 계정 연결\", \"open_sns\")",
+ "replace": "input.youtubeKey || input.youtubeLogin, \"YouTube Data API 키 또는 YouTube 계정 연결\", \"open_agent\")",
+ "cmd": ["node", "scripts/verify-desktop-readiness.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a3.ui-readiness-login-ignored",
+ "file": "desktop/src/SettingsReadiness.tsx",
+ "find": "youtubeLogin: Boolean(providers.find(p => p.platform === \"youtube\")?.connected),",
+ "replace": "youtubeLogin: false,",
+ "cmd": ["node", "scripts/verify-desktop-readiness.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a3.ui-readiness-db-button-dead",
+ "file": "desktop/src/SettingsPanel.tsx",
+ "find": "if (fix === \"start_database\") void databaseAction(\"start\");",
+ "replace": "if (fix === \"start_database\") void 0;",
+ "cmd": ["node", "scripts/verify-desktop-readiness.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a3.ui-youtube-login-not-used",
+ "file": "desktop/src/YouTubePanel.tsx",
+ "find": "setConfigured(keySaved || login);",
+ "replace": "setConfigured(keySaved);",
+ "cmd": ["node", "scripts/verify-desktop-readiness.mjs"],
+ "timeoutMs": 400000
+},
+{
+ "id": "a3.ui-auto-model-trusts-suggestions",
+ "file": "desktop/src/agent-client.ts",
+ "find": "const trusted = found.source === \"account\" || found.provider === \"claude-cli\";",
+ "replace": "const trusted = true;",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/agent-client.test.ts"]
 }
 ]

@@ -13,6 +13,8 @@ export type WorkflowSpec = {
   description: string;
   /** Workflows that edit code need a project folder; others may run on a scratch folder. */
   needsProject: boolean;
+  /** "content" workflows write prose and use the content model (falling back to the agent model). */
+  purpose?: "agent" | "content";
   build(ctx: RunContext): CompiledWorkflow;
 };
 

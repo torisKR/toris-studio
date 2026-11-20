@@ -28,3 +28,27 @@
 프로젝트 저장은 기존 로컬 프로젝트 저장소를 사용합니다. 편집 복구본은 로컬 WebView 저장소에 보관합니다. 기존 텍스트·프리셋 프로젝트는 변환하지 않습니다. MP4 출력 완료 후 MP4 저장에서 위치를 선택하세요. 번들 도구 누락·손상은 공식 설치 파일로 복구해야 합니다.
 
 FFmpeg/FFprobe 9.0.2와 libx264·zlib, Noto Sans CJK KR의 해시·라이선스·대응 소스·빌드 지침은 앱의 `media-runtime/`에 동봉합니다. 설치 검사 `--motion-smoke`는 사용자 설정을 읽지 않고 합성 자료로 정지 프레임·세로 MP4·가로 재생 영상을 생성합니다.
+
+## 레퍼런스
+
+레퍼런스는 마음에 드는 모션 그래픽의 "느낌"만 담은 닫힌 데이터입니다(`desktop/src-tauri/src/motion_reference.rs`, 이미지·영상 분석은 `motion_reference_media.rs`). 문구·로고·이미지·픽셀·파일 경로는 저장하지 않습니다. 영상 자동 제작의 모션 그래픽 장면과 이 화면의 "AI로 만들기"가 같은 레퍼런스를 씁니다.
+
+| 필드 | 허용 값 |
+|---|---|
+| palette | background·surface·text·accent·accent2, 각 `#RRGGBB`. 배경 BT.601 휘도 32 이상(품질 검사 검은 화면 판정 회피), 글자/배경·글자/패널 대비 4.5:1 이상, 강조/배경 3:1 이상 |
+| type | headline 56~160, body 24~72(제목보다 작게). 짧은 변 1080px 기준 |
+| composition | center · left-rail · panel |
+| motion | enter: fade·rise·slide·zoom / accent: draw·fade·zoom·none / exit: none·fade-out(장식 도형이 끝에서 사라짐) |
+| decor | none · underline · ring · block |
+| rhythm | firstDelay 0~1초, stagger 0.1~1초, sceneSec 2.5~8초 |
+| origin | builtin · project · media. source에는 프로젝트 해시 또는 파일 sha256·종류·크기·길이만 남습니다 |
+
+만드는 경로:
+
+- 기본 레퍼런스 6종(한밤 데이터, 종이 에디토리얼, 강한 대비 팝, 차분한 파스텔, 굵은 색 블록, 흑백 미니멀). 특정 브랜드나 채널을 본뜨지 않은 원본 조합입니다.
+- **레퍼런스로 저장**: 지금 모션 프로젝트에서 배경·글자·도형 색의 최빈값, 장면별 가장 큰 글자 크기의 중앙값, 정렬, 등장 애니메이션, 요소 등장 간격·장면 길이의 중앙값을 코드로 뽑습니다. 문구·표·이미지 ID는 읽지 않습니다.
+- **이미지·영상에서 색 가져오기**(영상 제작 화면): OS 파일 선택 창에서 고른 PNG·JPEG·WebP(32MiB 이하) 또는 MP4·MOV·WebM·MKV(1GiB·10분·8192px 이하)의 대표 색을 잽니다. 파일 크기는 내용을 읽기 전에 메타데이터로 먼저 확인하고(1GiB를 넘으면 열지 않음, 이미지로 확인되면 32MiB), 형식 확인·해시·디코딩은 비동기 작업 스레드가 아닌 블로킹 풀에서 합니다. 영상은 FFprobe로 화면 크기(1~8192px)와 길이(0초 초과 600초 이하)를 확인한 뒤, 동봉 FFmpeg가 파일 프로토콜과 mov·matroska·webm 형식만 허용한 채 40프레임을 20×20으로 뽑습니다. 속도와 배치는 재지 않고 고른 기준 레퍼런스 값을 쓰며, 레퍼런스 메모와 화면에 "속도와 배치는 재지 않았고 기준 레퍼런스 값을 씁니다"를 표시합니다. URL에서 내려받지 않습니다.
+
+어두운 배경·낮은 대비는 코드가 고치고 메모에 남깁니다. 저장 위치는 앱 데이터 폴더의 `motion-references/<id>.json`(최대 50개)이며 기본 레퍼런스는 지울 수 없습니다. IPC: `motion_reference_list`, `motion_reference_from_project`, `motion_reference_from_media`, `motion_reference_delete`.
+
+"AI로 만들기"에서 레퍼런스를 고르면 화면은 ID만 보내고 Rust가 저장소에서 읽은 값을 요청에 스냅샷으로 남깁니다. 모델에는 사용자 메시지 JSON의 `reference`로 팔레트·글자 크기·배치·애니메이션·리듬만 갑니다(이름·출처·메모 제외). 시스템 규칙에는 이 필드를 쓰는 방법 한 줄만 있습니다. 받은 초안의 색이 팔레트 다섯 색 밖이면 사유와 함께 한 번 다시 요청하고, 그래도 다르면 저장하지 않습니다. Studio MCP(`studio_motion_draft_receive`)로 받은 초안도 같은 수신 함수(`motion_drafts::receive_at`)에서 같은 팔레트 검사를 거치며, 어긋나면 받지 않고 요청은 대기 상태로 남습니다.

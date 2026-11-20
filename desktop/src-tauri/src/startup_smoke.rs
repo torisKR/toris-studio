@@ -7,7 +7,8 @@
 use serde::Deserialize;
 
 const NAVIGATION: [&str; 6] = ["프로젝트", "SNS 관리", "콘텐츠", "제작", "게시", "운영"];
-const READS: [&str; 9] = [
+const READS: [&str; 12] = [
+    "agent_settings_get",
     "ai_status",
     "analytics_dispatch:status",
     "browser_runtime_status",
@@ -16,7 +17,9 @@ const READS: [&str; 9] = [
     "get_scheduler_status",
     "get_settings",
     "get_update_status",
+    "oauth_connection_dispatch:brokerConfig",
     "oauth_connections",
+    "oauth_status",
 ];
 
 #[derive(Deserialize)]

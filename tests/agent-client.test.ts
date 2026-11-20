@@ -108,3 +108,56 @@ test("hub runs start and decide through the host commands; code runs keep run.re
   assert.equal(runTitle({ workflow: "ops-triage", project: "" }), "운영 점검");
   assert.equal(runTitle({ workflow: "coding", project: "demo" }), "demo");
 });
+
+test("model auto-assign: first signed-in subscription CLI in order, saved for both slots", async () => {
+  const { AUTO_MODEL_ORDER, pickDetected, autoAssignModel } = await import("../desktop/src/agent-client");
+  assert.deepEqual([...AUTO_MODEL_ORDER], ["claude-cli", "codex-cli", "gemini-cli", "cursor-cli", "kiro-cli"]);
+  const check = (provider: string, state: string, models: string[], source = "account") => ({ provider, state, detail: "", models: models.map(id => ({ id, label: id })), source, checkedAt: "" }) as never;
+  assert.equal(pickDetected([check("claude-cli", "signed-out", ["sonnet"]), check("codex-cli", "missing", [])]), null, "signed-out and missing never count");
+  assert.deepEqual(pickDetected([check("claude-cli", "signed-out", ["sonnet"]), check("codex-cli", "connected", ["gpt-6-astra"])]), { provider: "codex-cli", model: "gpt-6-astra" });
+  assert.deepEqual(pickDetected([check("claude-cli", "connected", ["sonnet", "opus"], "suggested")]), { provider: "claude-cli", model: "sonnet" });
+  assert.deepEqual(pickDetected([check("codex-cli", "connected", ["gpt-5.5"], "suggested")]), { provider: "codex-cli", model: "" }, "a built-in suggestion may not exist on this account: use the CLI's own default");
+  assert.deepEqual(pickDetected([check("gemini-cli", "connected", ["gemini-2.5-pro"], "suggested")]), { provider: "gemini-cli", model: "" });
+  assert.deepEqual(pickDetected([check("kiro-cli", "connected", ["auto", "claude-opus-5.5"], "account")]), { provider: "kiro-cli", model: "auto" }, "the account's own list is trusted");
+
+  const empty = { projectsRoot: "/p", ollamaUrl: "http://127.0.0.1:11434", agentModel: null, contentModel: null, image: null, embedding: { provider: "local", model: "" } };
+  const calls: Array<[string, unknown]> = [];
+  const states: Record<string, string> = { "claude-cli": "signed-out", "codex-cli": "connected" };
+  const bridge = async (command: string, args?: Record<string, unknown>) => {
+    calls.push([command, args]);
+    if (command === "agent_settings_get") return { settings: empty, keys: {}, chromaUrl: "" };
+    if (command === "agent_call") { const p = (args!.params as { provider: string }).provider; return check(p, states[p] ?? "missing", p === "codex-cli" ? ["gpt-6-astra"] : ["x"]); }
+    if (command === "agent_settings_save") return args;
+    throw new Error(command);
+  };
+  const result = await autoAssignModel(bridge);
+  assert.deepEqual(result, { choice: { provider: "codex-cli", model: "gpt-6-astra" }, label: "Codex CLI" });
+  assert.deepEqual(calls.filter(c => c[0] === "agent_call").map(c => (c[1] as { params: { provider: string } }).params.provider), ["claude-cli", "codex-cli"], "stops at the first connected CLI");
+  const save = calls.find(c => c[0] === "agent_settings_save")![1] as { input: { settings: typeof empty; keys: Record<string, string> } };
+  assert.deepEqual(save.input.settings.agentModel, { provider: "codex-cli", model: "gpt-6-astra" });
+  assert.deepEqual(save.input.settings.contentModel, { provider: "codex-cli", model: "gpt-6-astra" });
+  assert.deepEqual(save.input.keys, {}, "no API key is touched");
+
+  const noop = async (settings: Record<string, unknown>) => {
+    const seen: string[] = [];
+    const out = await autoAssignModel(async (command: string) => { seen.push(command); if (command === "agent_settings_get") return { settings, keys: {}, chromaUrl: "" }; return check("claude-cli", "connected", ["sonnet"]); });
+    return { out, seen };
+  };
+  assert.deepEqual(await noop({ ...empty, modelAutoSelect: false }), { out: null, seen: ["agent_settings_get"] }, "a user who cleared the models is left alone");
+  assert.deepEqual(await noop({ ...empty, contentModel: { provider: "openai", model: "gpt-5" } }), { out: null, seen: ["agent_settings_get"] }, "an existing choice is never replaced");
+});
+
+test("saving with both models empty turns auto-assign off", async () => {
+  const { withAutoSelect } = await import("../desktop/src/agent-client");
+  const base = { projectsRoot: "/p", ollamaUrl: "", agentModel: null, contentModel: null, image: null, embedding: { provider: "local", model: "" } };
+  assert.equal(withAutoSelect(base).modelAutoSelect, false);
+  assert.equal(withAutoSelect({ ...base, agentModel: { provider: "claude-cli", model: "sonnet" } }).modelAutoSelect, true);
+});
+
+test("CLI login: provider ids map to the closed tool list and only the tool name crosses IPC", async () => {
+  const { CLI_LOGIN_TOOL, startCliLogin } = await import("../desktop/src/agent-client");
+  assert.deepEqual(CLI_LOGIN_TOOL, { "claude-cli": "claude", "codex-cli": "codex", "gemini-cli": "gemini", "cursor-cli": "cursor", "kiro-cli": "kiro" });
+  const calls: unknown[] = [];
+  await startCliLogin("gh", async (command, args) => { calls.push([command, args]); return { started: true }; });
+  assert.deepEqual(calls, [["agent_cli_login", { tool: "gh" }]]);
+});

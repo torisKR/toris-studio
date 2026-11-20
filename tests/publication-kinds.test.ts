@@ -26,5 +26,8 @@ test("Naver is a manual handoff with explicit consent and cannot be converted in
   assert.throws(() => client.batchSchedule(publication, [target.id], "2030-12-31T09:00", 0, Date.parse("2026-10-19T00:00:00Z")), /수동/);
   const job = { id: "job", targetId: target.id, mode: "manual_handoff", status: "needs_human_publish", retryable: false, updatedAt: "", warnings: [] };
   assert.deepEqual(client.jobActions(job), ["export_handoff", "confirm_handoff", "cancel"]);
+  assert.deepEqual(client.jobActions({ ...job, platform: "naver_blog" }), ["naver_compose_title", "naver_compose_body", "export_handoff", "confirm_handoff", "cancel"], "Naver blog gets the paste helpers; the user still publishes in Naver");
+  assert.deepEqual(client.jobActions({ ...job, platform: "x" }), ["export_handoff", "confirm_handoff", "cancel"]);
+  assert.deepEqual(client.jobActions({ ...job, platform: "naver_blog", status: "published" }), [], "nothing to compose once done");
   assert.equal(client.JOB_LABELS.needs_human_publish, "수동 게시 필요");
 });

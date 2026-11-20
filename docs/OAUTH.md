@@ -2,27 +2,51 @@
 
 앱의 **SNS 로그인**에서 직접 등록한 플랫폼 앱으로 공식 로그인을 시작합니다. 계정 비밀번호를 Toris Studio에 입력하지 않습니다. Rust가 인증 코드와 토큰을 처리하고 OS 자격 증명 저장소에 저장합니다. React 화면에는 토큰·클라이언트 비밀키를 반환하지 않습니다.
 
-## 플랫폼 앱 설정
+## 연결 방식 세 가지
 
-다섯 제공자의 개발자 앱, 사용 권한, 테스트 사용자·앱 승인 조건을 먼저 준비하세요. Toris Studio는 클라이언트를 임의로 만들거나 승인된 상태로 표시하지 않습니다. 클라이언트 ID와 발급된 시크릿을 **앱 설정**에 입력합니다. 저장된 설정의 빈 입력은 기존 값을 유지합니다. 클라이언트나 리디렉션 주소를 변경하면 기존 계정 연결을 해제하고 다시 로그인해야 합니다.
+| 방식 | 대상 | 사용자가 하는 일 | 비밀값 |
+|---|---|---|---|
+| **Toris 연결 (로그인만)** | TikTok, Threads, Instagram, Facebook Page, 네이버 | 로그인만 | 앱에 없음. 코드 교환과 시크릿이 필요한 갱신은 Toris OAuth Broker(`https://oauth.toris.kr`)가 합니다. |
+| **Toris 기본 Google 클라이언트** | YouTube, Google Calendar | 로그인만 | 없음. Google 설치형 앱 클라이언트 ID + PKCE. |
+| **내 개발자 앱** | 7개 모두 | 각 플랫폼에 개발자 앱을 등록하고 클라이언트 ID·시크릿·리디렉션 입력 | 사용자가 입력한 시크릿을 OS 키체인에만 저장 |
 
-클라이언트가 없으면 **로그인 설정 시작**을 눌러 필요한 설정과 안내를 확인합니다. YouTube 수집용 Data API KEY는 Google 계정 OAuth 클라이언트를 대신하지 않으며, 네이버 검색 API 설정만으로는 네이버 계정 로그인이 연결되지 않습니다. YouTube·네이버·TikTok 카드의 **공식 OAuth 설정 안내**는 일반 링크용 브라우저 설정에 따라 제공자의 공식 문서를 엽니다. 필수 입력 누락은 화면에 바로 표시하며, 설정 저장이 거절되면 수정할 수 있도록 입력한 값을 유지합니다. 저장 성공 또는 SNS 로그인 화면을 벗어나면 클라이언트 ID·시크릿 입력을 지웁니다.
+SNS 관리의 **연결·권한**에서 플랫폼을 고르면 **연결 방식** 선택지가 보입니다. 저장한 내 개발자 앱이 있으면 그것을, 없으면 Toris 연결(브로커가 그 플랫폼을 제공할 때)이나 Toris 기본 Google 클라이언트(빌드에 클라이언트 ID가 있을 때)를 기본으로 고릅니다. 둘 다 없으면 지금처럼 내 개발자 앱 입력만 보입니다. 방식을 바꾸면 기존 연결은 백업 후 다시 로그인해야 합니다.
 
-| 플랫폼 | 현재 요청하는 권한 | 준비할 클라이언트 | 리디렉션 처리 |
+### Toris 연결
+
+- 브로커 프로토콜의 기준은 `infrastructure/oauth-broker/README.md`와 `worker.ts`입니다. 앱 구현은 `desktop/src-tauri/src/oauth_broker.rs`입니다.
+- 로그인 시작: 앱이 로그인마다 verifier를 만들고 `POST /v1/oauth/{platform}/start`에 `SHA-256(verifier)`만 보냅니다. 브로커가 서명한 state와 공개 클라이언트 ID를 받아 인가 주소를 만듭니다. 리디렉션 주소는 앱과 브로커에 같은 값으로 고정되어 있고, 다르면 거절합니다.
+- 코드 교환: `POST /v1/oauth/{platform}/token`에 `state`·`code`·`verifier`·`redirectUri`만 보냅니다. Meta 3종은 장기 토큰을 한 번에 받습니다. 토큰은 응답으로만 오고 Rust와 OS 키체인에만 저장합니다. IPC 응답·이벤트·로그·오류 문구에는 넣지 않습니다.
+- 갱신: TikTok·네이버·Facebook은 그 연결을 발급한 브로커의 `/refresh`로, Threads·Instagram은 시크릿이 필요 없어 제공자에 직접 요청합니다.
+- 모든 브로커 요청에 `User-Agent: TorisStudio/<앱 버전>`을 보냅니다. 브로커의 `MIN_APP_VERSION`보다 낮으면 "앱을 업데이트하세요"로 안내합니다.
+- Meta 콜백: 제공자는 HTTPS 리디렉션만 받으므로 `https://toris.kr/oauth/{threads|instagram|facebook}/callback`이 브로커 형식 state일 때만 앱의 루프백(`http://127.0.0.1:38471/oauth/{platform}/callback`)으로 넘겨 줍니다. 자동으로 돌아오지 않으면 브라우저의 최종 주소를 붙여 넣어도 됩니다. 가로챈 코드는 앱 메모리에만 있는 verifier 없이 교환할 수 없습니다.
+- 브로커가 응답하지 않으면(배포 전 포함) Toris 연결 선택지는 보이지 않습니다. `/v1/config` 결과는 10분(실패는 1분) 캐시합니다.
+- 브로커 주소(`https://oauth.toris.kr`)는 앱의 상수이며 화면·IPC·키체인으로 바꿀 수 없습니다(테스트만 별도 주입). 각 연결은 발급받은 브로커 주소를 기록해 두고 그 주소에서 갱신합니다.
+
+### Toris 기본 Google 클라이언트
+
+- 클라이언트 ID는 빌드 환경 변수 `TORIS_GOOGLE_CLIENT_ID`로 넣습니다. 비어 있으면 이 방식은 꺼지고 내 Google 클라이언트 입력만 보입니다. Google의 [설치형 앱 안내](https://developers.google.com/identity/protocols/oauth2/native-app)대로 시크릿 없이 PKCE로 교환합니다. YouTube와 Calendar 모두 PKCE를 씁니다.
+- 동의 화면에 등록할 범위: `youtube.readonly`, `yt-analytics.readonly`, `youtube.upload`, `calendar.app.created`.
+- 앱이 Google에서 "테스트" 상태(`TORIS_GOOGLE_CLIENT_STATUS`가 `production`이 아니면)일 때는 [갱신 토큰이 7일 뒤 만료](https://developers.google.com/identity/protocols/oauth2#expiration)됩니다. 카드에 "7일마다 다시 로그인"과 현재 로그인의 유효 기한(최초 로그인 + 7일, 갱신해도 바뀌지 않음)을 보여 줍니다. 등록된 테스트 사용자만 로그인할 수 있고 확인되지 않은 앱 경고가 나올 수 있습니다. 이 상태에서 **연결 갱신**을 눌렀을 때 갱신이 거절되면(`invalid_grant` 등) "Google 테스트 단계 로그인은 7일마다 만료됩니다. 다시 로그인하세요."로 안내합니다. 앱이 자동으로 갱신하다 거절된 경우에는 연결 상태에 **다시 로그인 필요**만 표시합니다. 만료 전 미리 알림은 없습니다.
+- 일정·작업의 Calendar 카드는 **내 Google 클라이언트 사용**으로 덮어쓰고 **Toris 기본 클라이언트로 되돌리기**로 돌아갑니다. YouTube는 SNS 관리의 연결 방식에서 **내 개발자 앱**을 고르면 덮어씁니다.
+
+### 내 개발자 앱
+
+다섯 SNS와 Google 두 가지(모두 7개)는 직접 등록한 개발자 앱으로도 연결할 수 있습니다. Toris Studio는 클라이언트를 임의로 만들거나 승인된 상태로 표시하지 않습니다. 저장된 설정의 빈 입력은 기존 값을 유지합니다. 클라이언트나 리디렉션 주소를 변경하면 기존 계정 연결을 해제하고 다시 로그인해야 합니다.
+
+| 플랫폼 | 읽기 권한 | 준비할 클라이언트 | 리디렉션 처리 |
 | --- | --- | --- | --- |
-| YouTube | `youtube.readonly` | Google 데스크톱 OAuth 클라이언트 | `http://127.0.0.1:38471/oauth/youtube/callback` |
-| Threads | `threads_basic` | Meta Threads 앱·시크릿 | 등록된 HTTPS 주소로 이동 후 전체 URL 붙여넣기 |
-| 네이버 블로그 | 네이버 계정 로그인 | 네이버 로그인 앱·시크릿 | `http://127.0.0.1:38471/oauth/naver_blog/callback` |
-| TikTok | `user.info.basic` | Desktop Login Kit 클라이언트 키·시크릿 | `http://127.0.0.1:38471/oauth/tiktok/callback` |
-| Instagram | `instagram_business_basic` | Meta 앱·시크릿, Business/Creator 계정 | 등록된 HTTPS 주소로 이동 후 전체 URL 붙여넣기 |
+| YouTube | `youtube.readonly`, `yt-analytics.readonly` | Google 데스크톱 OAuth 클라이언트 | `http://127.0.0.1:38471/oauth/youtube/callback` |
+| Google Calendar | `calendar.app.created` | Google 데스크톱 OAuth 클라이언트 | `http://127.0.0.1:38471/oauth/google_calendar/callback` |
+| Threads | `threads_basic`, `threads_manage_insights` | Meta Threads 앱·시크릿 | 등록된 HTTPS 주소로 이동 후 전체 URL 붙여넣기 |
+| Instagram | `instagram_business_basic`, `instagram_business_manage_insights` | Meta 앱·시크릿, Business/Creator 계정 | 등록된 HTTPS 주소로 이동 후 전체 URL 붙여넣기 |
+| Facebook Page | `pages_show_list`, `pages_read_engagement`, `read_insights` | Facebook Login 앱·시크릿 | 등록된 HTTPS 주소로 이동 후 전체 URL 붙여넣기 |
+| TikTok | `user.info.basic`, `user.info.stats`, `video.list` | Desktop Login Kit 클라이언트 키·시크릿 | `http://127.0.0.1:38471/oauth/tiktok/callback` |
+| 네이버 | 네이버 계정 로그인 | 네이버 로그인 앱·시크릿 | `http://127.0.0.1:38471/oauth/naver_blog/callback` |
 
-YouTube는 Google의 [설치형 앱 OAuth 안내](https://developers.google.com/youtube/v3/guides/auth/installed-apps)에 맞는 데스크톱 클라이언트를 사용합니다. 앱의 YouTube 공개 조회 기능은 별도의 Data API KEY를 사용합니다. OAuth 연결은 업로드·삭제·수익 조회 기능을 추가하지 않습니다.
+게시 권한은 계정 연결 뒤 **게시 권한 연결**에서 따로 동의받습니다. 네이버 블로그는 공식 글쓰기 API가 없어 게시 권한이 없습니다([SNS 게시](SOCIAL_PUBLISHING.md) 참고).
 
-TikTok은 [Desktop Login Kit](https://developers.tiktok.com/docs/en/login-kit-desktop)의 loopback 리디렉션과 PKCE를 사용합니다. 데스크톱 클라이언트 키를 UI의 클라이언트 ID 입력란에 넣습니다. 기본 권한은 계정 기본 정보이며 동영상 목록·업로드 권한은 요청하지 않습니다.
-
-네이버는 [네이버 로그인 개발가이드](https://developers.naver.com/docs/login/devguide/devguide.md)에 따른 계정 토큰을 저장합니다. 현재 구현에 네이버 블로그 글쓰기·자동 발행 호출은 없습니다. 네이버 검색 API 클라이언트 설정과 로그인 연결을 구분하세요.
-
-Threads·Instagram의 현재 구현은 Meta 앱에 등록한 HTTPS 콜백을 사용합니다. 앱 설정에는 소유한 등록 주소를 정확히 입력하고, 인증 후 브라우저가 이동한 `code`와 `state`가 포함된 전체 URL을 **로그인 후 이동한 전체 주소**에 붙여넣습니다. Instagram에는 소유 도메인의 `https://toris.kr/oauth/instagram/callback` 안내 페이지를 배포하고 Meta에 등록했습니다. 이 페이지는 인증 쿼리를 출력하거나 다른 서버로 전달하지 않습니다. 앱의 Rust가 전체 주소를 검증하고 토큰을 교환합니다. 다른 콜백 웹사이트가 쿼리를 지우거나 다른 주소로 이동하면 완료할 수 없습니다. 개인 Instagram 계정은 현재 연결 대상에 포함하지 않습니다.
+YouTube 공개 조회(채널 검색·트렌드)는 YouTube Data API 키가 있으면 그 키를, 없으면 연결된 YouTube 계정의 읽기 토큰을 씁니다. 토큰은 Rust 안에서 고정된 `googleapis.com` 주소에만 씁니다.
 
 ## 로그인 완료와 저장
 
@@ -48,7 +72,7 @@ Threads·Instagram은 유효한 장기 액세스 토큰을 갱신하며 발급·
 
 **저장된 연결 해제**는 Toris Studio에 저장된 계정 토큰과 진행 중인 요청을 삭제합니다. 등록한 앱 설정과 브라우저 로그인은 유지합니다. SNS에서 앱 권한까지 철회하려면 해당 플랫폼의 연결된 앱 관리에서 해제하고, 브라우저 로그아웃은 브라우저에서 진행합니다.
 
-OpenAI·Claude 구독 계정은 SNS OAuth와 별개입니다. 해당 계정 로그인은 OpenCodex·teamclaude 또는 로그인한 Claude CLI에서 처리하며 Toris Studio는 그 로컬 인터페이스를 사용합니다. [데스크톱 설치·연결](DESKTOP.md)을 참고하세요.
+AI 구독 계정(Claude Code·Codex 등)은 SNS OAuth와 별개이며 각 CLI의 로그인을 씁니다. [AI 모델 연결](AI_PROVIDERS.md)을 참고하세요.
 
 ## macOS 키체인 승인
 

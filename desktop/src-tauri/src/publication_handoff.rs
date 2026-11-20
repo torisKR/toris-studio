@@ -167,6 +167,61 @@ pub fn write_package_with_media(
     )
 }
 
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Title and body for pasting into the Naver blog editor. Naver offers no blog-writing API, so the user
+/// pastes these into the official editor and presses publish there; this never posts anything.
+pub fn naver_compose(plan: &Value) -> Result<Value, String> {
+    if plan["platform"] != "naver_blog" {
+        return Err("네이버 블로그 게시 계획만 글쓰기 보조를 쓸 수 있습니다.".into());
+    }
+    validate_plan(plan)?;
+    let title = plan["title"].as_str().unwrap_or("").trim().to_string();
+    let body = plan["description"]
+        .as_str()
+        .unwrap_or("")
+        .replace("\r\n", "\n");
+    let tags: Vec<String> = ["tags", "hashtags"]
+        .iter()
+        .flat_map(|key| plan[*key].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(|tag| {
+            tag.trim_start_matches('#')
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        })
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| format!("#{tag}"))
+        .collect();
+    let paragraphs: Vec<&str> = body
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
+    let mut html: String = paragraphs
+        .iter()
+        .map(|p| {
+            format!(
+                "<p>{}</p>",
+                p.lines().map(html_escape).collect::<Vec<_>>().join("<br>")
+            )
+        })
+        .collect();
+    let mut text = paragraphs.join("\n\n");
+    if !tags.is_empty() {
+        html.push_str(&format!("<p>{}</p>", html_escape(&tags.join(" "))));
+        text.push_str(&format!("\n\n{}", tags.join(" ")));
+    }
+    Ok(json!({"title": title, "html": html, "text": text, "editorUrl": editor_url(plan)}))
+}
+
 pub fn editor_url(plan: &Value) -> String {
     match plan["platform"].as_str() {
         Some("x") => "https://x.com/compose/post".into(),
@@ -355,6 +410,32 @@ pub fn post_url(account: &str, raw: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn naver_compose_escapes_and_keeps_paragraphs_without_publishing() {
+        let plan = json!({"platform":"naver_blog","contentKind":"article","mode":"manual_handoff","accountId":"my_blog","title":"제목 <b>","description":"첫 줄\n둘째 줄\n\n<script>alert(1)</script> & \"따옴표\"","tags":["여행","로컬 맛집"],"hashtags":["#서울"],"options":{"confirmHandoff":true}});
+        let out = naver_compose(&plan).unwrap();
+        assert_eq!(
+            out["title"], "제목 <b>",
+            "the title is pasted as plain text"
+        );
+        let html = out["html"].as_str().unwrap();
+        assert_eq!(html, "<p>첫 줄<br>둘째 줄</p><p>&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;따옴표&quot;</p><p>#여행 #로컬맛집 #서울</p>");
+        assert_eq!(
+            out["text"],
+            "첫 줄\n둘째 줄\n\n<script>alert(1)</script> & \"따옴표\"\n\n#여행 #로컬맛집 #서울"
+        );
+        assert_eq!(out["editorUrl"], "https://blog.naver.com/my_blog");
+        assert!(
+            naver_compose(&json!({"platform":"x","accountId":"a"})).is_err(),
+            "Naver blog only"
+        );
+        let mut unconfirmed = plan.clone();
+        unconfirmed["options"]["confirmHandoff"] = json!(false);
+        assert!(
+            naver_compose(&unconfirmed).is_err(),
+            "only a confirmed manual handoff plan"
+        );
+    }
     use serde_json::json;
 
     #[test]

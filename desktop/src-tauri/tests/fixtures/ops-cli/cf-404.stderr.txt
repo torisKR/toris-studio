@@ -1,0 +1,5 @@
+
+┌ APIError
+│ [10007] This Worker does not exist on your account.
+│ 404 Not Found · HTTP /accounts/00000000000000000000000000000000/workers/scripts/zz-nonexistent-worker-x/deployments
+└

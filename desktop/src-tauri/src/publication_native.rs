@@ -123,6 +123,48 @@ pub async fn publication_export_handoff(
         .map_err(|_| "로컬 저장 폴더를 선택하세요.")?;
     crate::publications::export_handoff(&state.config_snapshot().await, input, parent).await
 }
+/// Naver has no blog-writing API: this copies the approved title (and opens Naver's editor in the system
+/// browser) or the approved body to the clipboard. The user publishes in Naver; the app never does.
+#[tauri::command]
+pub async fn publication_naver_compose(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<crate::AppState>>,
+    updates: State<'_, Arc<crate::updater::UpdateController>>,
+    input: Value,
+) -> Result<Value, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    use tauri_plugin_opener::OpenerExt;
+    check(&window, &updates)?;
+    let part = input["part"].as_str().unwrap_or("").to_owned();
+    if !matches!(part.as_str(), "title" | "body") {
+        return Err("복사할 항목을 선택하세요.".into());
+    }
+    let composed = crate::publications::naver_compose(
+        &state.config_snapshot().await,
+        json!({"jobId": input["jobId"]}),
+    )
+    .await?;
+    let copy_failed = || "클립보드에 복사할 수 없습니다.".to_string();
+    if part == "title" {
+        app.clipboard()
+            .write_text(composed["title"].as_str().unwrap_or_default())
+            .map_err(|_| copy_failed())?;
+        app.opener()
+            .open_url(
+                composed["editorUrl"].as_str().unwrap_or_default(),
+                None::<&str>,
+            )
+            .map_err(|_| "시스템 브라우저에서 네이버 블로그를 열지 못했습니다.".to_string())?;
+    } else {
+        let html = composed["html"].as_str().unwrap_or_default().to_owned();
+        let text = composed["text"].as_str().unwrap_or_default().to_owned();
+        app.clipboard()
+            .write_html(html, Some(text))
+            .map_err(|_| copy_failed())?;
+    }
+    Ok(json!({"copied": part}))
+}
 #[tauri::command]
 pub async fn publication_confirm_handoff(
     window: tauri::WebviewWindow,

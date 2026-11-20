@@ -310,7 +310,7 @@ fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
                     }
                 }
                 for a in &c.identities {
-                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending||cleanup_pending,"revocationPending":revocation_pending,"cleanupPending":cleanup_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!cleanup_pending&&!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared}));
+                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending||cleanup_pending,"revocationPending":revocation_pending,"cleanupPending":cleanup_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!cleanup_pending&&!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared,"clientMode":c.client.mode,"reloginBy":relogin_by(&c.client,&c.session,GOOGLE_CLIENT_TESTING).and_then(timestamp)}));
                 }
             }
             Err(message) => warnings.push(json!({"connectionId":id,"message":message})),
@@ -520,8 +520,7 @@ async fn refresh_connection_locked(
     let refreshed = if let Some(candidate) = candidate {
         Ok(candidate)
     } else {
-        s.transport
-            .send(refresh_request(p, &c.client, &c.session))
+        refresh_call(s, p, &c.client, &c.session)
             .await
             .and_then(|v| {
                 session_from_response(&v, Some(&c.session), now, p.meta())
@@ -577,7 +576,7 @@ async fn refresh_connection_locked(
             if automatic {
                 Ok(())
             } else {
-                Err(f.message())
+                Err(refresh_failure_message(&c.client, f, GOOGLE_CLIENT_TESTING))
             }
         }
     }
@@ -807,15 +806,14 @@ async fn begin_connection(
     let id = existing
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let config = if existing.is_some() {
+    let mut config = if existing.is_some() {
         let c = read_connection(s, &id)?;
         if c.platform != p.id() {
             return Err("연결 플랫폼 불일치".into());
         }
         c.client
     } else {
-        s.read::<ClientConfig>("client", p)?
-            .ok_or_else(|| p.help().to_string())?
+        s.client_for(p)?.ok_or_else(|| p.help().to_string())?
     };
     validate_client(p, &config)?;
     if purpose == "publish" && p.publishing_scope().is_none() {
@@ -828,35 +826,54 @@ async fn begin_connection(
     {
         return Err("이 연결의 인증을 먼저 완료하세요.".into());
     }
-    let loopback = Url::parse(&config.redirect_uri)
-        .map_err(|_| "콜백 주소 오류")?
-        .scheme()
-        == "http";
+    let toris = config.mode == ClientMode::Toris;
+    // Toris: the broker signs the state and binds it to SHA-256(verifier); Meta returns via a loopback relay.
+    let (state, verifier, callback_uri) = if toris {
+        let verifier = random_secret();
+        let (issued, state) = broker_start(s, p, purpose, &verifier, &config).await?;
+        config = issued;
+        (
+            state,
+            Some(verifier),
+            p.meta().then(|| p.default_redirect()),
+        )
+    } else {
+        (random_secret(), uses_pkce(p).then(random_secret), None)
+    };
+    let loopback = callback_uri.is_some()
+        || Url::parse(&config.redirect_uri)
+            .map_err(|_| "콜백 주소 오류")?
+            .scheme()
+            == "http";
     let listener = if loopback {
         if s.pending
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .values()
-            .any(|p| p.client.redirect_uri.starts_with("http:"))
+            .any(|p| p.client.redirect_uri.starts_with("http:") || p.callback_uri.is_some())
         {
             return Err("로컬 콜백 로그인을 먼저 완료하세요.".into());
         }
         s.stop_previous_loopback_listener().await;
         Some(
-            TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
+            TcpListener::bind(("127.0.0.1", s.callback_port))
                 .await
                 .map_err(|_| "로컬 OAuth 포트가 사용 중입니다.")?,
         )
     } else {
         None
     };
-    let state = random_secret();
-    let verifier = matches!(p, Provider::Youtube | Provider::Tiktok).then(random_secret);
+    // Providers without PKCE get no challenge parameters; the broker holds the verifier binding instead.
+    let provider_pkce = if toris {
+        verifier.as_deref().filter(|_| uses_pkce(p))
+    } else {
+        verifier.as_deref()
+    };
     let mut url = Url::parse(&authorization_url_for_mode(
         p,
         &config,
         &state,
-        verifier.as_deref(),
+        provider_pkce,
         purpose == "publish",
     )?)
     .map_err(|_| "인증 주소 오류")?;
@@ -882,10 +899,8 @@ async fn begin_connection(
     url.set_query(None);
     url.query_pairs_mut().extend_pairs(params);
     if !scopes.is_empty() {
-        url.query_pairs_mut().append_pair(
-            "scope",
-            &scopes.join(if p == Provider::Youtube { " " } else { "," }),
-        );
+        url.query_pairs_mut()
+            .append_pair("scope", &scopes.join(scope_separator(p)));
     }
     connection_audit(s, &id, "login_started", "pending")?;
     let (cancel, receiver) = watch::channel(false);
@@ -899,6 +914,7 @@ async fn begin_connection(
             cancel,
             publishing: purpose == "publish",
             provider_id: Some(p.id().into()),
+            callback_uri,
         },
     );
     if let Some(listener) = listener {
@@ -912,7 +928,7 @@ async fn begin_connection(
             .unwrap_or_else(|p| p.into_inner()) = Some(task);
     }
     Ok(
-        json!({"connectionId":id,"platform":p.id(),"purpose":purpose,"authorizationUrl":url.to_string(),"redirectUri":config.redirect_uri,"pending":true,"manualCallback":!loopback}),
+        json!({"connectionId":id,"platform":p.id(),"purpose":purpose,"authorizationUrl":url.to_string(),"redirectUri":config.redirect_uri,"pending":true,"manualCallback":!loopback || p.meta()}),
     )
 }
 async fn complete_connection(
@@ -932,8 +948,13 @@ async fn complete_connection(
             return Err("로그인 요청이 만료되었습니다.".into());
         }
         let p = Provider::parse(pending.provider_id.as_deref().ok_or("플랫폼 정보 오류")?)?;
+        // A relayed Toris Meta login arrives on loopback; a pasted HTTPS address is still accepted.
         let validated =
-            match validate_callback(p, &pending.client.redirect_uri, &pending.state, callback) {
+            match validate_callback(p, &pending.client.redirect_uri, &pending.state, callback)
+                .or_else(|error| match &pending.callback_uri {
+                    Some(loopback) => validate_callback(p, loopback, &pending.state, callback),
+                    None => Err(error),
+                }) {
                 Ok(value) => value,
                 Err(message) => {
                     connection_audit(s, id, "callback_rejected", "validation_failed")?;
@@ -953,13 +974,27 @@ async fn complete_connection(
         connection_audit(s, id, "login_failed", "user_denied")?;
         return Err("SNS 로그인이 취소되었습니다.".into());
     }
+    let code = validated.code.as_deref().unwrap_or("");
+    if pending.client.mode == ClientMode::Toris {
+        let response = broker_token(s, p, &pending, code)
+            .await
+            .map_err(TokenFailure::message)?;
+        let session = session_from_response(
+            &response,
+            None,
+            s.clock.now(),
+            response["long_lived"] == true,
+        )
+        .map_err(|_| "SNS 인증 응답 오류")?;
+        return finish_connection(s, p, id, pending, session).await;
+    }
     let mut response = s
         .transport
         .send(authorization_code_request(
             p,
             &pending.client,
             &pending,
-            validated.code.as_deref().unwrap_or(""),
+            code,
         ))
         .await
         .map_err(TokenFailure::message)?;
@@ -987,6 +1022,16 @@ async fn complete_connection(
         session = session_from_response(&response, Some(&session), s.clock.now(), true)
             .map_err(|_| "장기 인증 응답 오류")?;
     }
+    finish_connection(s, p, id, pending, session).await
+}
+/// After a token: granted permissions (Meta), the real account identities, then one durable commit.
+async fn finish_connection(
+    s: &Arc<OAuthService>,
+    p: Provider,
+    id: &str,
+    pending: PendingLogin,
+    mut session: TokenSession,
+) -> Result<Value, String> {
     if let Some(endpoint) = p.permissions_endpoint() {
         let response = s
             .transport
@@ -1228,6 +1273,7 @@ pub(super) async fn dispatch(input: Value) -> Result<Value, String> {
     let provider = || Provider::parse(input["platform"].as_str().ok_or("플랫폼을 선택하세요.")?);
     match action {
         "list" => list().await,
+        "brokerConfig" => Ok(broker_view(service()).await),
         "beginLogin" => {
             begin_connection(
                 service(),

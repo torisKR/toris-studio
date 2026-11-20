@@ -1,0 +1,36 @@
+{
+ "deployments": [
+  {
+   "id": "00000000-0000-4000-8000-000000000001",
+   "source": "wrangler",
+   "strategy": "percentage",
+   "author_email": "redacted@example.com",
+   "annotations": {
+    "workers/triggered_by": "deployment"
+   },
+   "versions": [
+    {
+     "version_id": "00000000-0000-4000-8000-000000000002",
+     "percentage": 100
+    }
+   ],
+   "created_on": "2026-11-19T05:52:32.271887Z"
+  },
+  {
+   "id": "00000000-0000-4000-8000-000000000003",
+   "source": "wrangler",
+   "strategy": "percentage",
+   "author_email": "redacted@example.com",
+   "annotations": {
+    "workers/triggered_by": "deployment"
+   },
+   "versions": [
+    {
+     "version_id": "00000000-0000-4000-8000-000000000004",
+     "percentage": 100
+    }
+   ],
+   "created_on": "2026-11-19T03:29:24.537478Z"
+  }
+ ]
+}

@@ -804,6 +804,17 @@ async fn approved_handoff(
     crate::publication_handoff::validate_plan(&plan)?;
     Ok((id, row.get("publication_id"), plan))
 }
+/// Title and body of an approved, still-waiting Naver blog handoff, for pasting into Naver's own editor.
+/// Reads the approved snapshot only: no file, DB row or job state changes, and nothing is published.
+pub async fn naver_compose(config: &AppConfig, input: Value) -> Result<Value, String> {
+    let object = input.as_object().ok_or("인계 작업을 선택하세요.")?;
+    if object.len() != 1 || !object.contains_key("jobId") {
+        return Err("인계 작업만 선택하세요.".into());
+    }
+    uuid(input["jobId"].as_str().ok_or("인계 작업을 선택하세요.")?)?;
+    let (_, _, plan) = approved_handoff(config, &input).await?;
+    crate::publication_handoff::naver_compose(&plan)
+}
 pub async fn export_handoff(
     config: &AppConfig,
     input: Value,
@@ -1303,6 +1314,18 @@ mod tests {
         assert_ne!(first, hash_approval(&changed, &selected, &v, &None));
     }
     #[tokio::test]
+    async fn naver_compose_rejects_anything_but_one_job_id_before_reading_the_database() {
+        let config = AppConfig::default();
+        for input in [
+            json!({}),
+            json!({"jobId":"not-a-uuid"}),
+            json!({"jobId":Uuid::new_v4().to_string(),"title":"x"}),
+        ] {
+            let error = naver_compose(&config, input).await.unwrap_err();
+            assert!(!error.contains("DB"), "{error}");
+        }
+    }
+    #[tokio::test]
     #[ignore = "Requires isolated PostgreSQL and TORIS_PUBLICATIONS_TEST_STATE_ROOT"]
     async fn manual_handoff_is_never_claimed_and_completion_is_explicit_user_verification() {
         let raw = std::env::var("TORIS_PUBLICATIONS_TEST_DB").unwrap();
@@ -1345,6 +1368,29 @@ mod tests {
             get(&config, draft["id"].as_str().unwrap()).await.unwrap()["jobs"][0]["status"],
             "needs_human_publish"
         );
+        // Compose reads the approved snapshot only and changes nothing.
+        let before = get(&config, draft["id"].as_str().unwrap()).await.unwrap();
+        let composed = naver_compose(&config, json!({"jobId":job})).await.unwrap();
+        assert_eq!(composed["title"], "수동 게시 원고");
+        assert_eq!(composed["html"], "<p>실제 발송 없음</p>");
+        assert_eq!(composed["editorUrl"], "https://blog.naver.com/my_blog");
+        assert_eq!(
+            get(&config, draft["id"].as_str().unwrap()).await.unwrap(),
+            before,
+            "composing changes no state"
+        );
+        assert!(
+            naver_compose(&config, json!({"jobId":Uuid::new_v4().to_string()}))
+                .await
+                .is_err(),
+            "no approved job, no compose"
+        );
+        assert!(
+            naver_compose(&config, json!({"jobId":job,"extra":1}))
+                .await
+                .is_err(),
+            "only the job id is accepted"
+        );
         assert!(confirm_handoff(
             &config,
             json!({"jobId":job,"url":"https://blog.naver.com/my_blog/123"})
@@ -1365,6 +1411,10 @@ mod tests {
         .unwrap();
         assert_eq!(completed["jobs"][0]["status"], "published");
         assert_eq!(completed["jobs"][0]["verification"], "user_confirmed");
+        assert!(
+            naver_compose(&config, json!({"jobId":job})).await.is_err(),
+            "a finished handoff is not composed again"
+        );
         let another = save(&config, input).await.unwrap();
         let mut approval = json!({"publicationId":another["id"],"revision":another["revision"],"targetIds":[target],"confirmed":true});
         approval["approvalHash"] =
@@ -1375,6 +1425,12 @@ mod tests {
         edited["description"] = json!("수정된 원고");
         let edited = save(&config, edited).await.unwrap();
         assert_eq!(edited["jobs"][0]["status"], "cancelled");
+        assert!(
+            naver_compose(&config, json!({"jobId":old_job}))
+                .await
+                .is_err(),
+            "an edited (no longer approved) plan is refused"
+        );
         assert!(export_handoff(
             &config,
             json!({"jobId":old_job}),

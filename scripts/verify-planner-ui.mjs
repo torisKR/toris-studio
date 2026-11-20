@@ -17,6 +17,7 @@ let work = [
   { id: 'w2', title: 'CI 실패 확인', notes: '', status: 'doing', dueAt: null, productId: null, source: 'ops', updatedAt: day(0, 9) },
 ];
 const calls = [];
+let calendarProvider = { platform: 'google_calendar', clientConfigured: true, clientMode: 'google_builtin', builtinAvailable: true, googleTesting: true, connected: false, needsReconnect: false, redirectUri: 'http://127.0.0.1:38471/oauth/google_calendar/callback', reloginBy: null };
 const server = await createFixtureServer({ server: { port: 0, strictPort: false } }); await server.listen();
 const browser = await chromium.launch({ headless: true });
 try {
@@ -29,6 +30,9 @@ try {
     if (command === 'planner_save_event') { const e = { id: args.input.id ?? 'e-new', notes: '', link: 'none', linkId: null, synced: false, studioOwned: false, ...args.input }; events = [...events.filter(x => x.id !== e.id), e]; return e; }
     if (command === 'planner_delete_event') { events = events.filter(e => e.id !== args.id); return null; }
     if (command === 'planner_save_work_item') { const w = { id: args.input.id ?? 'w-new', productId: null, source: 'manual', updatedAt: day(0, 10), ...args.input }; work = [...work.filter(x => x.id !== w.id), w]; return w; }
+    if (command === 'oauth_status') return { providers: [calendarProvider] };
+    if (command === 'oauth_begin_login') return { pending: true };
+    if (command === 'oauth_save_client') { calendarProvider = args.input.mode === 'builtin' ? { ...calendarProvider, clientMode: 'google_builtin', clientConfigured: true } : { ...calendarProvider, clientMode: 'developer', clientConfigured: true }; return { providers: [calendarProvider] }; }
     if (command === 'planner_sync_calendar') return { pushed: 1, pulled: 0, imported: 2, conflicts: 0, reverted: 1, deleted: 0, fullResync: false };
     if (command.startsWith('plugin:event|')) return 1;
     const shared = shellFixture(command, args); if (shared !== unhandled) return shared;
@@ -50,6 +54,25 @@ try {
   assert.equal(await planner.locator('li[data-owned]').getByRole('button', { name: '편집' }).count(), 0, 'a publication event cannot be edited here');
   assert.equal(await planner.locator('li[data-late]').count(), 1);
   report.checks.push('Upcoming days, the Studio-owned publication event, overdue work and sync status render from planner_today');
+
+  // Built-in Google client: no client input, login straight away, and the Testing app's weekly re-login is stated.
+  const connect = planner.locator('.planner-calendar-connect');
+  await connect.getByRole('button', { name: 'Google 로그인' }).waitFor();
+  assert.equal(await connect.getByLabel('OAuth 클라이언트 ID').isVisible(), false, 'the client form is not shown for the built-in client');
+  await connect.getByText('7일마다 다시 로그인', { exact: false }).first().waitFor();
+  await connect.getByRole('button', { name: 'Google 로그인' }).click();
+  assert.ok(calls.some(c => c.command === 'oauth_begin_login' && c.args.platform === 'google_calendar'));
+  await connect.getByText('내 Google 클라이언트 사용').click();
+  await connect.getByLabel('OAuth 클라이언트 ID').fill('mine.apps.googleusercontent.com');
+  await connect.getByRole('button', { name: '저장' }).click();
+  await connect.getByRole('button', { name: 'Toris 기본 클라이언트로 되돌리기' }).waitFor();
+  assert.deepEqual(calls.findLast(c => c.command === 'oauth_save_client').args, { platform: 'google_calendar', input: { clientId: 'mine.apps.googleusercontent.com', redirectUri: 'http://127.0.0.1:38471/oauth/google_calendar/callback' } });
+  await connect.getByRole('button', { name: 'Toris 기본 클라이언트로 되돌리기' }).click();
+  await page.waitForFunction(() => true);
+  await connect.getByRole('button', { name: 'Google 로그인' }).waitFor();
+  assert.deepEqual(calls.findLast(c => c.command === 'oauth_save_client').args, { platform: 'google_calendar', input: { mode: 'builtin' } });
+  calendarProvider = { ...calendarProvider, connected: true, reloginBy: '2026-11-27T05:00:00Z' };
+  report.checks.push('Calendar: built-in Google client logs in without client input; own client can override and be reverted; Testing re-login is stated');
 
   await planner.getByRole('button', { name: '일정 추가' }).click();
   const dialog = page.getByRole('dialog', { name: '일정 추가' });

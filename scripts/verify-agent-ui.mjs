@@ -23,7 +23,7 @@ const modelChecks = {
 const modelCheckCalls = [];
 let settings = { projectsRoot: '/Users/qa/projects', ollamaUrl: 'http://127.0.0.1:11434', agentModel: { provider: 'codex-cli', model: '' }, contentModel: null, image: null, embedding: { provider: 'local', model: '' } };
 let keys = { anthropic: false, openai: false, google: false, openrouter: false };
-const saved = [], decisions = [], started = [], hubCalls = [];
+const saved = [], decisions = [], started = [], hubCalls = [], cliLogins = [];
 const run = { runId: 'run-qa', project: 'demo-shop', task: '', phase: 'queued', agent: 'supervisor', createdAt: '2026-10-27T00:00:00Z', updatedAt: '2026-10-27T00:00:00Z', approvals: [], changes: [], summary: '', events: [] };
 const approval = { kind: 'write_file', id: 'act-1', agent: 'backend', path: 'src/cart.ts', reason: '합계 계산 버그 수정', diff: '--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -1,3 +1,3 @@\n export function total(items) {\n-  return items.length;\n+  return items.reduce((s, i) => s + i.price, 0);\n }\n' };
 const ev = (seq, agent, phase, message, extra = {}) => ({ event: 'run', runId: 'run-qa', seq, at: `2026-10-27T00:00:${String(seq).padStart(2, '0')}Z`, agent, phase, message, ...extra });
@@ -34,12 +34,13 @@ try {
   const page = await browser.newPage({ viewport: { width: 1380, height: 1000 }, reducedMotion: 'reduce' });
   page.on('pageerror', e => report.errors.push(e.message));
   const emit = payload => page.evaluate(p => window.__qaEmit('agent-event', p), payload);
-  await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
+  const handler = async (command, args = {}) => {
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: 'QA' } };
     if (command === 'ai_status') return { providers, contentModel: settings.contentModel, agentModel: settings.agentModel, image: settings.image };
     if (command === 'agent_settings_get') return { settings, keys, chromaUrl: 'http://127.0.0.1:18765' };
     if (command === 'agent_settings_save') { saved.push(args.input); settings = args.input.settings; for (const [k, v] of Object.entries(args.input.keys)) keys[k] = Boolean(v); return { settings, keys, chromaUrl: 'http://127.0.0.1:18765' }; }
     if (command === 'hub_start') { hubCalls.push({ command, args }); return { runId: 'run-hub', workflow: args.workflow, project: '', task: '', phase: 'queued', agent: 'supervisor', createdAt: '2026-10-27T00:01:00Z', updatedAt: '2026-10-27T00:01:00Z', approvals: [], changes: [], summary: '', events: [{ event: 'run', runId: 'run-hub', seq: 1, at: '2026-10-27T00:01:01Z', agent: 'supervisor', phase: 'queued', message: '작업을 시작합니다.' }] }; }
+    if (command === 'agent_cli_login') { cliLogins.push(args); return { started: true, tool: args.tool }; }
     if (command === 'hub_decide') { hubCalls.push({ command, args }); return { runId: args.runId }; }
     if (command === 'agent_call') {
       const { method, params } = args;
@@ -65,8 +66,9 @@ try {
     if (command.startsWith('plugin:event|')) return 1;
     const shared = shellFixture(command, args); if (shared !== unhandled) return shared;
     return null;
-  });
-  await page.addInitScript(() => {
+  };
+  await page.exposeFunction('__qaInvoke', handler);
+  const tauriShim = () => {
     const callbacks = new Map(); let next = 1; const listeners = [];
     window.__qaEmit = (event, payload) => { for (const l of listeners) if (l.event === event) callbacks.get(l.handler)?.({ event, id: 1, payload }); };
     window.__TAURI_INTERNALS__ = {
@@ -75,7 +77,8 @@ try {
       invoke: async (command, args) => { if (command === 'plugin:event|listen') listeners.push({ event: args.event, handler: args.handler }); return window.__qaInvoke(command, args); },
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  });
+  };
+  await page.addInitScript(tauriShim);
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`, { waitUntil: 'networkidle' });
   await openSection(page, '제작', 'Agent');
   await page.getByRole('heading', { name: '에이전트 작업 보드' }).waitFor();
@@ -194,6 +197,15 @@ try {
   await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 공급자' }).selectOption('claude-cli');
   await contentPicker.locator('.agent-connection.warn').getByText('로그인 필요').waitFor();
   assert.equal(await contentPicker.locator('.agent-connection.ok').count(), 0, 'signed-out is never shown as connected');
+  const claudeChecks = modelCheckCalls.filter(p => p === 'claude-cli').length;
+  await contentPicker.getByRole('button', { name: 'Claude Code 로그인' }).click();
+  await contentPicker.getByText('터미널에서 로그인을 마친 뒤').waitFor();
+  assert.deepEqual(cliLogins, [{ tool: 'claude' }], 'only the closed tool name crosses IPC');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForFunction(() => true);
+  await contentPicker.locator('.agent-connection.warn').getByText('로그인 필요').waitFor();
+  assert.ok(modelCheckCalls.filter(p => p === 'claude-cli').length > claudeChecks, 'coming back to the window re-checks the login');
+  report.checks.push('Signed-out CLI shows a login button that opens only that CLI login and re-checks on return');
   await contentPicker.getByRole('combobox', { name: '콘텐츠 작성 공급자' }).selectOption('kiro-cli');
   await contentModel.selectOption('claude-opus-5.5');
   const checksBefore = modelCheckCalls.filter(p => p === 'kiro-cli').length;
@@ -257,6 +269,26 @@ try {
   report.checks.push('Model picker selects on one row share top and height (1380px, 820px)');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'no horizontal overflow at 820px');
   await page.screenshot({ path: resolve(out, 'agent-narrow.png'), fullPage: true });
+  // Fresh install: no model saved. The first signed-in subscription CLI is saved for both slots without a question.
+  settings = { ...settings, agentModel: null, contentModel: null, modelAutoSelect: true };
+  const savesBefore = saved.length;
+  const fresh = await browser.newPage({ viewport: { width: 1380, height: 900 }, reducedMotion: 'reduce' });
+  fresh.on('pageerror', e => report.errors.push(e.message));
+  await fresh.exposeFunction('__qaInvoke', handler);
+  await fresh.addInitScript(tauriShim);
+  await fresh.goto(`http://127.0.0.1:${server.httpServer.address().port}`, { waitUntil: 'networkidle' });
+  const banner = fresh.getByRole('status').filter({ hasText: 'Codex CLI로 설정했습니다' });
+  await banner.waitFor();
+  assert.equal(saved.length, savesBefore + 1, 'saved once, without a confirmation step');
+  assert.deepEqual(saved.at(-1).settings.agentModel, { provider: 'codex-cli', model: 'gpt-6-astra' });
+  assert.deepEqual(saved.at(-1).settings.contentModel, { provider: 'codex-cli', model: 'gpt-6-astra' });
+  assert.deepEqual(saved.at(-1).keys, {}, 'no API key is sent');
+  await banner.getByRole('button', { name: '변경' }).click();
+  await fresh.getByRole('region', { name: '모델 설정' }).waitFor();
+  await fresh.screenshot({ path: resolve(out, 'agent-auto-model.png'), fullPage: false });
+  await fresh.close();
+  report.checks.push('Fresh install: the signed-in Codex CLI (Claude signed out) is saved for both slots automatically; 변경 opens the model settings');
+
   assert.deepEqual(report.errors, []);
   report.passed = true;
   console.log(JSON.stringify(report, null, 2));

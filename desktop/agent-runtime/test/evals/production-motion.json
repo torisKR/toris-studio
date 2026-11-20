@@ -1,0 +1,32 @@
+{
+ "name": "video production (motion): a scene without a layout is re-asked once and the fixed storyboard is accepted",
+ "workflow": "video-production",
+ "task": "",
+ "input": {
+  "topic": "아침 루틴으로 집중력 높이기",
+  "durationSec": 16,
+  "aspect": "9:16",
+  "style": "documentary",
+  "narration": true,
+  "language": "ko",
+  "visual": "motion",
+  "motionSceneSec": 4
+ },
+ "files": {},
+ "script": {
+  "unknown": [
+   "{\"title\": \"아침 10분 루틴\", \"story\": \"아침 루틴 세 가지\", \"style\": {\"look\": \"motion graphics\", \"palette\": \"reference\", \"consistency\": \"reference layout\"}, \"scenes\": [{\"id\": \"s1\", \"order\": 1, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"cut\"}, {\"id\": \"s2\", \"order\": 2, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"stat\", \"stat\": {\"value\": \"10분\", \"label\": \"아침 준비 시간\"}}, {\"id\": \"s3\", \"order\": 3, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"list\", \"points\": [\"물 한 잔\", \"창문 열기\"]}, {\"id\": \"s4\", \"order\": 4, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"quote\"}]}",
+   "{\"title\": \"아침 10분 루틴\", \"story\": \"아침 루틴 세 가지\", \"style\": {\"look\": \"motion graphics\", \"palette\": \"reference\", \"consistency\": \"reference layout\"}, \"scenes\": [{\"id\": \"s1\", \"order\": 1, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"cut\", \"layout\": \"title\"}, {\"id\": \"s2\", \"order\": 2, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"stat\", \"stat\": {\"value\": \"10분\", \"label\": \"아침 준비 시간\"}}, {\"id\": \"s3\", \"order\": 3, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"list\", \"points\": [\"물 한 잔\", \"창문 열기\"]}, {\"id\": \"s4\", \"order\": 4, \"durationSec\": 4, \"script\": \"물 한 잔으로 하루를 시작합니다.\", \"narration\": \"물 한 잔으로 시작해요.\", \"caption\": \"아침 10분 루틴\", \"prompt\": \"\", \"transition\": \"fade\", \"layout\": \"quote\"}]}"
+  ]
+ },
+ "decisions": [],
+ "expect": {
+  "phase": "done",
+  "messages": [
+   "다시 쓰게",
+   "검사 통과 · 장면 4개",
+   "스토리보드를 만들었습니다"
+  ],
+  "maxModelCalls": 2
+ }
+}

@@ -161,7 +161,8 @@
 .video-mode-back button{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 12px;border:1px solid var(--social-line,#2c3747);border-radius:8px;background:var(--social-inset,#0e151e);color:var(--social-text,#edf2f7);font:inherit;font-size:13px;cursor:pointer}
 .video-mode-back button[aria-pressed=true]{border-color:#92b8ff40;background:#92b8ff1f}
 @keyframes production-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.production-visual{margin:18px 0 0}
+.production-visual{min-width:0;margin:18px 0 0;padding:0;border:0}
+.production-visual legend{padding:0;margin-bottom:8px;font-size:12px;font-weight:600;color:var(--p-muted)}
 .production-visual small{flex-basis:100%;color:var(--p-muted);font-size:12px;line-height:1.7}
 .production-headline{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
 .production-headline input,.production-photo-search input{width:100%;min-height:36px;padding:7px 10px;border:1px solid var(--p-line);border-radius:8px;background:#0b1017;color:var(--p-text);font:inherit;font-size:13px}
@@ -199,3 +200,26 @@
 @media(max-width:900px){.production-options{grid-template-columns:minmax(0,1fr)}.production-review-scenes fieldset{grid-template-columns:minmax(0,1fr)}.production-review-scenes .production-narration-field{grid-row:auto}.production-result-body{grid-template-columns:minmax(0,1fr)}.production-final{max-width:360px;justify-self:center}.production-final.aspect-16x9{max-width:none}.production-composer,.production-progress,.production-review,.production-scenes,.production-result{padding:16px}}
 @media(prefers-reduced-motion:reduce){.production *,.production,.video-alt-modes button{animation:none!important;transition:none!important;scroll-behavior:auto!important}.production .social-spin{animation:none!important}}
 
+/* Motion references: palette chips, pace and layout; media references say they measured colour only. */
+.production-references{margin:16px 0 0;padding:0;border:0;min-width:0}
+.production-references legend{padding:0;margin-bottom:8px;font-size:12px;font-weight:600;color:var(--p-muted)}
+.production-reference-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px}
+/* .social-workspace label sets display:block; the extra .production keeps the card a grid. */
+.production .production-reference{position:relative;display:grid;align-content:start;gap:6px;padding:12px;border:1px solid var(--p-line);border-radius:8px;background:var(--p-inset);color:var(--p-text);font-weight:400;cursor:pointer;min-width:0;transition:border-color .15s}
+.production .production-reference:hover{border-color:#52616f}
+.production .production-reference.is-selected{border-color:var(--p-accent);box-shadow:inset 0 0 0 1px var(--p-accent)}
+.production-reference input{position:absolute;opacity:0;pointer-events:none}
+.production-reference:focus-within{outline:2px solid var(--p-accent);outline-offset:2px}
+.production-reference strong{font-size:13px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.production-reference small{color:var(--p-muted);font-size:11px;font-weight:400;line-height:1.5}
+.production-reference-note{color:var(--p-warn)!important}
+.production-swatches{display:flex;gap:3px}
+.production-swatches i{width:18px;height:18px;border-radius:4px;border:1px solid #ffffff22}
+.production-reference-make{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.production .production-reference-make label{font-size:12px;font-weight:600;color:var(--p-muted)}
+.production .production-reference-make input{flex:1 1 160px;width:auto}
+.production-reference-make small{flex-basis:100%;color:var(--p-muted);font-size:11px;line-height:1.6}
+.production-chips label.is-disabled{opacity:.45}
+.production-review-scenes fieldset.is-motion{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr)}
+.production-review-scenes fieldset.is-motion .production-narration-field{grid-row:span 3}
+@media(max-width:900px){.production-review-scenes fieldset.is-motion{grid-template-columns:minmax(0,1fr)}.production-review-scenes fieldset.is-motion .production-narration-field{grid-row:auto}}

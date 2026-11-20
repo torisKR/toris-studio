@@ -10,9 +10,10 @@ import {
 } from "./production-client";
 import {
   ASPECTS, ASSET_STATUS_LABELS, BGMS, CAMERA_LABELS, composerInput, LAYOUTS, VISUALS, composerProblem, CUSTOM_MAX, CUSTOM_MIN, DURATION_PRESETS, durationOf, errorMessage,
-  generationSize, initialComposer, JOB_STATUS_LABELS, outputSize, PROMPT_MAX, QUALITIES, sceneCount, shortDate, sizeText, storyboardProblem, STYLES, SUBTITLES, usableEngine,
-  type ComposerState
+  generationSize, initialComposer, JOB_STATUS_LABELS, MOTION_ASPECTS, MOTION_LAYOUT_LABELS, outputSize, PROMPT_MAX, QUALITIES, sceneCount, shortDate, sizeText, storyboardProblem, STYLES, SUBTITLES, usableEngine,
+  type ComposerState, type MotionLayout
 } from "./production-model";
+import { COMPOSITION_LABELS, DEFAULT_REFERENCE_ID, measuredColorsOnly, ORIGIN_LABELS, paceLabel, referenceApi, type MotionReference } from "../motion/reference";
 import type { ProductionSelection } from "../reason/types";
 import "./ProductionStudio.css";
 
@@ -57,6 +58,53 @@ function EngineCard({ engine, busy, onInstall }: { engine: EngineInfo; busy: boo
   </div>;
 }
 
+/** Reference cards for motion jobs: palette chips, pace and layout. Media references say they measured colour only. */
+function ReferencePicker({ value, onChange }: { value: string; onChange: (id: string, reference: MotionReference | null) => void }) {
+  const [references, setReferences] = useState<MotionReference[]>([]);
+  const [skipped, setSkipped] = useState(0);
+  const [error, setError] = useState("");
+  const [name, setName] = useState("");
+  const [making, setMaking] = useState(false);
+  const selected = references.find(r => r.id === (value || DEFAULT_REFERENCE_ID)) ?? null;
+  const load = useCallback(async (pick?: string) => {
+    try {
+      const list = await referenceApi.list();
+      setReferences(list.references); setSkipped(list.skipped); setError("");
+      if (pick) onChange(pick, list.references.find(r => r.id === pick) ?? null);
+    } catch (problem) { setError(errorMessage(problem)); }
+  }, [onChange]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (selected && !value) onChange(selected.id, selected); }, [selected, value, onChange]);
+  const fromMedia = async () => {
+    setMaking(true);
+    try {
+      const made = await referenceApi.fromMedia(name.trim(), selected?.id ?? DEFAULT_REFERENCE_ID);
+      if (made) { setName(""); await load(made.id); }
+    } catch (problem) { setError(errorMessage(problem)); }
+    finally { setMaking(false); }
+  };
+  return <fieldset className="production-references"><legend>레퍼런스 (느낌만 따릅니다)</legend>
+    <p className="production-muted">색·글자 크기·배치·등장 속도만 따릅니다. 레퍼런스의 문구·로고·화면은 복제하지 않습니다.</p>
+    {error && <p className="production-error-text" role="alert">{error}</p>}
+    {skipped > 0 && <p className="production-muted">읽지 못한 레퍼런스 파일 {skipped}개는 목록에서 뺐습니다.</p>}
+    <div className="production-reference-list" role="radiogroup" aria-label="레퍼런스">
+      {references.map(r => <label key={r.id} className={"production-reference" + (r.id === selected?.id ? " is-selected" : "")}>
+        <input type="radio" name="production-reference" checked={r.id === selected?.id} onChange={() => onChange(r.id, r)} />
+        <span className="production-swatches" aria-hidden="true">{[r.palette.background, r.palette.surface, r.palette.text, r.palette.accent, r.palette.accent2].map((c, i) => <i key={i} style={{ background: c }} />)}</span>
+        <strong>{r.name}</strong>
+        <small>{ORIGIN_LABELS[r.origin]} · {COMPOSITION_LABELS[r.composition]} · 등장 {paceLabel(r)} · 장면 {r.rhythm.sceneSec}초</small>
+        {measuredColorsOnly(r) && <small className="production-reference-note">색만 쟀습니다. 속도와 배치는 재지 않았고 기준 레퍼런스 값을 씁니다.</small>}
+      </label>)}
+    </div>
+    <div className="production-reference-make">
+      <label htmlFor="production-reference-name">이미지·영상에서 색 가져오기</label>
+      <input id="production-reference-name" value={name} maxLength={40} placeholder="레퍼런스 이름" onChange={event => setName(event.target.value)} />
+      <button type="button" className="social-button compact" disabled={making || !name.trim()} onClick={() => void fromMedia()}>{making ? <LoaderCircle size={14} className="social-spin" /> : <Plus size={14} />}파일 선택</button>
+      <small>이름을 적은 뒤 파일을 고르면 그 파일의 색으로 새 레퍼런스를 만듭니다. PNG·JPEG·WebP 이미지 또는 MP4·MOV·WebM·MKV 영상(10분·1GiB 이하). 색만 재고 속도와 배치는 지금 선택한 레퍼런스 값을 씁니다.</small>
+    </div>
+  </fieldset>;
+}
+
 function Composer({ state, setState, engines, engineError, busy, onCreate, onInstall, onRetryEngines, onOpenSettings }: {
   state: ComposerState; setState: (update: (state: ComposerState) => ComposerState) => void; engines: EngineStatus | null; engineError: string;
   busy: string | null; onCreate: () => void; onInstall: (engine: string) => void; onRetryEngines: () => void; onOpenSettings?: () => void;
@@ -66,6 +114,12 @@ function Composer({ state, setState, engines, engineError, busy, onCreate, onIns
   const engine = engines?.engines.find(item => item.id === state.engine);
   const seconds = durationOf(state);
   const generation = generationSize(state.aspect, state.quality);
+  const motion = state.visual === "motion";
+  const [motionSceneSec, setMotionSceneSec] = useState(4);
+  const pickReference = useCallback((id: string, reference: MotionReference | null) => {
+    setState(current => ({ ...current, reference: id }));
+    if (reference) setMotionSceneSec(reference.rhythm.sceneSec);
+  }, [setState]);
   const submit = (event: FormEvent) => { event.preventDefault(); if (!problem && !busy) onCreate(); };
   return <form className="production-composer" onSubmit={submit} aria-label="AI 영상 기획">
     <div className="production-topic">
@@ -74,27 +128,30 @@ function Composer({ state, setState, engines, engineError, busy, onCreate, onIns
       <small id="production-topic-hint">주제 한 줄이면 기획, 스토리보드, 장면 영상, 나레이션, 자막, 편집까지 이어서 만듭니다. 장면을 만들기 전에 스토리보드를 먼저 확인합니다.</small>
     </div>
     <fieldset className="production-chips production-visual"><legend>장면 소스</legend>
-      {Object.entries(VISUALS).map(([value, label]) => <label key={value}><input type="radio" name="production-visual" checked={state.visual === value} onChange={() => patch({ visual: value as ComposerState["visual"] })} />{label}</label>)}
+      {Object.entries(VISUALS).map(([value, label]) => <label key={value}><input type="radio" name="production-visual" checked={state.visual === value} onChange={() => patch({ visual: value as ComposerState["visual"], ...(value === "motion" && !MOTION_ASPECTS.includes(state.aspect) ? { aspect: "9:16" as const } : {}) })} />{label}</label>)}
       <small>{state.visual === "stock"
         ? "주제에 맞는 사진을 Openverse·Wikimedia Commons에서 찾습니다. CC0·퍼블릭 도메인·CC BY만 쓰고 뉴스·방송 화면은 뺍니다. 출처는 영상과 게시글에 자동으로 넣습니다."
+        : motion ? "글자·숫자·목록이 움직이는 장면을 앱이 직접 그립니다. 모델은 장면마다 배치와 문구만 고르고, 색·크기·속도는 레퍼런스를 따릅니다. 영상 엔진이 필요 없습니다."
         : "이 Mac에서 Wan2.1로 장면 영상을 직접 만듭니다. 장면 하나에 약 3분 걸립니다."}</small>
     </fieldset>
+    {motion && <ReferencePicker value={state.reference} onChange={pickReference} />}
     <div className="production-options">
       <fieldset className="production-chips"><legend>길이</legend>
         {DURATION_PRESETS.map(value => <label key={value}><input type="radio" name="production-duration" checked={state.duration === value} onChange={() => patch({ duration: value })} />{value}초</label>)}
         <label><input type="radio" name="production-duration" checked={state.duration === "custom"} onChange={() => patch({ duration: "custom" })} />직접</label>
         {state.duration === "custom" && <label className="production-custom">직접 길이(초)<input type="number" min={CUSTOM_MIN} max={CUSTOM_MAX} step={1} value={state.customSec} aria-invalid={seconds === null} onChange={event => patch({ customSec: event.target.value })} /></label>}
-        <small>{seconds === null ? CUSTOM_MIN + "~" + CUSTOM_MAX + "초 사이로 정하세요." : "장면 " + sceneCount(seconds, state.visual) + "개로 나눕니다."}</small>
+        <small>{seconds === null ? CUSTOM_MIN + "~" + CUSTOM_MAX + "초 사이로 정하세요." : "장면 " + sceneCount(seconds, state.visual, motionSceneSec) + "개로 나눕니다."}</small>
       </fieldset>
       <fieldset className="production-chips"><legend>화면 비율</legend>
-        {Object.entries(ASPECTS).map(([value, label]) => <label key={value}><input type="radio" name="production-aspect" checked={state.aspect === value} onChange={() => patch({ aspect: value as ComposerState["aspect"] })} />{label}</label>)}
+        {Object.entries(ASPECTS).map(([value, label]) => { const blocked = motion && !MOTION_ASPECTS.includes(value as ComposerState["aspect"]); return <label key={value} className={blocked ? "is-disabled" : undefined}><input type="radio" name="production-aspect" disabled={blocked} checked={state.aspect === value} onChange={() => patch({ aspect: value as ComposerState["aspect"] })} />{label}</label>; })}
+        {motion && <small>모션 그래픽은 9:16·16:9만 만들 수 있습니다.</small>}
       </fieldset>
-      <fieldset className="production-chips"><legend>화면 구성</legend>
+      {!motion && <fieldset className="production-chips"><legend>화면 구성</legend>
         {Object.entries(LAYOUTS).map(([value, label]) => <label key={value}><input type="radio" name="production-layout" checked={state.layout === value} onChange={() => patch({ layout: value as ComposerState["layout"] })} />{label}</label>)}
-      </fieldset>
-      <fieldset className="production-chips"><legend>스타일</legend>
+      </fieldset>}
+      {!motion && <fieldset className="production-chips"><legend>스타일</legend>
         {Object.entries(STYLES).map(([value, label]) => <label key={value}><input type="radio" name="production-style" checked={state.style === value} onChange={() => patch({ style: value as ComposerState["style"] })} />{label}</label>)}
-      </fieldset>
+      </fieldset>}
       {state.visual === "ai" && <fieldset className="production-chips"><legend>품질</legend>
         {Object.entries(QUALITIES).map(([value, label]) => <label key={value}><input type="radio" name="production-quality" checked={state.quality === value} onChange={() => patch({ quality: value as ComposerState["quality"] })} />{label}</label>)}
         <p className="production-resolution" aria-live="polite"><span>생성 해상도 <b>{sizeText(generation)}</b></span><span aria-hidden="true">→</span><span>출력 <b>{sizeText(outputSize(state.aspect))}</b></span><small>{generation.frames}프레임 · {generation.steps}단계</small></p>
@@ -119,13 +176,13 @@ function Composer({ state, setState, engines, engineError, busy, onCreate, onIns
           </>}
       </fieldset>}
     </div>
-    {state.visual === "stock" && state.narration && engines?.ttsInstalled === false && <p className="production-muted">로컬 음성 엔진이 설치되지 않았습니다. 나레이션 단계에서 설치가 필요합니다.{onOpenSettings && <button type="button" className="production-link" onClick={onOpenSettings}>설정에서 설치</button>}</p>}
+    {state.visual !== "ai" && state.narration && engines?.ttsInstalled === false && <p className="production-muted">로컬 음성 엔진이 설치되지 않았습니다. 나레이션 단계에서 설치가 필요합니다.{onOpenSettings && <button type="button" className="production-link" onClick={onOpenSettings}>설정에서 설치</button>}</p>}
     {state.visual === "ai" && engine && usableEngine(engine) && !engine.installed && <EngineCard engine={engine} busy={busy === "install"} onInstall={() => onInstall(engine.id)} />}
     <div className="production-submit">
       <button type="submit" className="social-button primary production-primary" disabled={!!problem || !!busy} aria-describedby="production-create-reason">
         {busy === "create" ? <LoaderCircle size={17} className="social-spin" /> : <WandSparkles size={17} />}{busy === "create" ? "영상 생성 요청 중" : "영상 생성"}
       </button>
-      <p id="production-create-reason" className={problem ? "production-muted" : "production-ready"}>{problem ?? (state.visual === "stock" ? "스토리보드와 장면별 사진 후보를 먼저 보여 드립니다. 확인한 뒤 영상을 만듭니다." : "스토리보드를 먼저 만들고, 확인한 뒤 장면 생성을 시작합니다.")}</p>
+      <p id="production-create-reason" className={problem ? "production-muted" : "production-ready"}>{problem ?? (state.visual === "stock" ? "스토리보드와 장면별 사진 후보를 먼저 보여 드립니다. 확인한 뒤 영상을 만듭니다." : motion ? "스토리보드에서 장면별 배치와 문구를 먼저 확인합니다. 승인하면 앱이 장면을 그립니다." : "스토리보드를 먼저 만들고, 확인한 뒤 장면 생성을 시작합니다.")}</p>
     </div>
   </form>;
 }
@@ -185,6 +242,7 @@ function PhotoPicker({ scene, candidates, busy, onPick, onSearch }: { scene: Sto
 function StoryboardReview({ job, draft, setDraft, busy, onApprove, onSearch }: { job: ProductionJob; draft: Storyboard; setDraft: (board: Storyboard) => void; busy: string | null; onApprove: () => void; onSearch: (sceneId: string, query: string) => void }) {
   const problem = storyboardProblem(draft);
   const stock = job.settings.visual === "stock";
+  const motion = job.settings.visual === "motion";
   const total = draft.scenes.reduce((sum, scene) => sum + (Number.isFinite(scene.durationSec) ? scene.durationSec : 0), 0);
   const patchScene = (id: string, value: Partial<StoryboardScene>) => setDraft({ ...draft, scenes: draft.scenes.map(scene => scene.id === id ? { ...scene, ...value } : scene) });
   return <section className="production-review" aria-labelledby="production-review-title">
@@ -201,16 +259,21 @@ function StoryboardReview({ job, draft, setDraft, busy, onApprove, onSearch }: {
     {draft.story && <p className="production-story">{draft.story}</p>}
     <ol className="production-review-scenes">
       {draft.scenes.map(scene => <li key={scene.id}>
-        <fieldset aria-label={"장면 " + scene.order + " 편집"} className={stock ? "is-stock" : undefined}>
+        <fieldset aria-label={"장면 " + scene.order + " 편집"} className={stock ? "is-stock" : motion ? "is-motion" : undefined}>
           <legend>장면 {scene.order}</legend>
           <Field id={"production-narration-" + scene.id} label="나레이션" className="production-narration-field">{id => <textarea id={id} rows={3} value={scene.narration} onChange={event => patchScene(scene.id, { narration: event.target.value })} />}</Field>
-          <Field id={"production-caption-" + scene.id} label="자막">{id => <input id={id} value={scene.caption} maxLength={120} onChange={event => patchScene(scene.id, { caption: event.target.value })} />}</Field>
+          <Field id={"production-caption-" + scene.id} label={motion ? "화면 제목" : "자막"}>{id => <input id={id} value={scene.caption} maxLength={motion ? 40 : 120} onChange={event => patchScene(scene.id, { caption: event.target.value })} />}</Field>
           {stock ? <>
             <Field id={"production-emphasis-" + scene.id} label="강조 단어 (노란색)" hint={<small>쉼표로 구분 · 2개까지</small>}>{id => <input id={id} value={(scene.emphasis ?? []).join(", ")} onChange={event => patchScene(scene.id, { emphasis: event.target.value.split(",").map(w => w.trim()).filter(Boolean).slice(0, 3) })} />}</Field>
             <Field id={"production-camera-" + scene.id} label="사진 움직임">{id => <select id={id} value={scene.camera ?? "zoom-in"} onChange={event => patchScene(scene.id, { camera: event.target.value as Camera })}>{CAMERAS.map(c => <option key={c} value={c}>{CAMERA_LABELS[c]}</option>)}</select>}</Field>
             <Field id={"production-stat-" + scene.id} label="숫자 카드" hint={<small>비우면 없음</small>}>{id => <input id={id} value={scene.stat?.value ?? ""} maxLength={12} placeholder="예: 30m" onChange={event => patchScene(scene.id, { stat: event.target.value.trim() ? { value: event.target.value, label: scene.stat?.label ?? "" } : null })} />}</Field>
             <PhotoPicker scene={scene} candidates={job.candidates[scene.id] ?? []} busy={busy === "search-" + scene.id}
               onPick={imageId => patchScene(scene.id, { imageId })} onSearch={query => { patchScene(scene.id, { search: query }); onSearch(scene.id, query); }} />
+          </> : motion ? <>
+            <Field id={"production-layout-" + scene.id} label="배치">{id => <select id={id} value={scene.layout ?? "title"} onChange={event => { const layout = event.target.value as MotionLayout; patchScene(scene.id, { layout, points: layout === "list" ? (scene.points?.length ? scene.points : ["", ""]) : [], stat: layout === "stat" ? (scene.stat ?? { value: "", label: "" }) : null }); }}>{Object.entries(MOTION_LAYOUT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>}</Field>
+            {scene.layout === "stat" && <Field id={"production-stat-" + scene.id} label="숫자 카드" hint={<small>12자 이하 · 확실한 숫자만</small>}>{id => <input id={id} value={scene.stat?.value ?? ""} maxLength={12} placeholder="예: 10분" onChange={event => patchScene(scene.id, { stat: { value: event.target.value, label: scene.stat?.label ?? "" } })} />}</Field>}
+            {scene.layout === "stat" && <Field id={"production-stat-label-" + scene.id} label="숫자 설명">{id => <input id={id} value={scene.stat?.label ?? ""} maxLength={24} onChange={event => patchScene(scene.id, { stat: { value: scene.stat?.value ?? "", label: event.target.value } })} />}</Field>}
+            {scene.layout === "list" && [0, 1, 2].map(i => <Field key={i} id={"production-point-" + scene.id + "-" + i} label={"목록 " + (i + 1) + (i === 2 ? " (선택)" : "")}>{id => <input id={id} value={scene.points?.[i] ?? ""} maxLength={24} onChange={event => { const points = [0, 1, 2].map(j => j === i ? event.target.value : scene.points?.[j] ?? "").filter((p, j) => j < 2 || p); patchScene(scene.id, { points }); }} />}</Field>)}
           </> : <Field id={"production-prompt-" + scene.id} label="영상 프롬프트" hint={<small>영문 · {scene.prompt.length}/{PROMPT_MAX}</small>}>{id => <textarea id={id} rows={3} value={scene.prompt} lang="en" aria-invalid={scene.prompt.length > PROMPT_MAX || !scene.prompt.trim()} onChange={event => patchScene(scene.id, { prompt: event.target.value })} />}</Field>}
           <Field id={"production-duration-" + scene.id} label="길이(초)">{id => <input id={id} type="number" min={2} max={12} step={1} value={scene.durationSec} onChange={event => patchScene(scene.id, { durationSec: Number(event.target.value) })} />}</Field>
         </fieldset>
@@ -248,7 +311,7 @@ function SceneGrid({ job, busy, onRetry }: { job: ProductionJob; busy: boolean; 
           </dl>
           {(scene.video.error || scene.voice.error) && <p className="production-error-text" role="alert">{scene.video.error ?? scene.voice.error}</p>}
           <div className="production-scene-actions">
-            <button type="button" className="social-button compact" disabled={locked || scene.video.status === "running"} onClick={() => onRetry("scenes", scene.id)}><RefreshCw size={14} />{scene.video.kind === "stock" ? "다른 사진으로" : "장면 재생성"}<span className="social-sr-only"> · 장면 {scene.order}</span></button>
+            {(scene.video.kind !== "motion" || scene.video.status === "failed") && <button type="button" className="social-button compact" disabled={locked || scene.video.status === "running"} onClick={() => onRetry("scenes", scene.id)}><RefreshCw size={14} />{scene.video.kind === "stock" ? "다른 사진으로" : scene.video.kind === "motion" ? "다시 렌더" : "장면 재생성"}<span className="social-sr-only"> · 장면 {scene.order}</span></button>}
             {job.settings.narration && <button type="button" className="social-button compact" disabled={locked || scene.voice.status === "running"} onClick={() => onRetry("voice", scene.id)}><Mic size={14} />나레이션 다시<span className="social-sr-only"> · 장면 {scene.order}</span></button>}
           </div>
         </article></li>;
@@ -269,6 +332,7 @@ function Result({ job, busy, onOpen, onSave, onDraft, onEdit }: { job: Productio
       <div className="production-result-info">
         <dl className="production-facts">
           {job.settings.visual === "ai" && <div><dt>생성 해상도</dt><dd>{sizeText(generation)}</dd></div>}
+          {job.reference && <div><dt>레퍼런스</dt><dd>{job.reference.name} · {ORIGIN_LABELS[job.reference.origin]}</dd></div>}
           <div><dt>출력 해상도</dt><dd>{sizeText(output)}</dd></div>
           <div><dt>길이</dt><dd>{Math.round(final.durationSec * 10) / 10}초</dd></div>
           {final.sizeBytes != null && <div><dt>파일 크기</dt><dd>{(final.sizeBytes / 1024 ** 2).toFixed(1)} MiB</dd></div>}
@@ -441,7 +505,13 @@ export function ProductionStudio({ active, selection, onOpenSettings, onEditInEd
     setNotice({ tone: "success", text: "SNS 게시 초안을 만들었습니다. 아직 게시되지 않았으며, 발행 화면에서 승인해야 게시됩니다." });
   }); };
 
-  const summary = useMemo(() => job ? [job.settings.durationSec + "초", ASPECTS[job.settings.aspect] ?? job.settings.aspect, STYLES[job.settings.style] ?? job.settings.style, QUALITIES[job.settings.quality] ?? job.settings.quality].join(" · ") : "", [job]);
+  const summary = useMemo(() => {
+    if (!job) return "";
+    const head = [job.settings.durationSec + "초", ASPECTS[job.settings.aspect] ?? job.settings.aspect];
+    // Motion jobs take neither a style nor a generation quality; name the reference they follow instead.
+    const tail = job.settings.visual === "motion" ? ["모션 그래픽", ...(job.reference ? [job.reference.name] : [])] : [STYLES[job.settings.style] ?? job.settings.style, QUALITIES[job.settings.quality] ?? job.settings.quality];
+    return [...head, ...tail].join(" · ");
+  }, [job]);
   const canPause = job && (job.status === "running" || job.status === "planning");
   const canCancel = job && job.status !== "done" && job.status !== "cancelled";
 

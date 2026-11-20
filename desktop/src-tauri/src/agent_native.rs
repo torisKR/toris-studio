@@ -158,3 +158,55 @@ pub async fn publication_ai_receive(
         .await
         .map_err(|_| "초안 저장 실패".to_string())?
 }
+
+/// Opens the official login of one CLI in the system terminal, only when the user presses the button.
+/// Login, tokens and their storage stay inside that CLI; the app only re-checks status afterwards.
+#[tauri::command]
+pub async fn agent_cli_login(window: tauri::WebviewWindow, tool: String) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    let (program, args) = agent_runtime::login_argv(&tool)?;
+    let binary = agent_runtime::find_cli(program)
+        .ok_or_else(|| format!("{program} CLI를 찾을 수 없습니다. 먼저 설치하세요."))?;
+    open_terminal(&binary, args)?;
+    Ok(json!({"started": true, "tool": tool}))
+}
+
+#[cfg(target_os = "macos")]
+fn open_terminal(binary: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+    let failed = || "터미널에서 로그인 명령을 열지 못했습니다.".to_string();
+    // A fresh private file per launch; Terminal runs `.command` files without Apple Events access.
+    agent_runtime::remove_old_login_scripts(&std::env::temp_dir());
+    let mut file = tempfile::Builder::new()
+        .prefix(agent_runtime::LOGIN_SCRIPT_PREFIX)
+        .suffix(".command")
+        .tempfile()
+        .map_err(|_| failed())?;
+    file.write_all(agent_runtime::login_script(binary, args).as_bytes())
+        .map_err(|_| failed())?;
+    file.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| failed())?;
+    let (_, path) = file.keep().map_err(|_| failed())?;
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(&path)
+        .status()
+        .map_err(|_| failed())?;
+    status.success().then_some(()).ok_or_else(failed)
+}
+
+#[cfg(windows)]
+fn open_terminal(binary: &std::path::Path, args: &[&str]) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    // One raw command line: standard argument quoting would double-quote the already quoted path.
+    std::process::Command::new("cmd.exe")
+        .raw_arg(agent_runtime::windows_login_command_line(binary, args)?)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "터미널에서 로그인 명령을 열지 못했습니다.".into())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn open_terminal(_binary: &std::path::Path, _args: &[&str]) -> Result<(), String> {
+    Err("이 운영체제에서는 터미널에서 직접 로그인하세요.".into())
+}

@@ -12,6 +12,7 @@ import { CreationInbox } from "./ChatGPTHandoff";
 import { aiStatus as readAiStatus, contentReady, generateText, modelLabel } from "./ai-client";
 import type { AiStatus as ModelStatus } from "./ai-client";
 import { AgentPanel } from "./AgentPanel";
+import { autoAssignModel } from "./agent-client";
 import { ProjectChat } from "./projects/ProjectChat";
 import type { ProductionSelection } from "./reason/types";
 import { PlannerPanel } from "./PlannerPanel";
@@ -263,6 +264,8 @@ export function App() {
   const contentError = useRef<HTMLParagraphElement>(null);
   const channelError = useRef<HTMLParagraphElement>(null);
   const alive = useRef(false);
+  const autoAssignTried = useRef(false);
+  const [autoModel, setAutoModel] = useState("");
   const lifecycle = useRef(0);
   const dashboardRequest = useRef(0);
   const aiRequest = useRef(0);
@@ -285,8 +288,15 @@ export function App() {
     const current = () => alive.current && owner === lifecycle.current && request === aiRequest.current;
     setAiChecking(true); setAiStatusError("");
     try {
-      const model = await readAiProfile(() => readAiStatus());
+      let model = await readAiProfile(() => readAiStatus());
       if (!current()) return;
+      // No model yet: use the first signed-in subscription CLI, once per app start, without asking.
+      if (!model.contentModel && !model.agentModel && !autoAssignTried.current) {
+        autoAssignTried.current = true;
+        const assigned = await autoAssignModel().catch(() => null);
+        if (assigned) { model = await readAiStatus(); setAutoModel(assigned.label); }
+        if (!current()) return;
+      }
       const ready = contentReady(model);
       const choice = model.contentModel ?? model.agentModel;
       setAiStatus({ providers: [{ id: "content", label: modelLabel(model, choice), configured: Boolean(choice), available: ready, detail: ready ? modelLabel(model, choice) + "로 작성합니다." : choice ? "선택한 모델을 사용할 수 없습니다. Agent에서 키·로그인을 확인하세요." : "Agent의 모델 설정에서 콘텐츠 작성 모델을 선택하세요." }], defaultProvider: ready ? "content" : null, model });
@@ -485,6 +495,7 @@ export function App() {
         <main id="social-main" className="social-main" tabIndex={-1}>
           <div className="social-page-heading"><div><h1 tabIndex={-1}>{viewTitle}</h1><p>{viewDescription}</p></div><div className="social-heading-actions"><button className="social-button subtle icon-only" aria-label="워크스페이스 새로고침" disabled={loading} onClick={() => { setAssetRefreshKey(key => key + 1); void loadDashboard(); void checkAi(); }}><RefreshCw size={17} className={loading ? "social-spin" : ""}/></button>{tab === "content" && <button className="social-button primary" disabled={!dashboard.database.connected} onClick={() => openContent()}><Plus size={17}/>새 콘텐츠</button>}</div></div>
           {sectionItems(section).length > 1 && <nav className="workspace-subnav" aria-label={`${MAIN_SECTIONS.find(item => item.id === section)?.label ?? "설정"} 화면`}>{sectionItems(section).map(item => <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}</button>)}</nav>}
+          {autoModel && <div className="social-notice success" role="status"><Check size={18} /><span>{autoModel}로 설정했습니다. 로그인된 구독 CLI로 AI 기능을 씁니다.</span><button type="button" className="social-button compact" onClick={() => { setAutoModel(""); setTab("agent"); }}>변경</button><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setAutoModel("")}><X size={16} /></button></div>}
           {notice && <div ref={noticeRegion} tabIndex={-1} className={`social-notice ${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"}>{notice.tone === "success" ? <Check size={18} /> : <CircleAlert size={18} />}<span>{notice.text}</span><button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></button></div>}
           {tab !== "assets" && loadError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{loadError}</span><button className="social-button compact" onClick={() => void loadDashboard()}>다시 시도</button></div>}
           {tab !== "assets" && tab !== "projects" && !loading && !dashboard.database.connected && <div className="social-notice info"><Database size={18} /><span>{dashboard.database.message} 채널·콘텐츠 저장은 DB 연결 후 사용할 수 있습니다.</span><button className="social-button compact" onClick={() => setTab("settings")}>연결 설정</button></div>}
@@ -535,7 +546,7 @@ export function App() {
             </form><section className="social-ai-result"><h2>받은 문구 검토</h2><p className="social-muted">{aiOutputLabel || "초안을 선택하거나 결과를 직접 붙여넣으세요."}</p><label htmlFor="social-ai-manual-output">문구 · 직접 편집</label><textarea id="social-ai-manual-output" rows={12} value={aiOutput} onChange={event => setAiOutput(event.target.value)}/><div className="workspace-inline-actions"><button className="social-button" disabled={!aiOutput.trim() || !dashboard.database.connected} onClick={() => openContent(undefined, { platform: aiPlatform, title: aiTopic.slice(0, 180), body: aiOutput })}>콘텐츠로 저장</button><button className="social-button primary" disabled={!aiOutput.trim()} onClick={() => { setPublicationSeed({ title: aiTopic.slice(0,180), description: aiOutput, key: Date.now() }); setTab("publications"); }}>게시 초안으로</button></div></section></div>
             <CreationInbox active={tab === "ai"} kind="text" onReview={reviewText}/>
           </div>
-          {tab === "settings" && <SettingsPanel onSaved={() => { void loadDashboard(); void checkAi(); }} databaseConnected={dashboard.database.connected} />}
+          {tab === "settings" && <SettingsPanel onSaved={() => { void loadDashboard(); void checkAi(); }} databaseConnected={dashboard.database.connected} onNavigate={setTab} />}
         </main>
         <footer className="social-footer"><span>Toris Studio · Desktop · 로컬 워크스페이스</span><span>모든 일정 표시: 한국 표준시 (KST)</span></footer>
       </div>

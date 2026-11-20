@@ -29,6 +29,7 @@ fn upload_consent_is_explicit_and_does_not_change_default_login_scopes() {
         client_id: "test.apps.googleusercontent.com".into(),
         client_secret: None,
         redirect_uri: Provider::Youtube.default_redirect(),
+        ..Default::default()
     };
     let read = authorization_url_for_mode(
         Provider::Youtube,
@@ -72,6 +73,7 @@ fn all_publishing_grants_are_explicit_and_meta_permissions_are_verified() {
                         client_id: "fixture".into(),
                         client_secret: Some("fixture-secret".into()),
                         redirect_uri: provider.default_redirect(),
+                        ..Default::default()
                     },
                     "state",
                     None,
@@ -119,6 +121,7 @@ fn comma_delimited_tiktok_scopes_and_facebook_refresh_use_official_exchange() {
         client_id: "fixture-id".into(),
         client_secret: Some("fixture-secret".into()),
         redirect_uri: "https://example.test/callback".into(),
+        ..Default::default()
     };
     let request = refresh_request(Provider::Facebook, &client, &session);
     assert_eq!(

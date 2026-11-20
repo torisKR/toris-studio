@@ -1,0 +1,17 @@
+{
+ "name": "example-site",
+ "latest_deployment": {
+  "url": "https://abc.example-site.pages.dev",
+  "latest_stage": {
+   "name": "deploy",
+   "status": "success",
+   "started_on": "2026-11-18T01:00:00Z",
+   "ended_on": "2026-11-18T01:02:00Z"
+  },
+  "deployment_trigger": {
+   "metadata": {
+    "branch": "main"
+   }
+  }
+ }
+}

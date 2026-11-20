@@ -99,3 +99,9 @@
 .agent-keys { display: grid; gap: 6px; }
 .agent-key-row { display: grid; grid-template-columns: 110px 70px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; font-size: 13px; }
 .agent-root { display: grid; gap: 4px; font-size: 13px; color: var(--social-muted); }
+
+/* A signed-out CLI: the login button and its follow-up text take their own row under the status. */
+.agent-connection { flex-wrap: wrap; }
+.agent-connection > .agent-login { order: 3; flex: 0 0 100%; display: grid; justify-items: start; gap: 6px; padding-left: 19px; }
+.agent-connection > .agent-login > span { font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-connection > .agent-login > span[role=alert] { color: #ffc0c6; }

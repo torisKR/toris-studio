@@ -11,3 +11,7 @@ fieldset.motion-studio{border:0;width:100%;min-width:0;box-sizing:border-box;mar
 .motion-handoff-option summary{cursor:pointer;min-height:32px;padding:6px 0}
 .motion-handoff-option p{margin:6px 0 10px!important;font-size:12px}
 
+.motion-reference-save{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--motion-line)}
+.motion-reference-save strong{flex-basis:100%;font-size:13px}
+.motion-reference-save input{flex:1 1 200px;min-width:0}
+.motion-reference-save small{flex-basis:100%;opacity:.75}

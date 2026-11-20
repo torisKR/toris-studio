@@ -1,4 +1,4 @@
-import { nativeInvoke, type BridgeInvoke, type ModelChoice, type ProviderInfo } from "./ai-client";
+import { nativeInvoke, type BridgeInvoke, type ModelChoice, type ProviderCheck, type ProviderInfo } from "./ai-client";
 
 export type AgentRole = "supervisor" | "frontend" | "backend" | "qa";
 export type Phase = "queued" | "thinking" | "reading" | "coding" | "testing" | "reviewing" | "awaiting_approval" | "waiting" | "done" | "failed" | "cancelled";
@@ -37,7 +37,8 @@ export function decide(run: Pick<RunSummary, "runId" | "workflow">, actionId: st
 }
 export type ProjectInfo = { name: string; path: string; stacks: string[]; scripts: Record<string, string>; git: boolean };
 export type IndexStatus = { indexed: boolean; chunks: number; stale: boolean; embedder: string; chroma: boolean };
-export type AgentSettings = { projectsRoot: string; ollamaUrl: string; agentModel: ModelChoice | null; contentModel: ModelChoice | null; image: ModelChoice | null; embedding: ModelChoice };
+/** modelAutoSelect: false once the user saved with no model, so the app never fills the slots again. */
+export type AgentSettings = { projectsRoot: string; ollamaUrl: string; agentModel: ModelChoice | null; contentModel: ModelChoice | null; image: ModelChoice | null; embedding: ModelChoice; modelAutoSelect?: boolean };
 export type SettingsView = { settings: AgentSettings; keys: Record<string, boolean>; chromaUrl: string; keyStore?: string | null };
 export type RuntimeStatus = { version: string; providers: ProviderInfo[]; chroma: boolean; projectsRoot: string };
 
@@ -85,6 +86,54 @@ export async function loadPanel(call: BridgeInvoke = nativeInvoke): Promise<Pane
 /** keys: provider -> new key, "" removes it; providers left out keep their saved key. */
 export function saveSettings(settings: AgentSettings, keys: Record<string, string>, call: BridgeInvoke = nativeInvoke): Promise<SettingsView> {
   return call("agent_settings_save", { input: { settings, keys } }) as Promise<SettingsView>;
+}
+
+/** Subscription CLIs tried when no model is chosen, in this order. Each runs on the user's own login. */
+export const AUTO_MODEL_ORDER = ["claude-cli", "codex-cli", "gemini-cli", "cursor-cli", "kiro-cli"] as const;
+const CLI_LABELS: Record<(typeof AUTO_MODEL_ORDER)[number], string> = { "claude-cli": "Claude Code", "codex-cli": "Codex CLI", "gemini-cli": "Gemini CLI", "cursor-cli": "Cursor CLI", "kiro-cli": "Kiro CLI" };
+
+/** Subscription provider → the CLI login tool the native side accepts. API providers have none. */
+export const CLI_LOGIN_TOOL: Record<string, string> = { "claude-cli": "claude", "codex-cli": "codex", "gemini-cli": "gemini", "cursor-cli": "cursor", "kiro-cli": "kiro" };
+export type LoginTool = "claude" | "codex" | "gemini" | "cursor" | "kiro" | "gh" | "cf" | "wrangler";
+/** Opens that CLI's own login in the system terminal. The CLI keeps its login; nothing returns here. */
+export function startCliLogin(tool: LoginTool | string, call: BridgeInvoke = nativeInvoke): Promise<unknown> {
+  return call("agent_cli_login", { tool });
+}
+
+/**
+ * The first connected check, in the order given. The model is the first one the account itself listed;
+ * a built-in suggestion may not exist on that account, so then the CLI's own default ("") is used.
+ * Claude Code's suggestions are aliases its CLI always accepts.
+ */
+export function pickDetected(checks: ProviderCheck[]): ModelChoice | null {
+  const found = checks.find(c => c.state === "connected");
+  if (!found) return null;
+  const trusted = found.source === "account" || found.provider === "claude-cli";
+  return { provider: found.provider, model: trusted ? found.models[0]?.id ?? "" : "" };
+}
+
+/** Saving with no model at all means "leave it empty": auto-assign stays off from then on. */
+export function withAutoSelect(settings: AgentSettings): AgentSettings {
+  return { ...settings, modelAutoSelect: Boolean(settings.agentModel || settings.contentModel) };
+}
+
+/**
+ * With no model chosen, finds the first signed-in subscription CLI and saves it for code and content work.
+ * Checks stop at the first connected CLI; nothing is sent to a model and no API key is touched.
+ */
+export async function autoAssignModel(call: BridgeInvoke = nativeInvoke): Promise<{ choice: ModelChoice; label: string } | null> {
+  const view = await getSettings(call);
+  const { settings } = view;
+  if (settings.agentModel || settings.contentModel || settings.modelAutoSelect === false) return null;
+  for (const provider of AUTO_MODEL_ORDER) {
+    let check: ProviderCheck;
+    try { check = await agentCall<ProviderCheck>("models.check", { provider }, call); } catch { continue; }
+    const choice = pickDetected([check]);
+    if (!choice) continue;
+    await saveSettings({ ...settings, agentModel: choice, contentModel: choice, modelAutoSelect: true }, {}, call);
+    return { choice, label: CLI_LABELS[provider] };
+  }
+  return null;
 }
 
 /** Events are applied in seq order; a duplicate or stale event never rewinds the view. */
