@@ -39,7 +39,10 @@ await page.exposeFunction('__qaInvoke', async (command, args = {}) => {
     return runtimeStatus();
   }
   if (command === 'open_external') return null;
-  if(command==='oauth_connection_dispatch'){assert.deepEqual(args.input,{action:'beginLogin',platform:'youtube',purpose:'read'});return {connectionId:'11111111-1111-4111-8111-111111111111',manualCallback:false};}
+  // Read-only mobile panel state on the same settings page (phone access off).
+  if (command === 'mobile_status') return { available: false, enabled: false, interfaces: [], address: null, port: null, fingerprint: null, devices: [], pending: null, projects: [] };
+  if (command === 'mobile_close_qr') return null;
+  if(command==='oauth_connection_dispatch'&&args.input?.action!=='brokerConfig'){assert.deepEqual(args.input,{action:'beginLogin',platform:'youtube',purpose:'read'});return {connectionId:'11111111-1111-4111-8111-111111111111',manualCallback:false};}
   const shared=shellFixture(command,args);if(shared!==unhandled)return shared;
   errors.push(`Unexpected fixture IPC ${command}`);throw new Error(`Unexpected fixture command: ${command}`);
 });
@@ -131,7 +134,7 @@ try {
   await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).getByRole('button',{name:'채널',exact:true}).click();
   await page.getByRole('button',{name:'계정 추가',exact:true}).click();
   await page.getByText('시스템 브라우저에서 공식 로그인을 완료하세요.',{exact:false}).waitFor();
-  assert.equal(calls.filter(call=>call.command==='oauth_connection_dispatch').length,1);
+  assert.equal(calls.filter(call=>call.command==='oauth_connection_dispatch'&&call.args.input?.action==='beginLogin').length,1);
   assert.equal(await page.getByRole('button', { name: 'Aside로 로그인', exact: true }).count(), 0);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, checks: ['Playwright default', 'saved and effective choices', 'preserved draft on refresh', 'save failure and redacted error', 'serialized save with disabled controls', 'persisted preference after reload', 'unsupported OS fallback', 'recovery state', 'read failure', '820px no overflow', 'OAuth system-only IPC'], adapter: 'Chromium real desktop UI; native IPC fixture only' }, null, 2));

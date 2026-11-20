@@ -1,0 +1,15 @@
+{
+ "total_count": 233,
+ "workflow_runs": [
+  {
+   "name": "Desktop checks and installers",
+   "status": "completed",
+   "conclusion": "success",
+   "head_branch": "main",
+   "head_sha": "709a947e41c04735fc7d6f6523628534cd525771",
+   "html_url": "https://github.com/torisKR/toris-studio/actions/runs/43900872331",
+   "updated_at": "2026-11-16T16:56:56Z",
+   "event": "push"
+  }
+ ]
+}

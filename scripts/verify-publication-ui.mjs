@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 
+const naverComposes = [];
 const out = process.env.TORIS_PUBLICATION_UI_ARTIFACTS || "/private/tmp/toris-publication-ui";
 await mkdir(out, { recursive: true });
 const now = "2026-10-10T08:00:00Z";
@@ -102,6 +103,7 @@ try {
       submits++;
       return saved;
     }
+    if (command === "publication_naver_compose") { assert.deepEqual(Object.keys(args.input).sort(), ["jobId", "part"]); naverComposes.push(args.input.part); return { copied: args.input.part }; }
     if (command === "publication_export_handoff") return { path: "/explicit-ipc-fixture/not-a-real-export", status: "needs_human_publish", images: 1 };
     if (command === "publication_confirm_handoff") {
       assert.equal(args.input.confirmed, true);
@@ -315,6 +317,11 @@ try {
   await approval.check();
   await studio.getByRole("button", { name: "선택한 대상 일괄 승인", exact: true }).click();
   await studio.getByText("수동 게시 필요", { exact: true }).waitFor();
+  await studio.getByRole("button", { name: "네이버에서 글쓰기 (제목 복사)", exact: true }).click();
+  await studio.getByText("제목을 복사하고 네이버 블로그를 열었습니다", { exact: false }).waitFor();
+  await studio.getByRole("button", { name: "본문 복사", exact: true }).click();
+  await studio.getByText("본문을 복사했습니다", { exact: false }).waitFor();
+  assert.deepEqual(naverComposes, ["title", "body"], "title then body; the app never publishes");
   await studio.getByRole("button", { name: "인계 자료 내보내기", exact: true }).click();
   await studio.getByText(/explicit-ipc-fixture\/not-a-real-export/).waitFor();
   assert.equal(saved.jobs[0].status, "needs_human_publish");

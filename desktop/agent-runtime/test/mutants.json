@@ -797,5 +797,40 @@
   "find": "  return found.filter(name => name.startsWith(\"android.permission.\"));",
   "replace": "  return found.filter(() => false);",
   "test": "desktop/agent-runtime/test/factory.test.ts"
+ },
+ {
+  "id": "ts.mg-stat-not-coerced",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "      if (scene.layout === \"stat\" && !scene.stat) { scene.layout = \"title\"; notes.push(n + \"번 장면: 숫자 카드가 없어 제목 배치로 바꿨습니다.\"); }\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "ts.mg-count-ignores-rhythm",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "visual === \"motion\" ? Math.min(12, Math.max(3, Math.ceil(durationSec / motionSceneSec)))",
+  "replace": "visual === \"motion\" ? Math.min(12, Math.max(3, Math.ceil(durationSec / 4)))",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "ts.mg-motion-uses-ai-prompt",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "input.visual === \"motion\" ? MOTION_SYSTEM : STORYBOARD_SYSTEM",
+  "replace": "STORYBOARD_SYSTEM",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "ts.mg-list-without-points",
+  "file": "desktop/agent-runtime/src/harness/production.ts",
+  "find": "      if (scene.layout === \"list\" && !((scene.points?.length ?? 0) >= 2)) { problems.push(n + \"번 장면: list 배치에는 points 2~3개가 필요합니다.\"); continue; }\n",
+  "replace": "",
+  "test": "desktop/agent-runtime/test/production.test.ts"
+ },
+ {
+  "id": "a2.content-workflow-uses-agent-model",
+  "file": "desktop/agent-runtime/src/graph/runs.ts",
+  "find": "spec.purpose === \"content\" ?",
+  "replace": "false ?",
+  "test": "desktop/agent-runtime/test/hub.test.ts"
  }
 ]

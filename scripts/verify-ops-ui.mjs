@@ -15,7 +15,9 @@ let products = [
   { id: 'p2', name: 'toris.kr', kind: 'web', githubRepo: null, cloudflareWorker: 'toris-site', cloudflarePages: null, healthUrl: 'https://toris.kr/health', playPackage: null, statuses: [
     snap('cloudflare', 'deployed', 'Worker 최신 배포가 트래픽을 받고 있습니다.'), snap('http', 'unhealthy', 'HTTP 503 · 120ms', 120) ] },
 ];
-let secrets = { github_token: false, cloudflare_token: true, cloudflare_account: true, play_service_account: false };
+let secrets = { github_token: true, cloudflare_token: false, cloudflare_account: true, play_service_account: false };
+let cliStatus = { gh: { installed: true, signedIn: true }, cf: { installed: true, signedIn: false }, wrangler: { installed: false, signedIn: null } };
+const cliLogins = [];
 const calls = [];
 const server = await createFixtureServer({ server: { port: 0, strictPort: false } }); await server.listen();
 const browser = await chromium.launch({ headless: true });
@@ -27,6 +29,8 @@ try {
     calls.push({ command, args });
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: 'QA' } };
     if (command === 'ops_overview') return { products, secrets };
+    if (command === 'ops_cli_status') return cliStatus;
+    if (command === 'agent_cli_login') { cliLogins.push(args); return { started: true }; }
     if (command === 'ops_refresh') return { snapshots: 5 };
     if (command === 'ops_open_task') return { id: 'w1' };
     if (command === 'ops_save_secret') { secrets = { ...secrets, [args.kind]: args.value !== null }; return secrets; }
@@ -67,12 +71,12 @@ try {
 
   await ops.getByRole('button', { name: /연결 설정/ }).click();
   const settings = page.getByRole('region', { name: '운영 연결 설정' });
-  await settings.getByLabel(/GitHub 토큰/).fill('ghp_fixture_only');
-  await settings.locator('form', { hasText: 'GitHub 토큰' }).getByRole('button', { name: '저장' }).click();
-  await settings.locator('form', { hasText: 'GitHub 토큰' }).getByText('저장됨', { exact: true }).waitFor();
-  assert.equal(await settings.getByLabel(/GitHub 토큰/).inputValue(), '', 'the field is cleared after saving');
-  assert.equal(await settings.getByLabel(/GitHub 토큰/).getAttribute('type'), 'password');
-  assert.equal(await page.content().then(html => html.includes('ghp_fixture_only')), false, 'the secret is not left in the DOM');
+  await settings.getByLabel('Cloudflare 계정 ID').fill('0123456789abcdef0123456789abcdef');
+  await settings.locator('form', { hasText: 'Cloudflare 계정 ID' }).getByRole('button', { name: '저장' }).click();
+  await ops.getByRole('status').filter({ hasText: 'Cloudflare 계정 ID 저장됨' }).waitFor();
+  assert.equal(await settings.getByLabel('Cloudflare 계정 ID').inputValue(), '', 'the field is cleared after saving');
+  assert.equal(await settings.getByLabel('Cloudflare 계정 ID').getAttribute('type'), 'password');
+  assert.equal(await page.content().then(html => html.includes('0123456789abcdef0123456789abcdef')), false, 'the value is not left in the DOM');
   report.checks.push('Secrets are write-only: masked input, cleared after save, only the saved flag comes back');
 
   await ops.getByRole('button', { name: '제품 추가' }).click();
@@ -88,6 +92,23 @@ try {
   assert.deepEqual(Object.keys(calls.findLast(c => c.command === 'ops_save_product').args.input).sort(), ['cloudflarePages', 'cloudflareWorker', 'githubRepo', 'healthUrl', 'kind', 'name', 'playPackage']);
   await ops.locator('li.ops-card', { hasText: '메모 서비스' }).getByText('아직 확인하지 않았습니다', { exact: false }).waitFor();
   report.checks.push('Product form validates before IPC and sends only allowed fields');
+
+  // GitHub and Cloudflare come from the user's own gh/cf login; only Cloudflare account ID and Play key are typed.
+  const conn = ops.getByRole('region', { name: '운영 연결 설정' });
+  await conn.getByText('gh 로그인됨').waitFor();
+  await conn.getByText('cf 로그인 필요').waitFor();
+  assert.equal(await conn.getByLabel('GitHub 토큰').count(), 0, 'no GitHub token input');
+  assert.equal(await conn.getByLabel('Cloudflare 토큰').count(), 0, 'no Cloudflare token input');
+  await conn.getByLabel('Cloudflare 계정 ID').waitFor();
+  await conn.getByRole('button', { name: 'cf 로그인' }).click();
+  assert.deepEqual(cliLogins, [{ tool: 'cf' }]);
+  cliStatus = { ...cliStatus, cf: { installed: true, signedIn: true } };
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await conn.getByText('cf 로그인됨').waitFor();
+  await conn.getByRole('button', { name: '저장된 GitHub 토큰 삭제' }).click();
+  assert.deepEqual(calls.findLast(c => c.command === 'ops_save_secret').args, { kind: 'github_token', value: null });
+  await conn.getByRole('button', { name: '저장된 GitHub 토큰 삭제' }).waitFor({ state: 'detached' });
+  report.checks.push('Ops: gh/cf login state with login buttons; no token inputs; a legacy saved token can only be deleted');
 
   await ops.getByRole('button', { name: '지금 확인' }).click();
   await ops.getByText('상태 5건을 새로 확인했습니다.').waitFor();

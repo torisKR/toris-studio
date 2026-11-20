@@ -732,11 +732,27 @@ pub async fn refresh(client: &tokio_postgres::Client, secrets: &Secrets) -> Resu
         let id: Uuid = row.get("id");
         let mut statuses = Vec::new();
         if let Some(repo) = row.get::<_, Option<String>>("github_repo") {
-            statuses.extend(collect_github(&repo, secrets.github.as_deref()).await);
+            // The user's gh login first; without gh, the public REST API (and a token saved by older versions).
+            match cli::collect_github(&repo).await {
+                Some(found) => statuses.extend(found),
+                None => statuses.extend(collect_github(&repo, secrets.github.as_deref()).await),
+            }
         }
         let worker = row.get::<_, Option<String>>("cloudflare_worker");
         let pages = row.get::<_, Option<String>>("cloudflare_pages");
-        if worker.is_some() || pages.is_some() {
+        let via_cli = if worker.is_some() || pages.is_some() {
+            cli::collect_cloudflare(
+                secrets.cloudflare_account.as_deref(),
+                worker.as_deref(),
+                pages.as_deref(),
+            )
+            .await
+        } else {
+            None
+        };
+        if let Some(found) = via_cli {
+            statuses.extend(found);
+        } else if worker.is_some() || pages.is_some() {
             match (&secrets.cloudflare_account, &secrets.cloudflare_token) {
                 (Some(account), Some(token)) => statuses.extend(
                     collect_cloudflare(account, token, worker.as_deref(), pages.as_deref()).await,
@@ -744,7 +760,7 @@ pub async fn refresh(client: &tokio_postgres::Client, secrets: &Secrets) -> Resu
                 _ => statuses.push(status(
                     "cloudflare",
                     "error",
-                    "Cloudflare 계정 ID와 읽기 전용 토큰을 운영 설정에 저장하세요.",
+                    "cf 또는 wrangler를 설치하고 로그인하세요. 운영 연결 설정에서 로그인할 수 있습니다.",
                     json!({}),
                 )),
             }
@@ -807,6 +823,9 @@ pub async fn open_task(
         &[&Uuid::new_v4(), &title, &id, &reference]).await)?;
     Ok(json!({"id": task.get::<_, Uuid>(0).to_string()}))
 }
+
+#[path = "ops_status_cli.rs"]
+pub mod cli;
 
 #[cfg(test)]
 mod tests {

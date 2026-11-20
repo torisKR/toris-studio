@@ -1,3 +1,4 @@
+import { SettingsReadiness } from "./SettingsReadiness";
 import { invoke } from "@tauri-apps/api/core";
 import { ActivityStatus } from "./ActivityStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -112,7 +113,7 @@ function displayDate(value: string | null) {
   }).format(date);
 }
 
-export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => void; databaseConnected: boolean }) {
+export function SettingsPanel({ onSaved, databaseConnected, onNavigate }: { onSaved: () => void; databaseConnected: boolean; onNavigate?: (view: "agent" | "sns") => void }) {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [form, setForm] = useState<SettingsForm | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
@@ -270,6 +271,7 @@ export function SettingsPanel({ onSaved, databaseConnected }: { onSaved: () => v
   if (!form || !settings) return <div>{storageNotice}<div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{error || "설정을 불러오지 못했습니다."}</span><button type="button" className="social-button compact" disabled={operationBusy} onClick={() => void load()}>다시 시도</button></div></div>;
 
   return <div className="desktop-settings">
+    <SettingsReadiness databaseConnected={databaseConnected} onFix={fix => { if (fix === "start_database") void databaseAction("start"); else if (fix === "open_agent") onNavigate?.("agent"); else if (fix === "open_sns") onNavigate?.("sns"); else document.getElementById("settings-youtube-key")?.closest("fieldset")?.scrollIntoView({ behavior: "smooth", block: "start" }); }} />
     <UpdatePanel hasUnsavedChanges={dirtyFields.current.size > 0 || browserDirty} otherOperationBusy={settingsOperationBusy} onInstallBusyChange={setUpdateInstalling} />
     <BrowserSettingsPanel disabled={updateInstalling || coreSettingsOperationBusy} onDirtyChange={setBrowserDirty} onBusyChange={setBrowserBusy} />
     <MobileSettingsPanel disabled={updateInstalling} />

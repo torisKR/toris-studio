@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const expectedNavigation = ['프로젝트', 'SNS 관리', '콘텐츠', '제작', '게시', '운영'];
-  const expectedReads = ['get_dashboard', 'ai_status', 'oauth_connections', 'analytics_dispatch:status', 'get_settings', 'get_scheduler_status', 'get_keychain_status', 'get_update_status', 'browser_runtime_status'];
+  const expectedReads = ['get_dashboard', 'ai_status', 'agent_settings_get', 'oauth_connections', 'oauth_status', 'oauth_connection_dispatch:brokerConfig', 'analytics_dispatch:status', 'get_settings', 'get_scheduler_status', 'get_keychain_status', 'get_update_status', 'browser_runtime_status'];
   const nativeFixtures = __NATIVE_FIXTURES__;
   const failures = new Set();
   const reads = new Set();
@@ -29,6 +29,11 @@
       return {mcpExecutable: '/fixture/Toris Studio', protocolVersion: '2025-11-25', lastObservedAt: null};
     }
     if (command === 'ai_status') return {providers: [], contentModel: null, agentModel: null, image: null};
+    // With no model, the shell tries to auto-assign one at startup. modelAutoSelect=false stops it
+    // before any CLI login check (models.check), so no provider executable ever runs here.
+    if (command === 'agent_settings_get') {
+      return {settings: {projectsRoot: '/fixture/projects', ollamaUrl: 'http://127.0.0.1:11434', agentModel: null, contentModel: null, image: null, embedding: {provider: 'local', model: 'local'}, modelAutoSelect: false}, keys: {}, chromaUrl: 'http://127.0.0.1:8000', keyStore: null};
+    }
     // Settings shows the local voice engine; the isolated check never inspects Python or models.
     if (command === 'tts_status') {
       return {supported: true, state: 'stopped', owned: false, narration: false, installed: false, python: null, model: null, install: {phase: 'idle', step: '', log: []}, lastError: null, endpoint: 'http://127.0.0.1:50010', license: {commercialUse: true, model: {name: 'Qwen3-TTS-12Hz-1.7B-CustomVoice', license: 'Apache-2.0', url: 'https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'}, runtime: [{name: 'mlx-audio', license: 'MIT'}]}};
@@ -39,6 +44,11 @@
     }
     if (command === 'oauth_connections') {
       return {connections: [], bindings: [], warnings: []};
+    }
+    // Settings "준비 상태" reads login state and the broker's offer; the check never contacts the broker.
+    if (command === 'oauth_status') return {providers: []};
+    if (command === 'oauth_connection_dispatch' && args.input?.action === 'brokerConfig') {
+      return {available: {}, naverSearch: false, clients: {}};
     }
     if (command === 'analytics_dispatch') {
       if (args.input?.action === 'status') {
@@ -75,7 +85,8 @@
       Promise.resolve().then(() => fixtures(message.cmd, message.payload)).then(
         value => {
           window.__TAURI_INTERNALS__.runCallback(message.callback, value);
-          const read = message.cmd === 'analytics_dispatch' ? `analytics_dispatch:${message.payload?.input?.action}` : message.cmd;
+          const dispatch = message.cmd === 'analytics_dispatch' || message.cmd === 'oauth_connection_dispatch';
+          const read = dispatch ? `${message.cmd}:${message.payload?.input?.action}` : message.cmd;
           if (expectedReads.includes(read)) reads.add(read);
         },
         () => window.__TAURI_INTERNALS__.runCallback(message.error, 'Unsupported isolated startup fixture')

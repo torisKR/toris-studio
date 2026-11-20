@@ -83,6 +83,13 @@ pub async fn ops_save_secret(
     Ok(crate::ops_status::secret_flags())
 }
 
+/// Which of gh / cf / wrangler are installed and signed in. Reads exit codes and whoami flags only.
+#[tauri::command]
+pub async fn ops_cli_status(window: tauri::WebviewWindow) -> Result<Value, String> {
+    crate::updater::authorize(&window)?;
+    Ok(crate::ops_status::cli::login_status().await)
+}
+
 /// Runs one refresh across all products. A busy refresh is reported, not queued.
 pub async fn refresh_once(state: &crate::AppState) -> Result<Value, String> {
     let _guard = REFRESH_LOCK

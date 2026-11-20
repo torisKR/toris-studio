@@ -18,6 +18,7 @@ Toris Studio는 1인 개발자·사업자가 SNS·앱·웹·서비스·일정을
 - 파일을 추가하면 `docs/harness/features.json`에서 그 파일을 소유한 기능을 지정합니다. `pnpm harness:check`가 소유자 없는 파일과 깨진 뮤테이션을 막습니다.
 - 새 동작에는 그 동작을 깨뜨리는 뮤테이션을 기능의 `mutants.json`에 추가하고 테스트가 잡는지 확인합니다. 뮤테이션 검사는 한 번에 하나만 실행됩니다(`.mutation-check.lock`).
 - 보고할 때 증거를 구분합니다: 단위 테스트, 고정 응답(fixture) UI 검사, 실제 렌더/FFmpeg, 실제 외부 계정 연결은 서로 다른 주장입니다.
+- 하네스 전체 안내는 `docs/harness/README.md`, 개발 에이전트의 역할·모델·넘겨주는 순서는 `docs/harness/AGENT_TEAM.md`에 있습니다.
 
 ## 설계 원칙
 

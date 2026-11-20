@@ -3,9 +3,10 @@ import { CalendarDays, Check, LoaderCircle, LogIn, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-type Provider = { platform: string; clientConfigured: boolean; connected: boolean; needsReconnect?: boolean; redirectUri?: string | null; accountLabel?: string | null };
+type Provider = { platform: string; clientConfigured: boolean; connected: boolean; needsReconnect?: boolean; redirectUri?: string | null; accountLabel?: string | null; clientMode?: "google_builtin" | "developer" | "toris" | null; builtinAvailable?: boolean; googleTesting?: boolean; reloginBy?: string | null };
 const PLATFORM = "google_calendar";
 const REDIRECT = "http://127.0.0.1:38471/oauth/google_calendar/callback";
+const kst = (iso: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Google Calendar login for the planner. Rust owns the client secret, the browser login and the tokens. */
@@ -39,16 +40,24 @@ export function CalendarConnection({ onChanged }: { onChanged: () => void }) {
   return <details className="planner-calendar-connect" open={!connected}>
     <summary><CalendarDays size={14} aria-hidden="true" />Google Calendar 연결 {connected ? <span className="planner-ok"><Check size={12} />연결됨</span> : provider.needsReconnect ? <span className="planner-warn">다시 연결 필요</span> : <span>미연결</span>}</summary>
     <p>Studio가 만든 'Toris Studio' 캘린더 하나만 읽고 씁니다(calendar.app.created). 기존 캘린더는 보지 않습니다. 로그인은 시스템 브라우저에서 진행합니다.</p>
-    {!provider.clientConfigured && <form onSubmit={save} className="planner-connect-form">
+    {provider.clientMode === "google_builtin" && provider.googleTesting && <p className="planner-connect-note">Toris 기본 Google 클라이언트는 아직 테스트 단계입니다. 확인되지 않은 앱 경고가 나올 수 있고, 등록된 테스트 사용자만 로그인할 수 있으며, 7일마다 다시 로그인해야 합니다.{provider.reloginBy ? ` 현재 로그인은 ${kst(provider.reloginBy)}까지 유효합니다.` : ""}</p>}
+    {!provider.clientConfigured ? <form onSubmit={save} className="planner-connect-form">
       <label>OAuth 클라이언트 ID<input value={clientId} autoComplete="off" spellCheck={false} onChange={event => setClientId(event.target.value)} placeholder="Google Cloud 데스크톱 앱 클라이언트" /></label>
       <label>클라이언트 보안 비밀 <small>선택</small><input type="password" value={clientSecret} autoComplete="new-password" spellCheck={false} onChange={event => setClientSecret(event.target.value)} /></label>
       <small>리디렉션 주소: <code>{REDIRECT}</code></small>
       <button className="social-button compact" disabled={!clientId.trim() || !!busy}>{busy === "save" ? <LoaderCircle size={14} className="social-spin" /> : <Check size={14} />}저장</button>
-    </form>}
+    </form> : null}
     <div className="planner-actions">
       {provider.clientConfigured && !connected && <button className="social-button compact primary" disabled={!!busy} onClick={() => void run("login", () => invoke("oauth_begin_login", { platform: PLATFORM }), "브라우저에서 로그인을 마친 뒤 '지금 동기화'를 누르세요.")}>{busy === "login" ? <LoaderCircle size={14} className="social-spin" /> : <LogIn size={14} />}Google 로그인</button>}
       {connected && <button className="social-button compact subtle" disabled={!!busy} onClick={() => void run("disconnect", () => invoke("oauth_disconnect", { platform: PLATFORM }), "Studio에 저장된 Google Calendar 연결을 해제했습니다.")}><Unplug size={14} />연결 해제</button>}
     </div>
+    {provider.clientConfigured && <details className="planner-own-client"><summary>내 Google 클라이언트 사용</summary><form onSubmit={save} className="planner-connect-form">
+      <label>OAuth 클라이언트 ID<input value={clientId} autoComplete="off" spellCheck={false} onChange={event => setClientId(event.target.value)} placeholder="Google Cloud 데스크톱 앱 클라이언트" /></label>
+      <label>클라이언트 보안 비밀 <small>선택</small><input type="password" value={clientSecret} autoComplete="new-password" spellCheck={false} onChange={event => setClientSecret(event.target.value)} /></label>
+      <small>리디렉션 주소: <code>{REDIRECT}</code></small>
+      <button className="social-button compact" disabled={!clientId.trim() || !!busy}>{busy === "save" ? <LoaderCircle size={14} className="social-spin" /> : <Check size={14} />}저장</button>
+    </form></details>}
+    {provider.clientMode === "developer" && provider.builtinAvailable && <button type="button" className="social-button compact subtle" disabled={!!busy} onClick={() => void run("save", () => invoke("oauth_save_client", { platform: PLATFORM, input: { mode: "builtin" } }), "Toris 기본 Google 클라이언트로 되돌렸습니다. 다시 로그인하세요.")}>Toris 기본 클라이언트로 되돌리기</button>}
     {text && <p role="status" className="planner-connect-status">{text}</p>}
   </details>;
 }

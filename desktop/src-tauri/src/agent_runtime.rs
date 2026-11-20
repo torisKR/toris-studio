@@ -63,6 +63,12 @@ pub struct AgentSettings {
     pub content_model: Option<ModelChoice>,
     pub image: Option<ModelChoice>,
     pub embedding: ModelChoice,
+    /// Off once the user saves with no model; the app then never fills the model slots again.
+    #[serde(default = "auto_select_default")]
+    pub model_auto_select: bool,
+}
+fn auto_select_default() -> bool {
+    true
 }
 impl Default for AgentSettings {
     fn default() -> Self {
@@ -80,6 +86,7 @@ impl Default for AgentSettings {
                 provider: "local".into(),
                 model: String::new(),
             },
+            model_auto_select: true,
         }
     }
 }
@@ -204,6 +211,100 @@ pub fn keys() -> Result<HashMap<&'static str, String>, String> {
         }
     }
     Ok(out)
+}
+
+/// CLIs whose official login the app can open in a terminal. Closed list; argv is fixed per tool.
+pub const LOGIN_TOOLS: [&str; 8] = [
+    "claude", "codex", "gemini", "cursor", "kiro", "gh", "cf", "wrangler",
+];
+/// The program and arguments of one CLI's own login command. Nothing else can be run this way.
+pub fn login_argv(tool: &str) -> Result<(&'static str, &'static [&'static str]), String> {
+    Ok(match tool {
+        "claude" => ("claude", &["auth", "login"]),
+        "codex" => ("codex", &["login"]),
+        // Gemini CLI signs in from its own interactive screen.
+        "gemini" => ("gemini", &[]),
+        "cursor" => ("cursor-agent", &["login"]),
+        "kiro" => ("kiro-cli", &["login"]),
+        "gh" => (
+            "gh",
+            &["auth", "login", "--hostname", "github.com", "--web"],
+        ),
+        "cf" => ("cf", &["auth", "login"]),
+        "wrangler" => ("wrangler", &["login"]),
+        _ => return Err("로그인할 수 있는 CLI가 아닙니다.".into()),
+    })
+}
+fn sh_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', "'\\''"))
+}
+/// A macOS `.command` script: one `exec` of the found binary with fixed arguments, every word quoted.
+pub fn login_script(binary: &Path, args: &[&str]) -> String {
+    let words = std::iter::once(binary.to_string_lossy().into_owned())
+        .chain(args.iter().map(|a| a.to_string()))
+        .map(|w| sh_quote(&w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("#!/bin/sh\n# Toris Studio: 이 CLI의 공식 로그인 명령만 실행합니다.\nexec {words}\n")
+}
+pub const LOGIN_SCRIPT_PREFIX: &str = "toris-cli-login-";
+/// Deletes earlier login scripts this app left in `dir` (regular files only; symlinks are not followed).
+/// Called before writing a new one, so at most one stays behind. Returns how many were removed.
+pub fn remove_old_login_scripts(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(LOGIN_SCRIPT_PREFIX)
+                && name.ends_with(".command")
+                && entry.file_type().is_ok_and(|t| t.is_file())
+        })
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
+}
+/// The raw `cmd.exe` command line (passed with `raw_arg`, never re-quoted) that opens a new console
+/// running the login: `/s /k ""<path>" args"` quotes the path exactly once. Paths with characters cmd
+/// would reinterpret are refused; the arguments are fixed tokens from `login_argv`.
+pub fn windows_login_command_line(binary: &Path, args: &[&str]) -> Result<String, String> {
+    let path = binary.to_string_lossy();
+    if path
+        .chars()
+        .any(|c| matches!(c, '"' | '%' | '&' | '^' | '|' | '<' | '>' | '!'))
+    {
+        return Err("CLI 설치 경로에 터미널이 다르게 해석하는 문자가 있습니다.".into());
+    }
+    let command = std::iter::once(format!("\"{path}\""))
+        .chain(args.iter().map(|a| a.to_string()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(format!("/d /c start \"\" cmd.exe /d /s /k \"{command}\""))
+}
+/// File names a CLI can have: npm installs `.cmd` shims on Windows, so `.exe` alone misses them.
+pub fn cli_file_names(program: &str, windows: bool) -> Vec<String> {
+    if windows {
+        ["exe", "cmd", "bat"]
+            .iter()
+            .map(|ext| format!("{program}.{ext}"))
+            .collect()
+    } else {
+        vec![program.to_string()]
+    }
+}
+/// The first folder (in search order) holding the CLI; within a folder `.exe` wins over shims.
+pub fn find_cli_in(program: &str, dirs: &[PathBuf], windows: bool) -> Option<PathBuf> {
+    dirs.iter().find_map(|dir| {
+        cli_file_names(program, windows)
+            .into_iter()
+            .map(|name| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+pub fn find_cli(program: &str) -> Option<PathBuf> {
+    find_cli_in(program, &search_path(), cfg!(windows))
 }
 
 /// Directories searched for node and subscription CLIs (Finder/Explorer launches lack shell PATH).
@@ -590,6 +691,164 @@ impl AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cli_login_commands_are_a_closed_fixed_list() {
+        assert_eq!(
+            login_argv("claude").unwrap(),
+            ("claude", &["auth", "login"][..])
+        );
+        assert_eq!(login_argv("codex").unwrap(), ("codex", &["login"][..]));
+        assert_eq!(login_argv("gemini").unwrap(), ("gemini", &[][..]));
+        assert_eq!(
+            login_argv("cursor").unwrap(),
+            ("cursor-agent", &["login"][..])
+        );
+        assert_eq!(login_argv("kiro").unwrap(), ("kiro-cli", &["login"][..]));
+        assert_eq!(
+            login_argv("gh").unwrap(),
+            (
+                "gh",
+                &["auth", "login", "--hostname", "github.com", "--web"][..]
+            )
+        );
+        assert_eq!(login_argv("cf").unwrap(), ("cf", &["auth", "login"][..]));
+        assert_eq!(
+            login_argv("wrangler").unwrap(),
+            ("wrangler", &["login"][..])
+        );
+        for bad in [
+            "",
+            "bash",
+            "claude auth login",
+            "../claude",
+            "CLAUDE",
+            "gh;rm",
+        ] {
+            assert!(login_argv(bad).is_err(), "{bad} must be refused");
+        }
+        assert_eq!(LOGIN_TOOLS.len(), 8);
+    }
+    #[test]
+    fn login_script_quotes_every_word_and_runs_only_the_cli() {
+        let script = login_script(Path::new("/Users/q a/it's/bin/claude"), &["auth", "login"]);
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(
+            script.contains("exec '/Users/q a/it'\\''s/bin/claude' 'auth' 'login'\n"),
+            "{script}"
+        );
+        assert_eq!(script.lines().filter(|l| l.starts_with("exec ")).count(), 1);
+        assert!(!script.contains("$("), "no command substitution");
+    }
+    #[test]
+    fn windows_login_is_one_raw_cmd_line_with_the_path_quoted_once() {
+        let line = windows_login_command_line(
+            Path::new(r"C:\Program Files\nodejs\claude.cmd"),
+            &["auth", "login"],
+        )
+        .unwrap();
+        assert_eq!(
+            line,
+            r#"/d /c start "" cmd.exe /d /s /k ""C:\Program Files\nodejs\claude.cmd" auth login""#
+        );
+        assert!(
+            !line.contains(r#"\""#),
+            "no backslash-escaped quotes: the line is passed raw"
+        );
+        for bad in [
+            r#"C:\a"b\gh.exe"#,
+            r"C:\a%PATH%\gh.exe",
+            r"C:\a&b\gh.exe",
+            r"C:\a^b\gh.exe",
+            r"C:\a!b\gh.cmd",
+        ] {
+            assert!(
+                windows_login_command_line(Path::new(bad), &["login"]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn old_login_scripts_are_removed_before_a_new_one_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "toris-cli-login-a.command",
+            "toris-cli-login-b.command",
+            "other.command",
+            "toris-cli-login-c.txt",
+        ] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(
+            outside.path(),
+            dir.path().join("toris-cli-login-link.command"),
+        )
+        .unwrap();
+        assert_eq!(remove_old_login_scripts(dir.path()), 2);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "other.command",
+                "toris-cli-login-c.txt",
+                "toris-cli-login-link.command"
+            ],
+            "only our own regular files go"
+        );
+        assert!(outside.path().exists(), "a symlink is never followed");
+    }
+    #[test]
+    fn windows_finds_npm_cmd_shims_and_prefers_exe_in_the_same_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("claude.cmd"), "").unwrap();
+        let dirs = vec![dir.path().to_path_buf()];
+        assert_eq!(
+            find_cli_in("claude", &dirs, true),
+            Some(dir.path().join("claude.cmd"))
+        );
+        assert_eq!(
+            find_cli_in("claude", &dirs, false),
+            None,
+            "no extension guessing outside Windows"
+        );
+        std::fs::write(dir.path().join("claude.exe"), "").unwrap();
+        assert_eq!(
+            find_cli_in("claude", &dirs, true),
+            Some(dir.path().join("claude.exe"))
+        );
+        std::fs::write(dir.path().join("wrangler"), "").unwrap();
+        assert_eq!(
+            find_cli_in("wrangler", &dirs, false),
+            Some(dir.path().join("wrangler"))
+        );
+        assert_eq!(cli_file_names("gh", true), ["gh.exe", "gh.cmd", "gh.bat"]);
+    }
+    #[test]
+    fn model_auto_select_defaults_on_and_survives_a_round_trip() {
+        let old = r#"{"projectsRoot":"/p","ollamaUrl":"http://127.0.0.1:11434","agentModel":null,"contentModel":null,"image":null,"embedding":{"provider":"local","model":""}}"#;
+        let parsed: AgentSettings = serde_json::from_str(old).unwrap();
+        assert!(
+            parsed.model_auto_select,
+            "settings saved before the field existed keep auto-assign on"
+        );
+        assert!(AgentSettings::default().model_auto_select);
+        let off = AgentSettings {
+            model_auto_select: false,
+            ..parsed
+        };
+        let text = serde_json::to_string(&off).unwrap();
+        assert!(text.contains("\"modelAutoSelect\":false"));
+        assert!(
+            !serde_json::from_str::<AgentSettings>(&text)
+                .unwrap()
+                .model_auto_select
+        );
+    }
     #[test]
     fn settings_view_survives_a_locked_key_store() {
         let settings = AgentSettings::default();
