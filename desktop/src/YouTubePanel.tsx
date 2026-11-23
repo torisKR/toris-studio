@@ -51,6 +51,7 @@ function duration(seconds?: number) {
 
 export function YouTubePanel({ active = true, databaseConnected = true, onMessage, onOpenSettings, onChanged }: Props) {
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [viaLogin, setViaLogin] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [query, setQuery] = useState("");
   const [channel, setChannel] = useState<YouTubeChannel | null>(null);
@@ -64,7 +65,13 @@ export function YouTubePanel({ active = true, databaseConnected = true, onMessag
 
   const checkSettings = useCallback(async () => {
     setSettingsError("");
-    try { setConfigured((await invoke<PublicSettings>("get_settings")).youtubeConfigured); }
+    try {
+      const keySaved = (await invoke<PublicSettings>("get_settings")).youtubeConfigured;
+      // Without a Data API key, the connected YouTube account's read access is used instead.
+      const login = keySaved ? false : await invoke<{ providers?: Array<{ platform: string; connected?: boolean }> }>("oauth_status").then(s => Boolean(s.providers?.find(p => p.platform === "youtube")?.connected)).catch(() => false);
+      setViaLogin(login);
+      setConfigured(keySaved || login);
+    }
     catch (reason) { setConfigured(null); setSettingsError(failure(reason)); }
   }, []);
   useEffect(() => { if (active) void checkSettings(); }, [active, checkSettings]);
@@ -113,9 +120,9 @@ export function YouTubePanel({ active = true, databaseConnected = true, onMessag
   }
 
   return <div className="desktop-youtube">
-    <div className="desktop-youtube-connection"><div><KeyRound size={18} aria-hidden="true" /><span>YouTube Data API 키</span><strong className={configured ? "configured" : ""}>{configured === null ? "확인 중" : configured ? "저장됨 · 조회 시 확인" : "설정 필요"}</strong></div><button type="button" className="social-button compact" onClick={onOpenSettings} disabled={!onOpenSettings}><Settings2 size={14} />연결 설정</button></div>
+    <div className="desktop-youtube-connection"><div><KeyRound size={18} aria-hidden="true" /><span>{viaLogin ? "YouTube 계정 연결" : "YouTube Data API 키"}</span><strong className={configured ? "configured" : ""}>{configured === null ? "확인 중" : viaLogin ? "계정 연결됨 · 조회 시 확인" : configured ? "저장됨 · 조회 시 확인" : "설정 필요"}</strong></div><button type="button" className="social-button compact" onClick={onOpenSettings} disabled={!onOpenSettings}><Settings2 size={14} />연결 설정</button></div>
     {settingsError && <div className="social-notice error" role="alert"><CircleAlert size={18} /><span>{settingsError}</span><button type="button" className="social-button compact" onClick={() => void checkSettings()}>다시 확인</button></div>}
-    {configured === false ? <div className="desktop-youtube-setup"><span className="desktop-youtube-symbol"><Video size={27} aria-hidden="true" /></span><div><h2>내 채널의 공개 성과를 확인하세요</h2><p>연결 설정에 YouTube Data API 키를 저장하면 채널의 구독자·조회수와 최근 공개 영상을 조회할 수 있습니다.</p></div><button type="button" className="social-button primary" onClick={onOpenSettings} disabled={!onOpenSettings}><KeyRound size={16} />API 키 설정</button></div> : null}
+    {configured === false ? <div className="desktop-youtube-setup"><span className="desktop-youtube-symbol"><Video size={27} aria-hidden="true" /></span><div><h2>내 채널의 공개 성과를 확인하세요</h2><p>연결 설정에 YouTube Data API 키를 저장하거나 SNS 관리에서 YouTube 계정을 연결하면 채널의 구독자·조회수와 최근 공개 영상을 조회할 수 있습니다.</p></div><button type="button" className="social-button primary" onClick={onOpenSettings} disabled={!onOpenSettings}><KeyRound size={16} />API 키 설정</button></div> : null}
 
     <form className="desktop-youtube-search" onSubmit={lookup}>
       <div><label htmlFor="youtube-channel-query">채널 핸들 또는 채널 주소</label><div className="social-search"><Search size={18} aria-hidden="true" /><input id="youtube-channel-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="@handle · UC 채널 ID · youtube.com/@handle" required maxLength={500} spellCheck={false} autoComplete="off" disabled={!!busy || configured !== true} aria-describedby="youtube-query-help" /></div></div>

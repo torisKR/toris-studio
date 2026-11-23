@@ -62,7 +62,8 @@ export function submissionInput(publication: Publication, check: PublicationPref
   return { publicationId: publication.id, revision: publication.revision, targetIds: ids, approvalHash: check.approvalHash, confirmed: true };
 }
 export function jobActions(job: PublishingJob): string[] {
-  if (job.status === "needs_human_publish") return ["export_handoff", "confirm_handoff", "cancel"];
+  // Naver has no blog-writing API: these copy the approved title/body for its editor; the user publishes there.
+  if (job.status === "needs_human_publish") return [...(job.platform === "naver_blog" ? ["naver_compose_title", "naver_compose_body"] : []), "export_handoff", "confirm_handoff", "cancel"];
   if (["published", "draft_sent", "cancelled"].includes(job.status)) return [];
   if (["uncertain", "processing", "sending"].includes(job.status)) return ["reconcile"];
   if (job.status === "needs_confirmation") return ["review"];

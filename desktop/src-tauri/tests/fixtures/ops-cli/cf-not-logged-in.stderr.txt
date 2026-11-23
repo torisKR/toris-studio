@@ -1,0 +1,10 @@
+
+┌ Error
+│ No authentication token found.
+│
+│ Please set one of the following:
+│   1. Set the CLOUDFLARE_API_TOKEN environment variable
+│   2. Run 'cf auth login' to authenticate via OAuth
+│
+│ For API tokens, visit: https://dash.cloudflare.com/profile/api-tokens
+└

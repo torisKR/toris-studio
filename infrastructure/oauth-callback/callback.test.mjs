@@ -4,7 +4,9 @@ import test from 'node:test';
 import worker from './worker.ts';
 
 const callback = 'https://toris.kr/oauth/instagram/callback';
-const originalFetch = globalThis.fetch;
+// Real network is blocked for the whole file; tests install their own fake fetch.
+const originalFetch = async () => { throw new Error('real network access is blocked in tests'); };
+globalThis.fetch = originalFetch;
 
 async function withFetchSpy(run, respond = () => new Response('Sites unchanged', {
   status: 200,
@@ -18,6 +20,8 @@ async function withFetchSpy(run, respond = () => new Response('Sites unchanged',
   try { await run(calls); } finally { globalThis.fetch = originalFetch; }
 }
 
+// Existing behavior for any state that is not broker-shaped (developer apps, older app versions):
+// Instagram serves the static paste page and never reflects the query.
 test('OAuth code, state, and injected HTML never reach the upstream or response', async () => {
   await withFetchSpy(async calls => {
     const sentinel = 'callback-only-sensitive-marker';
@@ -72,6 +76,154 @@ test('methods other than GET and HEAD are rejected before any upstream request',
       assert.equal(await response.text(), 'Method Not Allowed');
     }
     assert.equal(calls.length, 0);
+  });
+});
+
+const META = ['threads', 'instagram', 'facebook'];
+const loopback = platform => `http://127.0.0.1:38471/oauth/${platform}/callback`;
+const metaCallback = platform => `https://toris.kr/oauth/${platform}/callback`;
+const b64 = value => Buffer.from(value).toString('base64url');
+// Shape of a Toris broker state; the signature is synthetic because the callback Worker has no key.
+const brokerState = (platform, overrides = {}) => `${b64(JSON.stringify({ k: 'k1', p: platform, u: 'read', c: 'c'.repeat(43), n: 'n'.repeat(22), e: 1900000000, ...overrides }))}.${b64('synthetic-signature-bytes-32-long')}`;
+const securityHeaders = {
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'x-robots-tag': 'noindex, nofollow, noarchive',
+};
+
+// Security review: broker-shaped callbacks copy code/state/error/error_reason into a loopback redirect.
+test('broker-state Meta callbacks 302 to the app loopback with only code, state, error, and error_reason', async () => {
+  await withFetchSpy(async calls => {
+    for (const platform of META) {
+      const state = brokerState(platform);
+      const response = await worker.fetch(new Request(`${metaCallback(platform)}?code=AQD-synthetic_code.1~x&state=${state}&error_description=%3Cscript%3Emarker&granted_scopes=a,b&utm=x`));
+      assert.equal(response.status, 302, platform);
+      const location = new URL(response.headers.get('location'));
+      assert.equal(`${location.origin}${location.pathname}`, loopback(platform));
+      assert.deepEqual([...location.searchParams], [['code', 'AQD-synthetic_code.1~x'], ['state', state]]);
+      assert.equal(location.hash, '');
+      for (const [name, value] of Object.entries(securityHeaders)) assert.equal(response.headers.get(name), value, name);
+      assert.equal(response.headers.get('x-toris-origin'), null);
+      assert.equal(await response.text(), '');
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('broker-state cancellation forwards error and error_reason with state', async () => {
+  await withFetchSpy(async calls => {
+    const state = brokerState('facebook');
+    const response = await worker.fetch(new Request(`${metaCallback('facebook')}?error=access_denied&error_reason=user_denied&state=${state}&error_description=Permissions+error`));
+    assert.equal(response.headers.get('location'), `${loopback('facebook')}?state=${state}&error=access_denied&error_reason=user_denied`);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('non-broker states keep the existing behavior: Instagram static page, Threads and Facebook proxied', async () => {
+  const sentinel = 'developer-mode-sensitive-marker';
+  const notBroker = [
+    `${sentinel}-random-state`,
+    brokerState('threads'),
+    `${b64(JSON.stringify({ p: 'instagram', e: 1 }))}.${b64('sig')}`,
+    `${b64(JSON.stringify({ k: 'k1', p: 'instagram' }))}.${b64('sig')}`,
+    `${b64(JSON.stringify({ k: 'k1', p: 'instagram', e: '1' }))}.${b64('sig')}`,
+    `${b64('{not json')}.${b64('sig')}`,
+    `${b64('"instagram"')}.${b64('sig')}`,
+    `@@@.${b64('sig')}`,
+    `${b64(JSON.stringify({ k: 'k1', p: 'instagram', e: 1, pad: 'x'.repeat(1024) }))}.${b64('sig')}`,
+    `${brokerState('instagram')}.extra`,
+  ];
+  await withFetchSpy(async calls => {
+    for (const state of notBroker) {
+      const response = await worker.fetch(new Request(`${metaCallback('instagram')}?code=${sentinel}&state=${encodeURIComponent(state)}`));
+      assert.equal(response.status, 200, state);
+      assert.equal(response.headers.get('location'), null);
+      const html = await response.text();
+      assert.match(html, /콜백 주소 입력란/);
+      assert.ok(!html.includes(sentinel));
+    }
+    const duplicate = await worker.fetch(new Request(`${metaCallback('instagram')}?code=x&state=${brokerState('instagram')}&state=${brokerState('instagram')}`));
+    assert.equal(duplicate.status, 200);
+    assert.equal(calls.length, 0);
+    for (const platform of ['threads', 'facebook']) {
+      const response = await worker.fetch(new Request(`${metaCallback(platform)}?code=${sentinel}&state=developer-state`));
+      assert.equal(await response.text(), 'Sites unchanged');
+      assert.equal(calls.at(-1).request.url, `https://toris-product-studio.toriskr.chatgpt.site/oauth/${platform}/callback?code=${sentinel}&state=developer-state`);
+    }
+    assert.equal(calls.length, 2);
+  });
+});
+
+test('broker-state callbacks with invalid, oversized, duplicate, or missing values are refused without reflection', async () => {
+  const sentinel = 'callback-only-sensitive-marker';
+  const state = brokerState('instagram');
+  await withFetchSpy(async calls => {
+    for (const query of [
+      `?code=${sentinel}%3Cscript%3E&state=${state}`,
+      `?code=${sentinel}&code=${sentinel}2&state=${state}`,
+      `?state=${state}`,
+      `?code=&state=${state}`,
+      `?code=${sentinel}%0A&state=${state}`,
+      `?code=${'c'.repeat(2049)}&state=${state}`,
+      `?error_reason=${sentinel}%20x&error=access_denied&state=${state}`,
+    ]) {
+      const response = await worker.fetch(new Request(`${metaCallback('instagram')}${query}`));
+      assert.equal(response.status, 400, query);
+      assert.equal(response.headers.get('location'), null);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const html = await response.text();
+      assert.match(html, /Toris Studio 로그인/);
+      assert.ok(!html.includes(sentinel));
+      assert.ok(!/<script\b|<link\b|<iframe\b|<img\b|<form\b|\b(?:src|href)=/i.test(html));
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('a 2048-character value is still relayed', async () => {
+  await withFetchSpy(async calls => {
+    const code = 'c'.repeat(2048);
+    const response = await worker.fetch(new Request(`${metaCallback('threads')}?code=${code}&state=${brokerState('threads')}`));
+    assert.equal(response.status, 302);
+    assert.equal(new URL(response.headers.get('location')).searchParams.get('code'), code);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('HEAD with a broker state returns the same redirect headers without a body or upstream request', async () => {
+  await withFetchSpy(async calls => {
+    const url = `${callback}?code=synthetic-test&state=${brokerState('instagram')}`;
+    const get = await worker.fetch(new Request(url));
+    const head = await worker.fetch(new Request(url, { method: 'HEAD' }));
+    assert.equal(head.status, 302);
+    assert.deepEqual([...head.headers], [...get.headers]);
+    assert.equal(await head.text(), '');
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('non-GET methods with a broker state are not relayed', async () => {
+  await withFetchSpy(async calls => {
+    const response = await worker.fetch(new Request(`${callback}?code=synthetic-test&state=${brokerState('instagram')}`, { method: 'POST' }));
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get('location'), null);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test('other OAuth-looking paths and www callbacks are not relayed', async () => {
+  await withFetchSpy(async calls => {
+    for (const path of [`/oauth/tiktok/callback?code=x&state=${brokerState('tiktok')}`, `/oauth/threads/callback/?code=x&state=${brokerState('threads')}`, `/oauth/Threads/callback?code=x&state=${brokerState('threads')}`]) {
+      const response = await worker.fetch(new Request(`https://toris.kr${path}`));
+      assert.equal(await response.text(), 'Sites unchanged', path);
+    }
+    assert.equal(calls.length, 3);
+    const www = await worker.fetch(new Request(`https://www.toris.kr/oauth/threads/callback?code=x&state=s`));
+    assert.equal(www.status, 301);
+    assert.equal(www.headers.get('location'), 'https://toris.kr/oauth/threads/callback?code=x&state=s');
   });
 });
 

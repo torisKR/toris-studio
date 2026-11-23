@@ -1,0 +1,13 @@
+{
+ "authenticated": true,
+ "authSource": "OAuth token from <config>",
+ "tokenValid": true,
+ "email": "redacted@example.com",
+ "accounts": [
+  {
+   "id": "00000000000000000000000000000000",
+   "name": "redacted",
+   "type": "standard"
+  }
+ ]
+}

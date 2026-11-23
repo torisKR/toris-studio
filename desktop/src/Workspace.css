@@ -137,3 +137,11 @@
 
 .social-workspace .agent-card select:not([multiple]){min-height:0;height:38px}
 .social-workspace select:not([multiple]){text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+
+/* SNS connection mode: chips with the radio visible; the explanation sits under the choice. */
+.sns-connection-modes{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:-4px 0 16px}
+.sns-connection-modes-title{flex-basis:100%;font-size:12px;font-weight:600;color:var(--social-muted)}
+.sns-connection-modes>label{display:inline-flex!important;align-items:center;gap:8px;margin:0;padding:8px 12px;border:1px solid var(--social-line);border-radius:8px;background:var(--social-inset);font-size:13px;font-weight:500;cursor:pointer}
+.sns-connection-modes>label:has(input:checked){border-color:var(--social-accent);background:#92b8ff14}
+.sns-connection-modes input{width:16px!important;height:16px;min-height:0!important;margin:0!important;padding:0!important;flex:none;accent-color:var(--social-accent)}
+.sns-connection-modes small{flex-basis:100%;color:var(--social-muted);font-size:12px;line-height:1.7}

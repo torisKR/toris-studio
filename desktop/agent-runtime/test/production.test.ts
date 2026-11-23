@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RunManager } from "../src/graph/runs.js";
-import { checkStoryboard, fitNarration, productionInput, sceneCount, templateStoryboard, unsafeText, type ProductionInput, type ProductionResult } from "../src/harness/production.js";
+import { checkStoryboard, fitNarration, MOTION_LAYOUTS, MOTION_SYSTEM, productionInput, sceneCount, templateStoryboard, unsafeText, type ProductionInput, type ProductionResult } from "../src/harness/production.js";
 import { defaultWorkflows } from "../src/harness/registry.js";
 import { RoleModel } from "../src/harness/testing.js";
 import { parseSettings } from "../src/runtime.js";
@@ -259,4 +259,95 @@ test("workflow: stock shorts use the shorts writer prompt", async () => {
   assert.equal(view.phase, "done");
   assert.equal(result.storyboard?.scenes.length, 5);
   assert.match(model.calls[0].input.messages[0].content, /사진 장면이니 3~4초/);
+});
+
+// ---- motion graphics scenes (layout + reference rhythm; Rust motion_scene.rs draws them) ----
+
+const motionInput: ProductionInput = { ...input, durationSec: 16, visual: "motion", motionSceneSec: 4 };
+function motionDraft(count = 4): Draft {
+  return {
+    title: "아침 10분 루틴",
+    story: "아침 루틴 세 가지",
+    style: { look: "motion graphics", palette: "reference", consistency: "reference layout" },
+    scenes: Array.from({ length: count }, (_, i) => {
+      const layout = MOTION_LAYOUTS[i % MOTION_LAYOUTS.length];
+      return {
+        id: "s" + (i + 1), order: i + 1, durationSec: 4, script: "물 한 잔으로 하루를 시작합니다.", narration: "물 한 잔으로 시작해요.", caption: "아침 10분 루틴",
+        prompt: "", transition: "fade", layout,
+        ...(layout === "list" ? { points: ["물 한 잔", "창문 열기"] } : {}),
+        ...(layout === "stat" ? { stat: { value: "10분", label: "아침 준비 시간" } } : {}),
+      };
+    }),
+  };
+}
+
+test("motion: the layout list is the same in Rust, the prompt, Zod and the storyboard select", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const rust = await readFile(new URL("../../src-tauri/src/motion_scene.rs", import.meta.url), "utf8");
+  const rustList = /pub const LAYOUTS: \[&str; \d+\] = \[([^\]]+)\]/.exec(rust)?.[1].match(/"([a-z-]+)"/g)?.map(s => s.slice(1, -1));
+  assert.deepEqual([...MOTION_LAYOUTS], rustList);
+  const production = await readFile(new URL("../../src-tauri/src/production.rs", import.meta.url), "utf8");
+  assert.match(production, /crate::motion_scene::LAYOUTS\.contains\(&layout\)/, "Rust validation uses the same constant");
+  for (const layout of MOTION_LAYOUTS) assert.ok(MOTION_SYSTEM.includes(layout), layout + " is offered to the model");
+  const ui = await readFile(new URL("../../src/production/production-model.ts", import.meta.url), "utf8");
+  const labels = /MOTION_LAYOUT_LABELS[^=]*=\s*\{([^}]+)\}/.exec(ui)?.[1].match(/(\w+):/g)?.map(s => s.slice(0, -1));
+  assert.deepEqual(labels, [...MOTION_LAYOUTS], "the storyboard select offers exactly these layouts");
+  for (const layout of MOTION_LAYOUTS) assert.ok(checkStoryboard({ ...motionDraft(4), scenes: motionDraft(4).scenes.map(s => ({ ...s, layout, ...(layout === "list" ? { points: ["가나", "다라"] } : { points: undefined }), ...(layout === "stat" ? { stat: { value: "3배", label: "" } } : {}) })) }, motionInput, SOURCE).storyboard, layout);
+});
+
+test("motion: scene count follows the reference rhythm like production.rs motion_scene_count", () => {
+  assert.equal(sceneCount(30, "motion", 4), 8);
+  assert.equal(sceneCount(15, "motion", 8), 3);
+  assert.equal(sceneCount(120, "motion", 2.5), 12);
+  assert.equal(sceneCount(30, "motion"), 8, "default rhythm 4 s");
+  assert.equal(sceneCount(30, "ai"), 6);
+  assert.equal(productionInput({ ...motionInput, motionSceneSec: 20 }).input, null, "rhythm is bounded");
+});
+
+test("motion: a valid storyboard keeps layout, points and stat and drops prompts", () => {
+  const { storyboard, problems } = checkStoryboard(motionDraft(), motionInput, SOURCE);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(storyboard?.scenes.map(s => s.layout), ["title", "stat", "list", "quote"]);
+  assert.deepEqual(storyboard?.scenes[2].points, ["물 한 잔", "창문 열기"]);
+  assert.equal(storyboard?.scenes[1].stat?.value, "10분");
+  assert.ok(storyboard?.scenes.every(s => s.prompt === "" && s.search === undefined));
+  assert.equal(storyboard?.scenes[0].points, undefined, "points only on list scenes");
+});
+
+test("motion: a stat scene without a number becomes a title scene; bad lists are rejected", () => {
+  const noStat = motionDraft();
+  delete noStat.scenes[1].stat;
+  const fixed = checkStoryboard(noStat, motionInput, SOURCE);
+  assert.equal(fixed.storyboard?.scenes[1].layout, "title");
+  assert.match(fixed.notes.join("\n"), /숫자 카드가 없어/);
+  const shortList = motionDraft();
+  shortList.scenes[2].points = ["하나"];
+  assert.equal(checkStoryboard(shortList, motionInput, SOURCE).storyboard, null);
+  const chart = motionDraft();
+  chart.scenes[0].layout = "chart";
+  assert.equal(checkStoryboard(chart, motionInput, SOURCE).storyboard, null);
+  const long = motionDraft();
+  long.scenes[0].caption = "가".repeat(41);
+  assert.equal(checkStoryboard(long, motionInput, SOURCE).storyboard, null);
+});
+
+test("motion template is labelled, cycles layouts and never invents numbers", () => {
+  const board = templateStoryboard(motionInput);
+  assert.equal(board.template, true);
+  assert.equal(board.scenes.length, 4);
+  assert.deepEqual(board.scenes.map(s => s.layout), ["title", "list", "quote", "title"]);
+  assert.ok(board.scenes.every(s => s.layout !== "stat" && s.prompt === ""));
+  assert.match(board.scenes[0].caption, /^\[템플릿\]/);
+  const { template: _t, provider: _p, model: _m, ...draftOnly } = board;
+  assert.ok(checkStoryboard(draftOnly, motionInput, { template: true, provider: "", model: "" }).storyboard, "the template passes its own gate");
+});
+
+test("workflow: motion uses the motion writer prompt and the reference scene count", async () => {
+  const model = new RoleModel({ storyboard: [json(motionDraft())] }, [["storyboard", "모션 그래픽 쇼츠의 작가"]]);
+  const { view, result } = await runWorkflow(model, motionInput);
+  assert.equal(view.phase, "done");
+  assert.equal(result.storyboard?.scenes.length, 4);
+  assert.match(model.calls[0].input.messages[0].content, /정확히 4개/);
+  assert.doesNotMatch(model.calls[0].input.system, /아침 루틴/, "the topic never enters the system rules");
+  assert.equal(model.calls[0].input.system, MOTION_SYSTEM, "motion jobs use the motion writer rules");
 });

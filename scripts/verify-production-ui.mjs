@@ -32,13 +32,27 @@ let failVoiceOnce = true, nextId = 1;
 const stage = (job, id) => job.stages.find(s => s.id === id);
 function newJob(input) {
   const id = 'job-' + nextId++, now = new Date().toISOString();
-  const count = input.visual === 'stock' ? Math.min(12, Math.max(3, Math.ceil(input.durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(input.durationSec / 5)));
+  const motionSec = REFERENCES.find(r => r.id === (input.reference || 'builtin-midnight-data'))?.rhythm.sceneSec ?? 4;
+  const count = input.visual === 'motion' ? Math.min(12, Math.max(3, Math.ceil(input.durationSec / motionSec)))
+    : input.visual === 'stock' ? Math.min(12, Math.max(3, Math.ceil(input.durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(input.durationSec / 5)));
+  const reference = input.visual === 'motion' ? REFERENCES.find(r => r.id === (input.reference || 'builtin-midnight-data')) : null;
   return { id, createdAt: now, updatedAt: now, status: 'planning', settings: clone(input),
     stages: STAGE_IDS.map(s => ({ id: s, status: s === 'plan' ? 'running' : 'pending', done: 0, total: s === 'scenes' || s === 'voice' ? count : 0 })),
     storyboard: null, scenes: [], generation: { width: 368, height: 640, frames: 33, steps: 20 }, output: { width: 1080, height: 1920 },
-    final: null, qa: [], provenance: null, error: null, sceneCount: count, candidates: {} };
+    final: null, qa: [], provenance: null, error: null, sceneCount: count, candidates: {}, ...(reference ? { reference: { id: reference.id, name: reference.name, origin: reference.origin } } : {}) };
 }
+// Motion references the Rust store would list (motion_reference_list): two built-ins and one colour-only media reference.
+const REFERENCE_BASE = { source: null, type: { headline: 96, body: 44 }, composition: 'center', motion: { enter: 'rise', accent: 'draw', exit: 'none' }, decor: 'underline', notes: [] };
+const REFERENCES = [
+  { ...REFERENCE_BASE, id: 'builtin-midnight-data', name: '한밤 데이터', origin: 'builtin', palette: { background: '#172A45', surface: '#22395C', text: '#F4F7FB', accent: '#5EEAD4', accent2: '#F2B84B' }, rhythm: { firstDelay: 0.3, stagger: 0.35, sceneSec: 4 } },
+  { ...REFERENCE_BASE, id: 'builtin-pop-contrast', name: '강한 대비 팝', origin: 'builtin', palette: { background: '#232323', surface: '#333333', text: '#FFFFFF', accent: '#FF3DA5', accent2: '#22D3EE' }, rhythm: { firstDelay: 0.1, stagger: 0.15, sceneSec: 3 } },
+  { ...REFERENCE_BASE, id: '0d1c2b3a-4f5e-4a6b-8c7d-9e0f1a2b3c4d', name: '쇼릴 색', origin: 'media', source: { kind: 'video', width: 1080, height: 1920, durationSec: 12 }, palette: { background: '#1E2A3A', surface: '#2A3646', text: '#FAFAFA', accent: '#F03C3C', accent2: '#3CC85A' }, rhythm: { firstDelay: 0.3, stagger: 0.35, sceneSec: 4 }, notes: ['속도와 배치는 재지 않았고 기준 레퍼런스 값을 씁니다.'] }
+];
+const MOTION_LAYOUTS = ['title', 'stat', 'list', 'quote'];
 function storyboardOf(job) {
+  if (job.settings.visual === 'motion') return { title: '아침 10분 루틴', story: '아침 루틴', style: { look: 'motion graphics', palette: 'reference', consistency: 'reference layout' }, template: false,
+    scenes: Array.from({ length: job.sceneCount }, (_, i) => { const layout = MOTION_LAYOUTS[i % 4]; return { id: 's' + (i + 1), order: i + 1, durationSec: 3, script: '장면 ' + (i + 1), narration: '물 한 잔으로 시작해요.', caption: '아침 10분 루틴', prompt: '', transition: 'fade',
+      layout, points: layout === 'list' ? ['물 한 잔', '창문 열기'] : [], stat: layout === 'stat' ? { value: '10분', label: '아침 준비 시간' } : null }; }) };
   if (job.settings.visual === 'stock') return { title: '법의 허점을 노린 천재 건축가의 아파트', headline: { top: '법의 허점(?)을 노린', bottom: '천재 건축가의 아파트' }, story: '다리 옆 규제를 피한 건물', style: { look: 'documentary photo', palette: 'natural', consistency: 'real photos' }, template: false,
     scenes: Array.from({ length: job.sceneCount }, (_, i) => ({ id: 's' + (i + 1), order: i + 1, durationSec: 3, script: '장면 ' + (i + 1), narration: '다리에서 30m 떨어져야 했어요.', caption: '최소 30m 떨어져야', prompt: '', transition: 'cut',
       search: 'vancouver house tower', emphasis: ['30m'], camera: 'pan-up', stat: i === 1 ? { value: '30m', label: '다리와의 거리' } : null, imageId: 'ov-a' })) };
@@ -51,7 +65,7 @@ const scenePath = (job, s, kind) => '/fixture/public/productions/' + job.id + '/
 function stepAssets(job, stageId, kind) {
   const st = stage(job, stageId); st.status = 'running';
   const running = job.scenes.find(s => s[kind].status === 'running');
-  if (running) { running[kind] = { status: 'done', path: job.settings.visual === 'stock' && kind === 'video' ? '/fixture/public/productions/' + job.id + '/scenes/' + running.id + '/p.jpg' : scenePath(job, running, kind === 'video' ? 'scenes' : 'voice'), ...(job.settings.visual === 'stock' && kind === 'video' ? { kind: 'stock' } : {}) }; }
+  if (running) { running[kind] = { status: 'done', path: job.settings.visual === 'stock' && kind === 'video' ? '/fixture/public/productions/' + job.id + '/scenes/' + running.id + '/p.jpg' : scenePath(job, running, kind === 'video' ? 'scenes' : 'voice'), ...(job.settings.visual === 'stock' && kind === 'video' ? { kind: 'stock' } : job.settings.visual === 'motion' && kind === 'video' ? { kind: 'motion' } : {}) }; }
   else { const next = job.scenes.find(s => s[kind].status !== 'done'); if (next) next[kind] = { status: 'running' }; }
   st.done = job.scenes.filter(s => s[kind].status === 'done').length;
   if (st.done === job.scenes.length) { st.status = 'done'; return true; }
@@ -128,6 +142,7 @@ try {
     calls.push({ command, args: clone(received) });
     if (command === 'native_open_render_preview') { previews.push(args.path); return null; }
     if (command.startsWith('production_')) { const value = production(command, received); if (value !== unhandled) return value; report.unexpected.push(command); throw new Error('unknown production IPC ' + command); }
+    if (command === 'motion_reference_list') return { references: clone(REFERENCES), skipped: 0 };
     if (command === 'get_dashboard') return { channels: [], content: [], trends: [], integrations: [], database: { connected: true, message: 'QA' } };
     if (command === 'get_settings') return { configPath: '/fixture/config.json', databaseConfigured: true, youtubeConfigured: false, naverConfigured: false, savedCollectionKeys: {}, lastCollectedAt: null };
     if (command === 'get_scheduler_status') return { enabled: false, running: false, lastRunAt: null, nextRunAt: null, lastError: null };
@@ -184,7 +199,7 @@ try {
   report.checks.push('영상·모션 opens on the topic → AI video composer; legacy editors are not mounted by default');
 
   // Default source is licence-cleared photos; no engine needed. The AI path is checked first, then the stock path at the end.
-  assert.equal(await studio.getByLabel('실제 사진 + 모션 그래픽', { exact: true }).isChecked(), true, 'stock photos are the default scene source');
+  assert.equal(await studio.getByLabel('실제 사진 쇼츠', { exact: true }).isChecked(), true, 'stock photos are the default scene source');
   assert.equal(await studio.getByLabel('쇼츠 카드 (위 제목 고정)', { exact: true }).isChecked(), true);
   assert.equal(await studio.getByRole('group', { name: '영상 엔진 설치 필요' }).count(), 0, 'no engine card for stock photos');
   await studio.getByText('AI 장면 생성 (Wan2.1)', { exact: true }).click();
@@ -379,7 +394,7 @@ try {
 
   // Stock-photo shorts: photo candidates per scene, picking, re-search, headline, credits.
   await page.getByRole('button', { name: '새 영상', exact: true }).click();
-  await page.getByText('실제 사진 + 모션 그래픽', { exact: true }).click();
+  await page.getByText('실제 사진 쇼츠', { exact: true }).click();
   await page.getByText('쇼츠 카드 (위 제목 고정)', { exact: true }).click();
   await page.locator('#production-topic').fill('법의 허점을 노린 천재 건축가의 아파트 Vancouver House');
   await page.getByText('15초', { exact: true }).click();
@@ -423,6 +438,46 @@ try {
   await stockScenes.getByRole('button', { name: '다른 사진으로 · 장면 1', exact: true }).click();
   assert.deepEqual(last('production_retry').args, { jobId: 'job-3', sceneId: 's1', stage: 'scenes' });
   report.checks.push('Stock result: photo scenes preview with their camera move, credits listed, 다른 사진으로 retries that scene');
+
+  // Motion graphics: reference cards, no square, layout per scene, no engine, the job reads back as motion.
+  await page.getByRole('button', { name: '새 영상', exact: true }).click();
+  await page.getByText('모션 그래픽 (레퍼런스 스타일)', { exact: true }).click();
+  assert.equal(await page.getByLabel('1:1 정사각', { exact: true }).isDisabled(), true, 'motion offers no square canvas');
+  assert.equal(await page.getByRole('group', { name: '화면 구성' }).count(), 0, 'motion is always full frame');
+  assert.equal(await page.getByRole('group', { name: '영상 엔진' }).count(), 0, 'motion needs no video engine');
+  const references = page.getByRole('radiogroup', { name: '레퍼런스' });
+  await references.getByText('쇼릴 색', { exact: true }).waitFor();
+  await references.getByText('색만 쟀습니다. 속도와 배치는 재지 않았고 기준 레퍼런스 값을 씁니다.', { exact: true }).waitFor();
+  await references.getByText('강한 대비 팝', { exact: true }).click();
+  await page.locator('#production-topic').fill('아침 루틴으로 집중력 높이기');
+  await page.getByText('15초', { exact: true }).click();
+  await page.getByText('장면 5개로 나눕니다.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '영상 생성', exact: true }).click();
+  const motionSent = last('production_create').args;
+  assert.deepEqual({ visual: motionSent.visual, layout: motionSent.layout, engine: motionSent.engine, reference: motionSent.reference, aspect: motionSent.aspect }, { visual: 'motion', layout: 'full', engine: '', reference: 'builtin-pop-contrast', aspect: '9:16' });
+  const motionReview = page.getByRole('region', { name: '스토리보드 확인' });
+  await motionReview.waitFor({ timeout: 10000 });
+  const m3 = motionReview.getByRole('group', { name: '장면 3 편집' });
+  assert.equal(await m3.getByLabel('배치', { exact: true }).inputValue(), 'list');
+  assert.equal(await m3.getByLabel('목록 2', { exact: true }).inputValue(), '창문 열기');
+  assert.equal(await m3.getByLabel(/^영상 프롬프트/).count(), 0, 'motion scenes have no AI prompt field');
+  await motionReview.getByRole('group', { name: '장면 1 편집' }).getByLabel('배치', { exact: true }).selectOption('quote');
+  await motionReview.getByRole('button', { name: '이대로 생성', exact: true }).click();
+  const motionBoard = last('production_approve').args.storyboard;
+  assert.deepEqual([motionBoard.scenes[0].layout, motionBoard.scenes[0].points], ['quote', []]);
+  assert.deepEqual([motionBoard.scenes[2].layout, motionBoard.scenes[2].points], ['list', ['물 한 잔', '창문 열기']]);
+  assert.deepEqual(motionBoard.scenes[1].stat, { value: '10분', label: '아침 준비 시간' });
+  const motionResult = page.getByRole('region', { name: '완성 영상' });
+  await motionResult.waitFor({ timeout: 40000 });
+  assert.equal(await motionResult.getByText('생성 해상도', { exact: true }).count(), 0, 'a motion job is never shown as an AI clip job');
+  await motionResult.getByText('강한 대비 팝 · 기본', { exact: true }).waitFor();
+  const motionScenes = page.getByRole('region', { name: '장면' });
+  assert.equal(await motionScenes.getByRole('button', { name: /^다시 렌더/ }).count(), 0, 'finished motion scenes offer no re-render');
+  assert.equal(await motionScenes.getByRole('button', { name: /^장면 재생성/ }).count(), 0);
+  await page.setViewportSize({ width: 820, height: 1000 });
+  assert.equal(await overflow(), false, 'motion result fits 820px');
+  await page.setViewportSize({ width: 1380, height: 1000 });
+  report.checks.push('Motion graphics: reference cards (media reference says colour only), 1:1 disabled, no engine, layout select per scene, approval keeps layout/points/stat, result shows the reference and never the AI generation size');
   // Reduced motion: entrance animation only when motion is allowed.
   assert.equal(await page.locator('.production-progress').evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -437,7 +492,7 @@ try {
   await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '모션 그래픽', exact: true }).click();
   await page.getByRole('group', { name: '모션 그래픽 제작' }).waitFor();
   await page.getByRole('navigation', { name: '영상 제작 모드' }).getByRole('button', { name: '주제 → AI 영상', exact: true }).click();
-  await page.getByRole('region', { name: '법의 허점을 노린 천재 건축가의 아파트' }).waitFor();
+  await page.getByRole('region', { name: '아침 10분 루틴' }).waitFor();
   report.checks.push('직접 편집 and 모션 그래픽 remain reachable behind the secondary control and return to the production view');
 
   // Keyboard focus is visible on the primary control.

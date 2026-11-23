@@ -14,6 +14,7 @@ const platforms=['youtube','instagram','facebook','threads','tiktok','naver_blog
 const names={youtube:'YouTube',instagram:'Instagram',facebook:'Facebook Page',threads:'Threads',tiktok:'TikTok',naver_blog:'네이버 블로그',naver_clip:'네이버 클립',x:'X'};
 const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const now=`${today}T00:00:00Z`;const previousDate=new Date(`${today}T00:00:00Z`);previousDate.setUTCDate(previousDate.getUTCDate()-1);const yesterday=previousDate.toISOString().slice(0,10);
+let brokerView={available:{tiktok:false,threads:false,instagram:false,facebook:false,naver_blog:false},naverSearch:false,clients:{}};let torisScenario=false;const torisLogins=[],clientSaves=[];
 const channels=platforms.map(platform=>({id:`channel-${platform}`,platform,name:`검증 ${names[platform]}`,handle:`@fixture-${platform}`,url:platform==='x'?'https://x.com/fixture':'https://example.com/fixture',createdAt:now}));
 const connections=[
  {connectionId:'11111111-1111-4111-8111-111111111111',platform:'youtube',accountId:'UC-fixture-A',accountTitle:'동일 이름 계정',scopes:['read'],readAuthorized:true,publishingAuthorized:false,connected:true,needsReconnect:false},
@@ -44,6 +45,9 @@ try{
   if(command==='ai_generate'){generatedPrompts.push(args.input.prompt);return {text:'fixture 모델 초안 · 검토한 뒤 사용합니다.',provider:'codex-cli',model:''};}
   if(command==='get_dashboard')return {channels,content:[{id:'content-fixture',platform:'youtube',channelId:'channel-youtube',title:'보존할 기획 초안',body:'사용자 작성 fixture 원고',status:'draft',scheduledAt:null,url:null,createdAt:now,updatedAt:now}],trends:[],integrations:[],database:{connected:true,message:'격리된 UI fixture'}};
   if(command==='oauth_connections')return {connections,bindings,warnings:[]};
+  if(command==='oauth_connection_dispatch'&&args.input.action==='brokerConfig')return brokerView;
+  if(command==='oauth_connection_dispatch'&&args.input.action==='beginLogin'){assert.ok(torisScenario,'login only in the Toris scenario');torisLogins.push(args.input);return {connectionId:'00000000-0000-4000-8000-00000000c0de',platform:args.input.platform,purpose:args.input.purpose,pending:true,manualCallback:false};}
+  if(command==='oauth_save_client'){assert.ok(torisScenario,'client changes only in the Toris scenario');clientSaves.push(args);brokerView={...brokerView,clients:{...brokerView.clients,[args.platform]:{mode:args.input.mode==='toris'?'toris':'developer'}}};return {providers:[]};}
   if(command==='oauth_connection_dispatch'){
    assert.equal(args.input.action,'bindChannel','No OAuth/provider operation belongs to this browser fixture');
    const {channelId,connectionId,accountId}=args.input;assert.equal(channelId,'channel-youtube');assert.equal(connectionId,connections[1].connectionId);assert.equal(accountId,connections[1].accountId);
@@ -170,5 +174,20 @@ try{
  const inbox=page.getByRole('region',{name:'제작 요청과 수신 초안',exact:true});const topic=page.getByLabel('주제와 작성 방향',{exact:false});await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await topic.focus();await inbox.getByRole('button',{name:'초안 검토',exact:true}).waitFor({timeout:15000});assert.ok(await topic.evaluate(el=>el===document.activeElement),'Background receipt updates preserve keyboard focus');page.once('dialog',dialog=>dialog.accept());await inbox.getByRole('button',{name:'초안 검토',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#social-ai-manual-output')?.value==='명시적인 수신 fixture · 검토한 뒤 사용합니다.');assert.equal(generatedPrompts.length,1,'reviewing a received draft calls no model');
  report.checks.push('Keyboard navigation and remembered section context preserve unsaved work; AI로 작성 uses the selected model, and a draft received through Studio MCP is reviewed with confirmation and without a model call');
  await noOverflow('820 creation');await capture('creation-820');await page.setViewportSize({width:1380,height:900});await noOverflow('1380 creation');await capture('creation-1380');
+ // Broker reachable for TikTok: "Toris 연결 (로그인만)" is the default and needs no client ID or secret.
+ torisScenario=true;brokerView={...brokerView,available:{...brokerView.available,tiktok:true}};
+ await main.getByRole('button',{name:'SNS 관리',exact:true}).click();await page.getByRole('navigation',{name:'SNS 관리 화면',exact:true}).getByRole('button',{name:'채널',exact:true}).click();
+ await page.getByRole('button',{name:/검증 TikTok/}).click();await page.getByRole('navigation',{name:'채널 상세',exact:true}).getByRole('button',{name:'연결·권한',exact:true}).click();
+ const modes=page.getByRole('radiogroup',{name:'연결 방식'});await modes.waitFor();
+ assert.equal(await modes.getByRole('radio',{name:'Toris 연결 (로그인만)'}).isChecked(),true,'Toris connection is the default when the broker serves this platform');
+ assert.equal(await page.getByLabel('클라이언트 비밀 값',{exact:false}).count(),0,'no secret input in Toris mode');
+ await page.getByRole('button',{name:'계정 추가',exact:true}).click();await waitFixture(()=>torisLogins.length===1,'Toris login start');
+ assert.deepEqual(clientSaves,[{platform:'tiktok',input:{mode:'toris'}}],'the mode is saved, never a secret');assert.deepEqual(torisLogins[0],{action:'beginLogin',platform:'tiktok',purpose:'read'});
+ await modes.getByRole('radio',{name:'내 개발자 앱'}).check();await page.getByLabel('클라이언트 비밀 값',{exact:false}).waitFor();
+ report.checks.push('TikTok with the broker available: Toris connection is the default, saves only the mode, and the developer-app form appears only when chosen');
+ // Broker unreachable (the deployment default): only the developer-app form, as before.
+ brokerView={...brokerView,available:{...brokerView.available,tiktok:false},clients:{}};await page.getByRole('navigation',{name:'채널 상세',exact:true}).getByRole('button',{name:'성과',exact:true}).click();await page.getByRole('navigation',{name:'채널 상세',exact:true}).getByRole('button',{name:'연결·권한',exact:true}).click();
+ await page.getByLabel('클라이언트 비밀 값',{exact:false}).waitFor({state:'attached'});assert.equal(await page.getByRole('radiogroup',{name:'연결 방식'}).count(),0,'no Toris choice without a reachable broker');
+ report.checks.push('Broker unreachable: only the developer-app settings are shown');
  assert.deepEqual(errors,[]);report.passed=true;report.calls=calls.map(({command,args})=>({command,...(['oauth_connection_dispatch','analytics_dispatch'].includes(command)?{action:args.input?.action}:{})}));await writeFile(path.join(artifacts,'verification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }catch(error){report.failure=String(error);await writeFile(path.join(artifacts,'failure.json'),JSON.stringify(report,null,2));if(page){await page.screenshot({path:path.join(artifacts,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(path.join(artifacts,'failure.html'),await page.content().catch(()=>''));}throw error;}finally{try{await browser?.close();}finally{try{await server?.close();}finally{if(credentialFixture)await rm(credentialFixture,{recursive:true,force:true});}}}

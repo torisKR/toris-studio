@@ -11,8 +11,12 @@ import type { CompiledWorkflow } from "./workflow.js";
 export const ASPECTS = ["9:16", "16:9", "1:1"] as const;
 export const STYLES = ["realistic", "cinematic", "animation", "documentary"] as const;
 export const TRANSITIONS = ["cut", "fade", "dip"] as const;
-/** Scene source: licence-cleared stock photo with motion graphics, or a local AI clip. */
-export const VISUALS = ["stock", "ai"] as const;
+/** Scene source: licence-cleared stock photo shorts, a local AI clip, or a reference-styled motion graphic. */
+export const VISUALS = ["stock", "ai", "motion"] as const;
+/** Motion scene layouts. Same list and order as desktop/src-tauri/src/motion_scene.rs LAYOUTS (a test compares them). */
+export const MOTION_LAYOUTS = ["title", "stat", "list", "quote"] as const;
+/** Default reference rhythm (preferred scene length) when the host sends none. */
+export const MOTION_SCENE_SEC = 4;
 /** Ken Burns moves the Rust composer knows (desktop/src-tauri/src/production.rs CAMERAS). */
 export const CAMERAS = ["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up"] as const;
 export const MAX_ROUNDS = 2;
@@ -21,9 +25,11 @@ export const NARRATION_RATE = 7.5;
 /** Allowed gap between the sum of scene durations and the requested length. */
 export const DURATION_TOLERANCE = 1;
 
-/** Stock photo cuts are about 3.5 s like shorts; AI clips about 5 s. Same rule as production.rs scene_count. */
-export const sceneCount = (durationSec: number, visual: (typeof VISUALS)[number] = "ai") =>
-  visual === "stock" ? Math.min(12, Math.max(3, Math.ceil(durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
+/** Stock photo cuts are about 3.5 s like shorts; AI clips about 5 s; motion scenes follow the reference rhythm.
+ * Same rules as production.rs scene_count / motion_scene_count. */
+export const sceneCount = (durationSec: number, visual: (typeof VISUALS)[number] = "ai", motionSceneSec = MOTION_SCENE_SEC) =>
+  visual === "motion" ? Math.min(12, Math.max(3, Math.ceil(durationSec / motionSceneSec)))
+    : visual === "stock" ? Math.min(12, Math.max(3, Math.ceil(durationSec / 3.5))) : Math.min(12, Math.max(2, Math.ceil(durationSec / 5)));
 
 // ---- input ----
 
@@ -35,6 +41,8 @@ const Input = z.object({
   narration: z.boolean(),
   language: z.literal("ko").default("ko"),
   visual: z.enum(VISUALS).default("ai"),
+  /** Motion jobs: the reference's preferred scene length, sent by the host. Nothing else of the reference reaches the model. */
+  motionSceneSec: z.number().min(2.5).max(8).optional(),
 });
 export type ProductionInput = z.infer<typeof Input>;
 
@@ -88,6 +96,9 @@ const Scene = z.strictObject({
   emphasis: z.array(text(12, 1)).max(3, "강조 단어는 3개까지입니다.").optional(),
   camera: z.enum(CAMERAS).optional(),
   stat: z.strictObject({ value: text(12, 1), label: text(24) }).nullable().optional(),
+  // Motion graphics only: one closed layout and, for lists, 2~3 short points.
+  layout: z.enum(MOTION_LAYOUTS).optional(),
+  points: z.array(text(24, 1)).max(3, "목록 항목은 3개까지입니다.").optional(),
 });
 const StoryboardDraft = z.strictObject({
   title: text(120, 1),
@@ -101,6 +112,7 @@ export type Stat = { value: string; label: string };
 export type StoryboardScene = {
   id: string; order: number; durationSec: number; script: string; narration: string; caption: string; prompt: string; negativePrompt?: string; transition: (typeof TRANSITIONS)[number];
   search?: string; emphasis?: string[]; camera?: (typeof CAMERAS)[number]; stat?: Stat | null;
+  layout?: (typeof MOTION_LAYOUTS)[number]; points?: string[];
 };
 export type Storyboard = {
   title: string;
@@ -142,7 +154,8 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
   const problems: string[] = [];
   const notes: string[] = [];
   const stock = input.visual === "stock";
-  const expected = sceneCount(input.durationSec, input.visual);
+  const motion = input.visual === "motion";
+  const expected = sceneCount(input.durationSec, input.visual, input.motionSceneSec);
   if (draft.scenes.length !== expected) problems.push("장면 수가 " + draft.scenes.length + "개입니다. " + input.durationSec + "초 영상은 " + expected + "개여야 합니다.");
   const ids = new Set<string>();
   const topic = input.topic.toLowerCase();
@@ -161,11 +174,20 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
       const emphasis = (scene.emphasis ?? []).filter(word => caption.includes(word) || scene.narration.includes(word));
       if ((scene.emphasis ?? []).length !== emphasis.length) notes.push(n + "번 장면: 자막에 없는 강조 단어를 뺐습니다.");
       scene.emphasis = emphasis;
+    } else if (motion) {
+      if (!scene.layout) { problems.push(n + "번 장면: layout을 " + MOTION_LAYOUTS.join(", ") + " 중에서 골라야 합니다."); continue; }
+      if (scene.caption.length > 40) { problems.push(n + "번 장면: caption(화면 제목)은 40자 이하입니다."); continue; }
+      if (scene.layout === "stat" && !scene.stat) { scene.layout = "title"; notes.push(n + "번 장면: 숫자 카드가 없어 제목 배치로 바꿨습니다."); }
+      if (scene.layout !== "stat") scene.stat = null;
+      if (scene.layout === "list" && !((scene.points?.length ?? 0) >= 2)) { problems.push(n + "번 장면: list 배치에는 points 2~3개가 필요합니다."); continue; }
+      if (scene.layout !== "list") scene.points = undefined;
+      if (!scene.caption.trim() && scene.layout !== "stat") { problems.push(n + "번 장면: caption(화면 제목)이 비어 있습니다."); continue; }
+      scene.prompt = "";
     } else if (!scene.prompt.trim()) { problems.push(n + "번 장면: prompt가 비어 있습니다."); continue; }
     // Visual prompts are English; quoting the topic itself is allowed.
     if (hangulCount(scene.prompt.toLowerCase().split(topic).join(" "))) { problems.push(n + "번 장면: prompt는 영어로 화면만 묘사해야 합니다."); continue; }
     let prompt = scene.prompt;
-    if (!stock && !prompt.toLowerCase().includes(consistency.toLowerCase())) {
+    if (!stock && !motion && !prompt.toLowerCase().includes(consistency.toLowerCase())) {
       const joined = prompt.replace(/[\s.,;]+$/, "") + ", " + consistency;
       if (joined.length > 600) { problems.push(n + "번 장면: 공통 스타일 문구를 넣으면 prompt가 600자를 넘습니다."); continue; }
       prompt = joined;
@@ -182,6 +204,7 @@ export function checkStoryboard(raw: unknown, input: ProductionInput, source: So
       id: scene.id, order: n, durationSec: Math.round(scene.durationSec * 10) / 10, script: scene.script, narration, caption: scene.caption, prompt,
       ...(scene.negativePrompt ? { negativePrompt: scene.negativePrompt } : {}), transition: scene.transition,
       ...(stock ? { search: scene.search, emphasis: scene.emphasis ?? [], camera: scene.camera ?? CAMERAS[index % CAMERAS.length], stat: scene.stat ?? null } : {}),
+      ...(motion ? { layout: scene.layout, stat: scene.stat ?? null, ...(scene.points ? { points: scene.points } : {}) } : {}),
     });
   }
   const total = scenes.reduce((sum, scene) => sum + scene.durationSec, 0);
@@ -215,12 +238,23 @@ export const STOCK_SYSTEM = [
   "JSON 객체 하나만 출력한다: {\"title\":\"...\",\"headline\":{\"top\":\"...\",\"bottom\":\"...\"},\"story\":\"...\",\"style\":{\"look\":\"documentary photo\",\"palette\":\"natural\",\"consistency\":\"real photos\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":3.5,\"script\":\"...\",\"narration\":\"...\",\"caption\":\"...\",\"prompt\":\"\",\"transition\":\"cut\",\"search\":\"...\",\"emphasis\":[\"...\"],\"camera\":\"zoom-in\",\"stat\":null}]}",
 ].join("\n");
 
+/** Motion graphics shorts: the model writes the words and picks one closed layout per scene; colours, sizes and timing come from the reference in Rust. */
+export const MOTION_SYSTEM = [
+  "너는 모션 그래픽 쇼츠의 작가다. 글자·숫자·목록이 움직이는 짧은 설명 영상을 기획한다. 실사 영상이나 사진은 쓰지 않는다.",
+  "규칙: 주어진 주제만 다루고 사실·수치·인물·브랜드를 지어내지 않는다. 확실하지 않은 숫자는 쓰지 않는다. 어떤 필드에도 URL, 파일 경로, 코드, 명령을 넣지 않는다.",
+  "장면마다 layout을 " + MOTION_LAYOUTS.join(", ") + " 중 하나로 고른다. title은 화면 제목 한 줄과 짧은 설명, stat은 주제에 이미 있는 확실한 숫자 하나, list는 points 2~3개(각 24자 이하), quote는 인용하거나 강조할 한 문장이다.",
+  "숫자가 확실하지 않으면 stat을 쓰지 말고 title을 쓴다. stat 장면에만 stat을 넣는다: {\"value\":\"10분\",\"label\":\"아침 준비 시간\"}. 같은 layout을 3번 연속 쓰지 않는다.",
+  "caption은 화면에 크게 보일 제목 또는 인용문(40자 이하), narration은 읽을 문장, script는 장면 설명이다. prompt는 빈 문자열로 두고 search는 넣지 않는다.",
+  "첫 장면은 질문이나 반전으로 시작하고, 마지막 장면은 결론이나 한 줄 정리로 끝낸다. transition은 cut, fade, dip 중 하나. id는 영문·숫자·-·_. 아래 필드 외에는 넣지 않는다.",
+  "JSON 객체 하나만 출력한다: {\"title\":\"...\",\"story\":\"...\",\"style\":{\"look\":\"motion graphics\",\"palette\":\"reference\",\"consistency\":\"reference layout\"},\"scenes\":[{\"id\":\"s1\",\"order\":1,\"durationSec\":4,\"script\":\"...\",\"narration\":\"...\",\"caption\":\"...\",\"prompt\":\"\",\"transition\":\"cut\",\"layout\":\"title\"},{\"id\":\"s2\",\"order\":2,\"durationSec\":4,\"script\":\"...\",\"narration\":\"...\",\"caption\":\"...\",\"prompt\":\"\",\"transition\":\"fade\",\"layout\":\"list\",\"points\":[\"...\",\"...\"]}]}",
+].join("\n");
+
 export function storyboardPrompt(input: ProductionInput, task: string, feedback: string): string {
-  const count = sceneCount(input.durationSec, input.visual);
+  const count = sceneCount(input.durationSec, input.visual, input.motionSceneSec);
   const lines = [
     "주제: " + input.topic,
     "영상 길이: " + input.durationSec + "초 · 화면 비율 " + input.aspect + " · 스타일 " + input.style,
-    "장면 수: 정확히 " + count + "개. 장면 길이는 2~12초, 합계는 " + input.durationSec + "초(±" + DURATION_TOLERANCE + "초)." + (input.visual === "stock" ? " 사진 장면이니 3~4초 단위로 빠르게 넘긴다." : ""),
+    "장면 수: 정확히 " + count + "개. 장면 길이는 2~12초, 합계는 " + input.durationSec + "초(±" + DURATION_TOLERANCE + "초)." + (input.visual === "stock" ? " 사진 장면이니 3~4초 단위로 빠르게 넘긴다." : input.visual === "motion" ? " 모션 그래픽 장면이니 장면마다 layout을 고른다." : ""),
     input.narration
       ? "나레이션: 한국어. 장면 길이 1초당 한글 " + NARRATION_RATE + "자 이하(5초 장면이면 " + Math.floor(5 * NARRATION_RATE) + "자 이하)."
       : "나레이션: 없음. narration은 빈 문자열로 둔다.",
@@ -251,13 +285,20 @@ function plainTopic(topic: string): string {
     .replace(/\s+/g, " ").trim() || "주제";
 }
 
+const TEMPLATE_LAYOUTS = ["title", "list", "quote"] as const;
+function templateMotion(i: number): Pick<StoryboardScene, "layout" | "points" | "stat"> {
+  const layout = TEMPLATE_LAYOUTS[i % TEMPLATE_LAYOUTS.length];
+  return { layout, stat: null, ...(layout === "list" ? { points: ["[템플릿] 항목 1", "[템플릿] 항목 2"] } : {}) };
+}
+
 /** Model-free storyboard from topic + style. Labelled everywhere so nobody mistakes it for AI output. */
 export function templateStoryboard(input: ProductionInput): Storyboard {
   const topic = plainTopic(input.topic);
   const short = topic.length > 12 ? topic.slice(0, 12) + "…" : topic;
   const { look, palette } = STYLE_LOOK[input.style];
   const stock = input.visual === "stock";
-  const count = sceneCount(input.durationSec, input.visual);
+  const motion = input.visual === "motion";
+  const count = sceneCount(input.durationSec, input.visual, input.motionSceneSec);
   const base = Math.floor(input.durationSec / count);
   // Latin words in the topic (brand or place names) are the only search words a template can know.
   const latin = topic.toLowerCase().replace(/[^a-z0-9- ]+/g, " ").trim().split(/\s+/).filter(w => w.length > 1).slice(0, 4).join(" ");
@@ -271,11 +312,13 @@ export function templateStoryboard(input: ProductionInput): Storyboard {
       script: "[템플릿] " + (i === 0 ? "도입" : i === count - 1 ? "마무리" : "전개 " + i) + " 장면입니다. AI가 쓴 대본이 아니니 직접 채우세요.",
       // Short enough for the 3-second scenes an 11-second video gets (≤ 22 Korean chars).
       narration: input.narration ? "템플릿 나레이션 " + (i + 1) + "번입니다." : "",
-      caption: short,
-      prompt: stock ? "" : (beat + " about \"" + topic + "\", " + look + ", " + palette + ", " + TEMPLATE_CONSISTENCY).slice(0, 600),
+      caption: motion ? "[템플릿] " + short : short,
+      prompt: stock || motion ? "" : (beat + " about \"" + topic + "\", " + look + ", " + palette + ", " + TEMPLATE_CONSISTENCY).slice(0, 600),
       transition: i === 0 ? "cut" : "fade",
       // Without a model, photos are searched only by Latin words in the topic; otherwise the scene gets a drawn card.
       ...(stock ? { search: latin, emphasis: [], camera: CAMERAS[i % CAMERAS.length], stat: null } : {}),
+      // A template never invents numbers, so it cycles the layouts that need none.
+      ...(motion ? templateMotion(i) : {}),
     };
   });
   return {
@@ -314,9 +357,9 @@ export function buildVideoProduction(ctx: RunContext): CompiledWorkflow {
   const source: Source = { template: false, provider: ctx.model.provider, model: ctx.model.model };
   const plan = async (s: ProductionS) => {
     if (!input) return {};
-    ctx.emit("supervisor", "thinking", s.rounds ? "검사에서 걸린 부분을 고쳐 스토리보드를 다시 씁니다." : "스토리보드를 쓰고 있습니다.", { detail: input.durationSec + "초 · " + input.aspect + " · " + input.style + " · 장면 " + sceneCount(input.durationSec, input.visual) + "개" + (input.visual === "stock" ? " · 사진 쇼츠" : "") });
+    ctx.emit("supervisor", "thinking", s.rounds ? "검사에서 걸린 부분을 고쳐 스토리보드를 다시 씁니다." : "스토리보드를 쓰고 있습니다.", { detail: input.durationSec + "초 · " + input.aspect + " · " + input.style + " · 장면 " + sceneCount(input.durationSec, input.visual, input.motionSceneSec) + "개" + (input.visual === "stock" ? " · 사진 쇼츠" : input.visual === "motion" ? " · 모션 그래픽" : "") });
     try {
-      return { rounds: s.rounds + 1, raw: await ask(ctx, input.visual === "stock" ? STOCK_SYSTEM : STORYBOARD_SYSTEM, [{ role: "user", content: storyboardPrompt(input, s.task, s.feedback) }]) };
+      return { rounds: s.rounds + 1, raw: await ask(ctx, input.visual === "stock" ? STOCK_SYSTEM : input.visual === "motion" ? MOTION_SYSTEM : STORYBOARD_SYSTEM, [{ role: "user", content: storyboardPrompt(input, s.task, s.feedback) }]) };
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       const reason = errorText(error);

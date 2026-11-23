@@ -662,3 +662,18 @@ button.social-external { border: 0; background: transparent; color: inherit; pad
 .social-footer, .social-sidebar-bottom { font-size: 11px; }
 @media (max-width: 820px) { .social-main { min-width: 0; } .social-nav button { font-size: 13px; } }
 @media (max-width: 768px) { .social-nav button { font-size: 13px; min-height: 43px; } .social-page-heading p { font-size: 12px; } }
+
+/* Settings readiness: one row per feature, state by icon + text, the fix button on the right. */
+.settings-readiness h2 { display: flex; align-items: center; gap: 9px; margin: 0 0 8px; font-size: 15px; font-weight: 600; color: #dce7f1; }
+.settings-readiness h2 svg { color: #a1d4ba; }
+.settings-readiness-loading { display: flex; align-items: center; gap: 8px; color: var(--social-muted); font-size: 12px; }
+.settings-readiness-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--social-line); border-radius: 8px; overflow: hidden; }
+.settings-readiness-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; min-height: 52px; padding: 9px 14px; background: var(--social-inset); }
+.settings-readiness-list li + li { border-top: 1px solid var(--social-line); }
+.settings-readiness-list li > svg { color: #e6be83; }
+.settings-readiness-list li[data-ready] > svg { color: #8ae3bb; }
+.settings-readiness-list li > div { display: grid; gap: 3px; min-width: 0; }
+.settings-readiness-list strong { font-size: 13px; font-weight: 600; color: #dce7f1; overflow-wrap: anywhere; }
+.settings-readiness-list span { font-size: 12px; line-height: 1.6; color: #e6be83; overflow-wrap: anywhere; }
+.settings-readiness-list li[data-ready] span { color: #8ae3bb; }
+@media (max-width: 640px) { .settings-readiness-list li { grid-template-columns: 16px minmax(0, 1fr); } .settings-readiness-list li > .social-button { grid-column: 2; justify-self: start; } }

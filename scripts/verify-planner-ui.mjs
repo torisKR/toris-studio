@@ -17,6 +17,7 @@ let work = [
   { id: 'w2', title: 'CI 실패 확인', notes: '', status: 'doing', dueAt: null, productId: null, source: 'ops', updatedAt: day(0, 9) },
 ];
 const calls = [];
+let calendarProvider = { platform: 'google_calendar', clientConfigured: false, clientMode: null, torisAvailable: true, connected: false, needsReconnect: false, redirectUri: null };
 const server = await createFixtureServer({ server: { port: 0, strictPort: false } }); await server.listen();
 const browser = await chromium.launch({ headless: true });
 try {
@@ -29,6 +30,9 @@ try {
     if (command === 'planner_save_event') { const e = { id: args.input.id ?? 'e-new', notes: '', link: 'none', linkId: null, synced: false, studioOwned: false, ...args.input }; events = [...events.filter(x => x.id !== e.id), e]; return e; }
     if (command === 'planner_delete_event') { events = events.filter(e => e.id !== args.id); return null; }
     if (command === 'planner_save_work_item') { const w = { id: args.input.id ?? 'w-new', productId: null, source: 'manual', updatedAt: day(0, 10), ...args.input }; work = [...work.filter(x => x.id !== w.id), w]; return w; }
+    if (command === 'oauth_status') return { providers: [calendarProvider] };
+    if (command === 'oauth_begin_login') return { pending: true };
+    if (command === 'oauth_save_client') { calendarProvider = args.input.mode === 'toris' ? { ...calendarProvider, clientMode: 'toris', clientConfigured: true, redirectUri: 'http://127.0.0.1:38471/oauth/google_calendar/callback' } : { ...calendarProvider, clientMode: 'developer', clientConfigured: true, redirectUri: args.input.redirectUri }; return { providers: [calendarProvider] }; }
     if (command === 'planner_sync_calendar') return { pushed: 1, pulled: 0, imported: 2, conflicts: 0, reverted: 1, deleted: 0, fullResync: false };
     if (command.startsWith('plugin:event|')) return 1;
     const shared = shellFixture(command, args); if (shared !== unhandled) return shared;
@@ -50,6 +54,38 @@ try {
   assert.equal(await planner.locator('li[data-owned]').getByRole('button', { name: '편집' }).count(), 0, 'a publication event cannot be edited here');
   assert.equal(await planner.locator('li[data-late]').count(), 1);
   report.checks.push('Upcoming days, the Studio-owned publication event, overdue work and sync status render from planner_today');
+
+  // Toris 연결 for Google: no client input; the first login saves the Toris connection, then logs in.
+  const connect = planner.locator('.planner-calendar-connect');
+  await connect.getByRole('button', { name: 'Google 로그인' }).waitFor();
+  assert.equal(await connect.getByLabel('OAuth 클라이언트 ID').isVisible(), false, 'the own-client form stays folded');
+  await connect.getByText('확인되지 않은 앱', { exact: false }).first().waitFor();
+  assert.equal(await connect.getByText('7일', { exact: false }).count(), 0, 'no weekly re-login notice for a published app');
+  const before = calls.length;
+  await connect.getByRole('button', { name: 'Google 로그인' }).click();
+  await connect.getByRole('status').waitFor();
+  const loginCalls = calls.slice(before).filter(c => c.command.startsWith('oauth_save_client') || c.command === 'oauth_begin_login');
+  assert.deepEqual(loginCalls.map(c => [c.command, c.args]), [
+    ['oauth_save_client', { platform: 'google_calendar', input: { mode: 'toris' } }],
+    ['oauth_begin_login', { platform: 'google_calendar' }],
+  ], 'Toris mode is saved before the login starts');
+  await connect.getByText('내 Google 클라이언트 사용').click();
+  await connect.getByText('클라이언트 보안 비밀', { exact: false }).first().waitFor();
+  assert.ok((await connect.locator('label', { hasText: '클라이언트 보안 비밀' }).first().textContent()).includes('필수'), 'the own client secret is labelled required');
+  await connect.getByLabel('OAuth 클라이언트 ID').fill('mine.apps.googleusercontent.com');
+  await connect.getByRole('button', { name: '저장' }).click();
+  await connect.getByRole('button', { name: 'Toris 연결로 되돌리기' }).waitFor();
+  assert.deepEqual(calls.findLast(c => c.command === 'oauth_save_client').args, { platform: 'google_calendar', input: { clientId: 'mine.apps.googleusercontent.com', redirectUri: 'http://127.0.0.1:38471/oauth/google_calendar/callback' } });
+  const ownLogin = calls.length;
+  await connect.getByRole('button', { name: 'Google 로그인' }).click();
+  await page.waitForFunction(n => true, ownLogin);
+  await connect.getByRole('status').waitFor();
+  assert.deepEqual(calls.slice(ownLogin).filter(c => c.command === 'oauth_save_client'), [], 'logging in with the own client keeps it');
+  await connect.getByRole('button', { name: 'Toris 연결로 되돌리기' }).click();
+  await connect.getByRole('button', { name: 'Toris 연결로 되돌리기' }).waitFor({ state: 'detached' });
+  assert.deepEqual(calls.findLast(c => c.command === 'oauth_save_client').args, { platform: 'google_calendar', input: { mode: 'toris' } });
+  calendarProvider = { ...calendarProvider, connected: true };
+  report.checks.push('Calendar: Toris 연결 logs in without client input (mode saved first), shows the unverified-app notice, own client (secret required) can override and be reverted');
 
   await planner.getByRole('button', { name: '일정 추가' }).click();
   const dialog = page.getByRole('dialog', { name: '일정 추가' });
@@ -80,6 +116,17 @@ try {
   await page.setViewportSize({ width: 820, height: 900 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'no horizontal overflow at 820px');
   report.checks.push('No horizontal overflow at 820px');
+
+  // Google switched off at the broker: only the user's own client form, as before.
+  calendarProvider = { platform: 'google_calendar', clientConfigured: false, clientMode: null, torisAvailable: false, connected: false, needsReconnect: false, redirectUri: null };
+  await page.setViewportSize({ width: 1380, height: 1000 });
+  await page.reload({ waitUntil: 'networkidle' });
+  await openSection(page, '운영', '일정·작업');
+  const offline = page.getByRole('region', { name: '일정과 작업' }).locator('.planner-calendar-connect');
+  await offline.getByLabel('OAuth 클라이언트 ID').first().waitFor();
+  assert.equal(await offline.getByRole('button', { name: 'Google 로그인' }).count(), 0);
+  assert.equal(await offline.getByText('확인되지 않은 앱', { exact: false }).count(), 0, 'the notice is about the Toris client only');
+  report.checks.push('Calendar without Google at the broker shows only the own-client form');
   assert.deepEqual(report.errors, []);
   report.passed = true;
   console.log(JSON.stringify(report, null, 2));

@@ -68,14 +68,32 @@ narration: boolean, subtitleStyle: "shorts-bold" | "clean-bottom" | "none", bgm:
 { title, story, style:{look, palette, consistency}, scenes:[{ id, order, durationSec(2~12), script, narration, caption, prompt(영문 ≤600), negativePrompt?, transition:"cut"|"fade"|"dip" }] }
 장면 수 = ceil(durationSec / 5) 범위 2~12. 알 수 없는 필드·URL·경로·코드 블록 거부.
 
-## 장면 소스 (0.6.0)
+## 장면 소스 (0.6.0, motion 추가)
 
-visual: "stock"(기본) | "ai". layout: "card"(기본, 쇼츠 카드) | "full".
+visual: "stock"(기본, 화면 이름 "실제 사진 쇼츠") | "ai" | "motion". layout: "card"(기본, 쇼츠 카드) | "full".
+
+Wan2.1 엔진을 쓰는지는 `production::needs_engine(visual)` 하나로 정합니다(`visual == "ai"`). 엔진 설치 확인·provenance의 영상 모델 표기·게시 문구가 모두 이 함수를 따릅니다.
 
 - stock: 기획 모델이 장면마다 영어 사진 검색어(search), 노란 강조 단어(emphasis, 자막에 실제로 있는 단어만), 카메라 움직임(camera: zoom-in·zoom-out·pan-left·pan-right·pan-up), 숫자 카드(stat {value≤12자, label≤24자})와 상단 두 줄 제목(headline top·bottom ≤18자)을 데이터로 냅니다. Rust가 장면마다 Openverse → Commons 순으로 검색하고(전체 검색어 → 앞 두 단어 → 뒤 두 단어), 라이선스·호스트·크기·방송사 검사를 통과한 사진 3장을 미리 내려받아 후보로 보여 줍니다. 승인할 때 고른 사진(imageId)을 쓰고, 내려받기에 실패하면 다음 후보, 그래도 없으면 자막을 크게 넣은 그래픽 장면으로 바꾸고 작업 기록에 남깁니다.
 - 장면 수: stock은 약 3.5초 컷(ceil(길이/3.5), 3~12개), ai는 약 5초(2~12개).
 - 쇼츠 카드 구성(9:16 기준 1080×1920): 위 150~440px 두 줄 제목(흰색·노란색), 470~1530px 사진(카메라 움직임), 사진 아래쪽 강조 자막(검은 상자, 노란 강조 단어, 팝인), 가운데 숫자 카드(페이드·상승), 1556px 출처 줄, 1522px 진행 막대. 16:9·1:1은 같은 순서로 비율에 맞춥니다. 모든 글자는 앱이 PNG로 그리고 FFmpeg 필터에는 숫자와 닫힌 값만 들어갑니다.
 - 결과: provenance.json의 credits와 SNS 게시 초안 설명의 "사진 출처" 목록, 결과 화면의 사진 출처 펼침.
+
+- motion: 글자·숫자·목록이 움직이는 모션 그래픽을 Rust CPU 합성기(`graphics_render.rs`, `scene.graphics` v1)가 그립니다. 영상 엔진·GPU·TTS 정지가 필요 없습니다.
+  - 설정: 화면 비율은 9:16·16:9만(graphics v1에 정사각 캔버스가 없어 1:1은 화면에서 막고 Rust가 거부), layout은 "full"만, `reference`(레퍼런스 ID, 비우면 `builtin-midnight-data`). 다른 장면 소스에 reference를 보내면 거부합니다.
+  - 레퍼런스: 작업을 만들 때 레퍼런스 전체를 job.json의 `reference`에 스냅샷으로 저장합니다. 나중에 레퍼런스를 고치거나 지워도 진행 중인 작업과 캐시 키는 바뀌지 않습니다. 스키마는 [모션 그래픽 레퍼런스](MOTION_GRAPHICS.md#레퍼런스)를 봅니다.
+  - 기획: 노드 런타임은 레퍼런스의 권장 장면 길이 `motionSceneSec`(2.5~8초)만 받습니다. 장면 수 = ceil(길이 / motionSceneSec), 3~12개(`motion_scene_count`). 시스템 프롬프트는 `MOTION_SYSTEM`이고 레퍼런스 내용은 모델에 가지 않습니다.
+  - 스토리보드 장면 필드(motion일 때만 출력): `layout`: "title" | "stat" | "list" | "quote", `points`: list일 때만 2~3개 × 24자 이하. stat은 기존 `stat` 카드가 필요하고, caption(화면 제목)은 40자 이하이며 stat 외에는 비울 수 없습니다. 차트 배치는 없습니다(주제만으로는 확인된 수치가 없음).
+  - 장면: `motion_scene::build(scene, reference, aspect, subtitleStyle)`가 배치·글자 크기·색·등장 시각을 결정적으로 계산해 graphics v1 장면을 만들고, `graphics_export::render_at`으로 장면 MP4를 렌더합니다(영상 작업 잠금 사용). 배치 규칙(LAYOUT_VERSION 4):
+    - 자막 띠는 합성기 위치 그대로 비웁니다(shorts-bold: 높이 62%부터 최대 256px, clean-bottom: 아래 h/12 위로 최대 186px). 글자는 띠 위, 띠가 없으면 화면 전체에 둡니다. 띠 아래 안전 영역(또는 자막이 없을 때 화면 맨 아래 줄)에는 장면 번호와 강조 막대를 둡니다.
+    - 짧은 제목·숫자·인용은 안전 폭의 약 82%를 채우도록 키우고(최대 260px), 본문·목록은 제목이 커진 만큼의 절반을 따라 커집니다. 제목·숫자·목록 장면은 글 묶음을 쓸 수 있는 높이의 70%에 펼칩니다. 글자가 들어가지 않으면 함께 줄이고, 그래도 넘치면 오류로 멈춥니다.
+    - decor: block은 제목 뒤 큰 색 면(왼쪽 끝까지), ring은 화면 밖으로 일부 나가는 큰 고리(원+배경색 구멍). 고리는 글 묶음·점·카드·색 면·장면 번호 줄과 자막 띠를 모두 피해 빈 곳에만 둡니다: 모서리부터 가장자리를 따라 24px 여유를 두고 들어가는 가장 큰 크기(짧은 변의 22~52% 반지름)를 고르고, 들어갈 자리가 없으면 그 장면에서는 고리를 빼며, underline은 굵은 밑줄. 색 면·고리 색은 글자 대비가 충분한 팔레트 색만 씁니다. composition panel은 여백 56px의 surface 카드, left-rail은 굵은 세로 선입니다.
+    - 장식은 레퍼런스의 `motion.accent`대로 등장합니다(draw는 도형에서 보이지 않아 slide로 바꿈). exit가 fade-out이면 장면 번호 옆 막대만 끝에서 사라집니다. 고리는 색 원이 accent대로 등장하고 배경색 구멍은 첫 프레임부터 있어, 어느 프레임에서도(나레이션이 길어 마지막 프레임을 붙잡을 때 포함) 반투명 원판이 되지 않습니다.
+    - 알려진 한계: 16:9에 자막 띠가 있고 composition이 panel이면 카드 여백 때문에 높이가 모자라 제목이 안전 폭의 82%까지 커지지 못하고 줄어듭니다.
+  - 캐시 키 = sha256({kind:"motion", layout: LAYOUT_VERSION, graphics, width}). 문구·레퍼런스 스냅샷·비율·자막 스타일·길이가 graphics에 모두 들어갑니다. 배치 코드를 바꾸면 `LAYOUT_VERSION`을 올립니다.
+  - 편집: 나레이션이 장면보다 길면 AI 클립처럼 반복하지 않고 마지막 프레임을 유지합니다(`tpad=stop_mode=clone`). 나레이션이 없으면 화면 제목과 겹치는 자막을 넣지 않습니다.
+  - 장면 재생성: 같은 입력이면 같은 프레임이 나오므로 화면은 실패한 장면에만 "다시 렌더"를 보여 줍니다.
+  - provenance: 구성 요소 `role: "motion"`(합성기, LAYOUT_VERSION, 레퍼런스 id·이름·출처). Wan2.1을 표기하지 않습니다. 게시 초안 태그는 "모션그래픽"입니다.
 
 IPC 추가: production_find_images({jobId, sceneId, query}) → 스토리보드 확인 중 한 장면의 사진 후보를 다시 찾습니다. 장면 재생성은 stock 장면에서 "다른 사진으로"(다음 후보)입니다.
 

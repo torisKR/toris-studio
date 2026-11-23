@@ -1,0 +1,219 @@
+[
+  {
+    "id": "broker.hmac-skipped",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!signed) return fail('state_invalid');",
+    "replace": "if (false) return fail('state_invalid');",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.expiry-sign-flipped",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "(payload.e as number) < Math.floor",
+    "replace": "(payload.e as number) > Math.floor",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.origin-allowed",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (request.headers.has('origin')) return fail('origin_forbidden');",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.search-allowlist-removed",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "items: searchItems(result.items, display)",
+    "replace": "items: result.items",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.platform-swap-allowed",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!sameText(payload.p, platform)) return fail('state_invalid');",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.redirect-unchecked",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!sameText(redirectUri, REDIRECT[platform])) return fail('redirect_mismatch');",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.verifier-unchecked",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!sameText(await sha256(verifier), payload.c)) return fail('verifier_mismatch');",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.tiktok-drops-verifier",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "redirect_uri: redirect, code_verifier: verifier",
+    "replace": "redirect_uri: redirect, code_verifier: state",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.rate-limit-ignored",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!success) throw new Failure('rate_limited', {}, RATE_LIMIT_RETRY_SECONDS);",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.version-check-skipped",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (order < 0) throw",
+    "replace": "if (false) throw",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.unknown-fields-accepted",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (Object.keys(value).some(key => !allowed.includes(key))) return fail('bad_request');",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.body-size-unbounded",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (size > cap) { await reader.cancel(); return null; }",
+    "replace": "",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.budget-ignored",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "if (!await consumeBudget(env.SEARCH_BUDGET, budget)) return fail('quota_exhausted');",
+    "replace": "await consumeBudget(env.SEARCH_BUDGET, budget);",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.budget-never-resets",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "const used = usage?.day === day ? usage.count : 0;",
+    "replace": "const used = usage ? usage.count : 0;",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.instagram-data-not-unwrapped",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "const token = Array.isArray(body.data) && body.data[0] && typeof body.data[0] === 'object' ? body.data[0] as Json : body;",
+    "replace": "const token = body;",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.facebook-short-lived-returned",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "return facebookLongLived(id, secret, short.access_token as string);",
+    "replace": "return short;",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.token-fields-passthrough",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "const out: Json = { access_token: token.access_token, token_type: 'bearer', expires_in: expires };",
+    "replace": "const out: Json = { ...token, token_type: 'bearer', expires_in: expires };",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-drops-verifier",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "code, code_verifier: verifier, grant_type: 'authorization_code', redirect_uri: redirect }));",
+    "replace": "code, grant_type: 'authorization_code', redirect_uri: redirect }));",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-calendar-uses-youtube-redirect",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "google_calendar: 'http://127.0.0.1:38471/oauth/google_calendar/callback'",
+    "replace": "google_calendar: 'http://127.0.0.1:38471/oauth/youtube/callback'",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-refresh-no-secret",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "{ client_id: id, client_secret: secret, grant_type: 'refresh_token', refresh_token: refreshToken }",
+    "replace": "{ client_id: id, grant_type: 'refresh_token', refresh_token: refreshToken }",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-invalid-client-rejected",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "error !== 'invalid_grant') return fail('provider_unavailable');",
+    "replace": "error !== 'invalid_grant') return tokenFrom(result);",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-enabled-without-secret",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "youtube: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],",
+    "replace": "youtube: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_ID'],",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-errorless-4xx-rejected",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "result.status >= 400 && result.status < 500 && error !== 'invalid_grant'",
+    "replace": "result.status >= 400 && result.status < 500 && error !== undefined && error !== 'invalid_grant'",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "callback.relay-copies-all-keys",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "for (const key of RELAYED_KEYS) {",
+    "replace": "for (const key of new Set([...RELAYED_KEYS, ...params.keys()])) {",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.relay-unvalidated",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "if (values[0].length > MAX_RELAYED_VALUE || !URL_SAFE.test(values[0])) return null;",
+    "replace": "",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.relay-duplicates-allowed",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "if (values.length > 1) return null;",
+    "replace": "",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.meta-callback-proxied",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "const meta = incomingUrl.hostname === 'toris.kr' ? META_CALLBACK.exec(incomingUrl.pathname) : null;",
+    "replace": "const meta = null as RegExpExecArray | null;",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.relay-any-state",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": " && isBrokerState(incomingUrl.searchParams, meta[1])",
+    "replace": "",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.broker-platform-unchecked",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "return p === platform && typeof k === 'string' && Number.isSafeInteger(e);",
+    "replace": "return typeof k === 'string' && Number.isSafeInteger(e);",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.broker-fields-unchecked",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": "return p === platform && typeof k === 'string' && Number.isSafeInteger(e);",
+    "replace": "return p === platform;",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  },
+  {
+    "id": "callback.broker-payload-unbounded",
+    "file": "infrastructure/oauth-callback/worker.ts",
+    "find": " || parts[1].length > MAX_STATE_PAYLOAD",
+    "replace": "",
+    "test": "infrastructure/oauth-callback/callback.test.mjs"
+  }
+]

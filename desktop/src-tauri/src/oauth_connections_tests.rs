@@ -946,3 +946,851 @@ async fn disconnect_cleanup_database_recovery_holds_all_jobs_and_preserves_impor
         .map_err(|_| "fixture source cleanup")?;
     Ok(())
 }
+
+#[test]
+fn every_google_login_and_tiktok_use_pkce() {
+    for p in PROVIDERS {
+        let expected = matches!(
+            p,
+            Provider::Youtube | Provider::GoogleCalendar | Provider::Tiktok
+        );
+        assert_eq!(uses_pkce(p), expected, "{}", p.id());
+    }
+}
+
+#[test]
+fn google_scopes_are_space_separated_and_others_comma() {
+    assert_eq!(scope_separator(Provider::GoogleCalendar), " ");
+    assert_eq!(scope_separator(Provider::Youtube), " ");
+    assert_eq!(scope_separator(Provider::Threads), ",");
+    assert_eq!(scope_separator(Provider::Tiktok), ",");
+}
+
+fn provider_row(status: &Value, id: &str) -> Value {
+    status["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["platform"] == id)
+        .unwrap()
+        .clone()
+}
+
+// ---- Toris broker mode ----
+
+const BROKER_STATE: &str = "eyJrIjoiazEiLCJwIjoidGlrdG9rIiwiZSI6OTk5OTk5OTk5OX0.c2lnbmF0dXJl";
+fn toris_service() -> (Arc<OAuthService>, Arc<crate::oauth::tests::MockTransport>) {
+    let (_, store, transport, clock) = fixture();
+    (
+        Arc::new(OAuthService::new(store, transport.clone(), clock).with_callback_port(0)),
+        transport,
+    )
+}
+fn state_of(started: &Value) -> String {
+    Url::parse(started["authorizationUrl"].as_str().unwrap())
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .to_string()
+}
+
+#[tokio::test]
+async fn toris_login_exchanges_through_the_broker_and_never_holds_a_secret() {
+    let (service, transport) = toris_service();
+    service
+        .save_client(Provider::Tiktok, json!({"mode":"toris"}))
+        .await
+        .unwrap();
+    transport.responses.lock().unwrap().extend([
+        Ok(json!({"v":1,"state":BROKER_STATE,"clientId":"tt-public-key","redirectUri":"http://127.0.0.1:38471/oauth/tiktok/callback","expiresAt":"2030-01-01T00:00:00Z"})),
+        Ok(json!({"v":1,"access_token":"tt-access","token_type":"bearer","expires_in":86400,"refresh_token":"tt-refresh","refresh_expires_in":15552000,"scope":"user.info.basic,user.info.stats,video.list","long_lived":false})),
+        Ok(json!({"data":{"user":{"open_id":"open-1","display_name":"Tori"}},"error":{"code":"ok","message":"","log_id":"x"}})),
+    ]);
+    let started = begin_connection(&service, Provider::Tiktok, "read", None)
+        .await
+        .unwrap();
+    let auth = started["authorizationUrl"].as_str().unwrap();
+    assert!(auth.contains("client_key=tt-public-key"), "{auth}");
+    assert_eq!(
+        state_of(&started),
+        BROKER_STATE,
+        "the broker's signed state is used as-is"
+    );
+    let start = transport.broker_requests.lock().unwrap()[0].clone();
+    assert_eq!(start.path, "/v1/oauth/tiktok/start");
+    let challenge = start.body.as_ref().unwrap()["challenge"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(challenge.len(), 43);
+    assert_eq!(start.body.as_ref().unwrap()["purpose"], "read");
+    let id = started["connectionId"].as_str().unwrap();
+    let result = complete_connection(
+        &service,
+        id,
+        &format!(
+            "http://127.0.0.1:38471/oauth/tiktok/callback?code=auth-code-1&state={BROKER_STATE}"
+        ),
+    )
+    .await
+    .unwrap();
+    let token = transport.broker_requests.lock().unwrap()[1].clone();
+    assert_eq!(token.path, "/v1/oauth/tiktok/token");
+    let body = token.body.unwrap();
+    let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["code", "redirectUri", "state", "verifier"],
+        "only the broker's allowed fields"
+    );
+    assert_eq!(body["code"], "auth-code-1");
+    assert_eq!(
+        body["redirectUri"],
+        "http://127.0.0.1:38471/oauth/tiktok/callback"
+    );
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(Sha256::digest(
+            body["verifier"].as_str().unwrap().as_bytes()
+        )),
+        challenge,
+        "verifier proves the login that started"
+    );
+    for request in transport.requests.lock().unwrap().iter() {
+        assert!(
+            request.parameters.iter().all(|(k, _)| k != "client_secret"),
+            "no secret leaves the app"
+        );
+        assert_ne!(
+            request.endpoint,
+            Provider::Tiktok.token_endpoint(),
+            "the provider token endpoint is not called directly"
+        );
+    }
+    let c = read_connection(&service, id).unwrap();
+    assert_eq!(
+        (
+            c.client.mode,
+            c.client.client_secret.clone(),
+            c.client.broker.as_deref()
+        ),
+        (ClientMode::Toris, None, Some(TORIS_BROKER))
+    );
+    assert_eq!(c.session.refresh_token.as_deref(), Some("tt-refresh"));
+    let public = result.to_string();
+    for secret in [
+        "tt-access",
+        "tt-refresh",
+        "auth-code-1",
+        BROKER_STATE,
+        body["verifier"].as_str().unwrap(),
+    ] {
+        assert!(!public.contains(secret), "{secret} leaked to IPC");
+    }
+}
+
+#[tokio::test]
+async fn toris_meta_login_takes_the_long_lived_token_in_one_call_and_accepts_the_loopback_relay() {
+    let (service, transport) = toris_service();
+    service
+        .save_client(Provider::Threads, json!({"mode":"toris"}))
+        .await
+        .unwrap();
+    let state = "eyJwIjoidGhyZWFkcyJ9.c2ln";
+    transport.responses.lock().unwrap().extend([
+        Ok(json!({"v":1,"state":state,"clientId":"threads-app","redirectUri":"https://toris.kr/oauth/threads/callback","expiresAt":"2030-01-01T00:00:00Z"})),
+        Ok(json!({"v":1,"access_token":"th-long","token_type":"bearer","expires_in":5184000,"long_lived":true})),
+        Ok(json!({"data":[{"permission":"threads_basic","status":"granted"},{"permission":"threads_manage_insights","status":"granted"}]})),
+        Ok(json!({"id":"th-1","username":"tori"})),
+    ]);
+    let started = begin_connection(&service, Provider::Threads, "read", None)
+        .await
+        .unwrap();
+    let auth = started["authorizationUrl"].as_str().unwrap();
+    assert!(
+        auth.contains("redirect_uri=https%3A%2F%2Ftoris.kr%2Foauth%2Fthreads%2Fcallback"),
+        "{auth}"
+    );
+    assert!(
+        !auth.contains("code_challenge"),
+        "Meta gets no PKCE parameters; the broker binds the verifier"
+    );
+    let id = started["connectionId"].as_str().unwrap();
+    complete_connection(
+        &service,
+        id,
+        &format!("http://127.0.0.1:38471/oauth/threads/callback?code=c&state={state}"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        transport.broker_requests.lock().unwrap().len(),
+        2,
+        "start + token; no separate long-lived exchange"
+    );
+    let c = read_connection(&service, id).unwrap();
+    assert!(c.session.long_lived);
+    assert_eq!(
+        c.session.scopes,
+        ["threads_basic", "threads_manage_insights"]
+    );
+}
+
+#[tokio::test]
+async fn toris_refresh_goes_to_the_broker_only_where_a_secret_is_needed() {
+    let (service, transport) = toris_service();
+    let toris = |p: Provider| ClientConfig {
+        client_id: "public".into(),
+        client_secret: None,
+        redirect_uri: toris_redirect(p).into(),
+        mode: ClientMode::Toris,
+        broker: Some("https://broker.example.test".into()),
+        ..Default::default()
+    };
+    for (p, expected) in [
+        (
+            Provider::Tiktok,
+            Some(("/v1/oauth/tiktok/refresh", "refreshToken")),
+        ),
+        (
+            Provider::NaverBlog,
+            Some(("/v1/oauth/naver_blog/refresh", "refreshToken")),
+        ),
+        (
+            Provider::Facebook,
+            Some(("/v1/oauth/facebook/refresh", "accessToken")),
+        ),
+        (
+            Provider::Youtube,
+            Some(("/v1/oauth/youtube/refresh", "refreshToken")),
+        ),
+        (
+            Provider::GoogleCalendar,
+            Some(("/v1/oauth/google_calendar/refresh", "refreshToken")),
+        ),
+        (Provider::Threads, None),
+        (Provider::Instagram, None),
+    ] {
+        let session = session_from_response(
+            &json!({"access_token":"a","expires_in":10,"refresh_token":"r"}),
+            None,
+            1,
+            p.meta(),
+        )
+        .unwrap();
+        transport.responses.lock().unwrap().push_back(Ok(
+            json!({"v":1,"access_token":"new","expires_in":3600,"long_lived":p.meta()}),
+        ));
+        let before = transport.broker_requests.lock().unwrap().len();
+        assert!(refresh_call(&service, p, &toris(p), &session).await.is_ok());
+        let broker = transport.broker_requests.lock().unwrap();
+        match expected {
+            Some((path, field)) => {
+                let last = broker.last().unwrap();
+                assert_eq!(
+                    (last.base.as_str(), last.path.as_str()),
+                    ("https://broker.example.test", path),
+                    "the issuing broker, not the current setting"
+                );
+                assert_eq!(
+                    last.body
+                        .as_ref()
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<_>>(),
+                    [field]
+                );
+            }
+            None => {
+                assert_eq!(
+                    broker.len(),
+                    before,
+                    "{} refreshes without a secret, directly",
+                    p.id()
+                );
+                assert!(transport
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .endpoint
+                    .contains("refresh_access_token"));
+            }
+        }
+    }
+}
+
+#[test]
+fn broker_errors_map_to_reconnect_or_retry() {
+    let failure =
+        |code: &str| broker_failure(&json!({"v":1,"error":{"code":code,"retryable":false}}));
+    assert!(failure("provider_rejected").permanent);
+    assert!(failure("state_invalid").permanent);
+    assert!(failure("verifier_mismatch").permanent);
+    assert!(!failure("rate_limited").permanent);
+    assert!(!failure("provider_unavailable").permanent);
+    assert!(!failure("internal").permanent);
+    assert!(
+        !failure("unsupported_platform").permanent,
+        "a platform switched off at the broker keeps every connection for when it returns"
+    );
+    assert_eq!(failure("upgrade_required").outcome, "upgrade_required");
+    assert!(failure("upgrade_required").message().contains("업데이트"));
+    assert!(
+        !broker_failure(&json!({"v":1})).permanent,
+        "an unknown shape is retried, not trusted"
+    );
+}
+
+#[test]
+fn broker_address_is_https_without_extras_and_requests_name_the_app_version() {
+    assert_eq!(
+        validate_broker_url("https://oauth.toris.kr").unwrap(),
+        "https://oauth.toris.kr"
+    );
+    assert_eq!(
+        validate_broker_url("https://oauth.toris.kr/").unwrap(),
+        "https://oauth.toris.kr"
+    );
+    for bad in [
+        "http://oauth.toris.kr",
+        "https://u:p@oauth.toris.kr",
+        "https://oauth.toris.kr/v1",
+        "https://oauth.toris.kr?x=1",
+        "https://oauth.toris.kr#a",
+        "ftp://x",
+        "not a url",
+    ] {
+        assert!(validate_broker_url(bad).is_err(), "{bad}");
+    }
+    assert!(
+        validate_broker_url("http://127.0.0.1:8787").is_ok() == cfg!(debug_assertions),
+        "loopback http only in debug builds"
+    );
+    assert_eq!(
+        broker_user_agent(),
+        format!("TorisStudio/{}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[tokio::test]
+async fn toris_start_rejects_a_redirect_the_app_does_not_know() {
+    let (service, transport) = toris_service();
+    service
+        .save_client(Provider::Tiktok, json!({"mode":"toris"}))
+        .await
+        .unwrap();
+    transport.responses.lock().unwrap().push_back(Ok(json!({"v":1,"state":BROKER_STATE,"clientId":"tt","redirectUri":"https://evil.example/cb","expiresAt":"2030-01-01T00:00:00Z"})));
+    assert!(begin_connection(&service, Provider::Tiktok, "read", None)
+        .await
+        .is_err());
+    transport.responses.lock().unwrap().push_back(Ok(json!({"v":1,"state":"bad state with spaces","clientId":"tt","redirectUri":"http://127.0.0.1:38471/oauth/tiktok/callback","expiresAt":"2030-01-01T00:00:00Z"})));
+    assert!(begin_connection(&service, Provider::Tiktok, "read", None)
+        .await
+        .is_err());
+    service
+        .save_client(Provider::Youtube, json!({"mode":"toris"}))
+        .await
+        .unwrap();
+    transport.responses.lock().unwrap().push_back(Ok(json!({"v":1,"state":BROKER_STATE,"clientId":"g","redirectUri":"http://127.0.0.1:38471/oauth/google_calendar/callback","expiresAt":"2030-01-01T00:00:00Z"})));
+    assert!(
+        begin_connection(&service, Provider::Youtube, "read", None)
+            .await
+            .is_err(),
+        "a YouTube login never returns to the Calendar loopback"
+    );
+}
+
+#[tokio::test]
+async fn the_broker_address_is_a_constant_and_cannot_be_overridden_from_the_webview() {
+    let (service, transport) = toris_service();
+    // Even a value written under the old keychain key is ignored.
+    service
+        .store
+        .write("broker:url", "https://evil.example.test")
+        .unwrap();
+    assert_eq!(broker_base(&service).unwrap(), TORIS_BROKER);
+    let (_, store, mock, clock) = fixture();
+    let injected = OAuthService::new(store, mock, clock).with_broker("https://broker.example.test");
+    assert_eq!(
+        broker_base(&injected).unwrap(),
+        "https://broker.example.test",
+        "tests inject through a test-only path"
+    );
+    assert!(
+        dispatch(json!({"action":"setBroker","url":"https://broker.example.test"}))
+            .await
+            .is_err(),
+        "no IPC path changes the broker"
+    );
+    transport
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(Err(TokenFailure::transient("network_failure")));
+    assert!(broker_view(&service).await.get("customBroker").is_none());
+}
+
+#[tokio::test]
+async fn toris_availability_comes_from_the_broker_and_defaults_to_off() {
+    let (service, transport) = toris_service();
+    transport
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(Err(TokenFailure::transient("network_failure")));
+    let off = broker_view(&service).await;
+    assert_eq!(
+        off["available"]["tiktok"], false,
+        "an unreachable broker shows only the developer-app form"
+    );
+    assert_eq!(off["naverSearch"], false);
+    assert_eq!(
+        broker_view(&service).await["available"]["threads"],
+        false,
+        "a failure is cached briefly, not retried per call"
+    );
+    assert_eq!(transport.broker_requests.lock().unwrap().len(), 1);
+
+    let (service, transport) = toris_service();
+    transport.responses.lock().unwrap().push_back(Ok(json!({"v":1,"minAppVersion":"0.1.0","platforms":{"tiktok":{"enabled":true},"threads":{"enabled":false},"youtube":{"enabled":true}},"naverSearch":{"enabled":true}})));
+    let on = broker_view(&service).await;
+    assert_eq!(on["available"]["tiktok"], true);
+    assert_eq!(on["available"]["threads"], false);
+    assert_eq!(on["available"]["youtube"], true);
+    assert_eq!(
+        on["available"]["google_calendar"], false,
+        "a platform the broker does not list stays off"
+    );
+    assert_eq!(on["naverSearch"], true);
+    assert_eq!(
+        transport.broker_requests.lock().unwrap()[0].path,
+        "/v1/config"
+    );
+    assert!(
+        transport.broker_requests.lock().unwrap()[0].body.is_none(),
+        "config is a GET"
+    );
+}
+
+#[tokio::test]
+async fn naver_search_through_the_broker_sends_only_the_query_fields() {
+    let (service, transport) = toris_service();
+    transport.responses.lock().unwrap().push_back(Ok(json!({"v":1,"total":1,"start":1,"display":1,"items":[{"title":"t","link":"https://blog.naver.com/a/1","description":"d","bloggername":"b","bloggerlink":"https://blog.naver.com/a","postdate":"20261120"}]})));
+    let result = naver_search_with(&service, "  로컬 여행 ").await.unwrap();
+    assert_eq!(result["items"][0]["title"], "t");
+    let request = transport.broker_requests.lock().unwrap()[0].clone();
+    assert_eq!(request.path, "/v1/naver/search/blog");
+    assert_eq!(
+        request.body.unwrap(),
+        json!({"query":"로컬 여행","display":20,"sort":"date"})
+    );
+    for bad in ["", "   ", &"가".repeat(101)] {
+        assert!(naver_search_with(&service, bad).await.is_err(), "{bad}");
+    }
+    transport
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(Err(TokenFailure::transient("quota_exhausted")));
+    let error = naver_search_with(&service, "ai").await.unwrap_err();
+    assert!(!error.contains("http"), "{error}");
+}
+
+#[tokio::test]
+async fn switching_only_the_connection_mode_still_invalidates_the_old_grant() {
+    let (service, _) = toris_service();
+    // The user's own record with the Toris record's fields: no ID yet, no secret, the same loopback.
+    let own = ClientConfig {
+        client_id: String::new(),
+        client_secret: None,
+        redirect_uri: toris_redirect(Provider::Youtube).into(),
+        mode: ClientMode::Developer,
+        ..Default::default()
+    };
+    service.write("client", Provider::Youtube, &own).unwrap();
+    service
+        .write(
+            "session",
+            Provider::Youtube,
+            &session_from_response(
+                &json!({"access_token":"a","expires_in":3600}),
+                None,
+                1,
+                false,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    service
+        .save_client(Provider::Youtube, json!({"mode":"toris"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .store
+            .read("legacy-client-changed:youtube")
+            .unwrap()
+            .as_deref(),
+        Some("true"),
+        "a different app context never inherits the grant"
+    );
+}
+
+// ---- Google through the Toris broker ----
+
+const GOOGLE_STATE: &str = "eyJwIjoieW91dHViZSJ9.c2lnbmF0dXJl";
+fn query_of(url: &str) -> HashMap<String, String> {
+    Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .into_owned()
+        .collect()
+}
+
+#[tokio::test]
+async fn toris_google_login_uses_pkce_and_exchanges_through_the_broker_for_youtube_and_calendar() {
+    for p in [Provider::Youtube, Provider::GoogleCalendar] {
+        let (service, transport) = toris_service();
+        service
+            .save_client(p, json!({"mode":"toris"}))
+            .await
+            .unwrap();
+        let loopback = format!("http://127.0.0.1:38471/oauth/{}/callback", p.id());
+        transport.responses.lock().unwrap().extend([
+            Ok(json!({"v":1,"state":GOOGLE_STATE,"clientId":"toris-desktop.apps.googleusercontent.com","redirectUri":loopback,"expiresAt":"2030-01-01T00:00:00Z"})),
+            Ok(json!({"v":1,"access_token":"google-private-access","token_type":"bearer","expires_in":3599,"refresh_token":"google-private-refresh","scope":read_scope(p),"long_lived":false})),
+        ]);
+        if p == Provider::Youtube {
+            transport.responses.lock().unwrap().push_back(Ok(
+                json!({"items":[{"id":"UC_toris","snippet":{"title":"Toris"}}]}),
+            ));
+        }
+        let started = begin_connection(&service, p, "read", None).await.unwrap();
+        assert_eq!(
+            started["manualCallback"], false,
+            "Google returns to the loopback"
+        );
+        let auth = query_of(started["authorizationUrl"].as_str().unwrap());
+        let start = transport.broker_requests.lock().unwrap()[0].clone();
+        assert_eq!(start.path, format!("/v1/oauth/{}/start", p.id()));
+        assert_eq!(
+            auth["client_id"],
+            "toris-desktop.apps.googleusercontent.com"
+        );
+        assert_eq!(auth["redirect_uri"], loopback);
+        assert_eq!(auth["state"], GOOGLE_STATE);
+        assert_eq!(
+            auth["code_challenge"],
+            start.body.as_ref().unwrap()["challenge"].as_str().unwrap(),
+            "one verifier proves the login to the broker and to Google"
+        );
+        assert_eq!(auth["code_challenge_method"], "S256");
+        assert_eq!(auth["access_type"], "offline");
+        assert_eq!(auth["prompt"], "consent");
+        assert_eq!(
+            auth["scope"],
+            read_scope(p),
+            "Google scopes are space separated"
+        );
+        assert!(!auth.contains_key("client_secret"));
+        let id = started["connectionId"].as_str().unwrap();
+        let result = complete_connection(
+            &service,
+            id,
+            &format!("{loopback}?code=4/0Ab-private-code&state={GOOGLE_STATE}"),
+        )
+        .await
+        .unwrap();
+        let token = transport.broker_requests.lock().unwrap()[1].clone();
+        assert_eq!(token.path, format!("/v1/oauth/{}/token", p.id()));
+        let body = token.body.unwrap();
+        assert_eq!(body["redirectUri"], loopback.as_str());
+        assert_eq!(body["code"], "4/0Ab-private-code");
+        assert_eq!(
+            URL_SAFE_NO_PAD.encode(Sha256::digest(
+                body["verifier"].as_str().unwrap().as_bytes()
+            )),
+            auth["code_challenge"]
+        );
+        for request in transport.requests.lock().unwrap().iter() {
+            assert_ne!(
+                request.endpoint,
+                p.token_endpoint(),
+                "Google is not called directly"
+            );
+            assert!(request.parameters.iter().all(|(k, _)| k != "client_secret"));
+        }
+        let c = read_connection(&service, id).unwrap();
+        assert_eq!(
+            (
+                c.client.mode,
+                c.client.client_secret.clone(),
+                c.client.broker.as_deref()
+            ),
+            (ClientMode::Toris, None, Some(TORIS_BROKER))
+        );
+        assert_eq!(
+            c.session.refresh_token.as_deref(),
+            Some("google-private-refresh")
+        );
+        let public = format!("{result}{}", connection_list_locked(&service).unwrap());
+        for secret in [
+            "google-private-access",
+            "google-private-refresh",
+            "4/0Ab-private-code",
+            GOOGLE_STATE,
+            body["verifier"].as_str().unwrap(),
+        ] {
+            assert!(!public.contains(secret), "{secret} leaked to IPC");
+        }
+    }
+}
+
+#[tokio::test]
+async fn toris_google_refresh_goes_to_the_issuing_broker_and_keeps_the_unrotated_refresh_token() {
+    for p in [Provider::Youtube, Provider::GoogleCalendar] {
+        let (service, transport) = toris_service();
+        let mut c = sample("UC_toris");
+        c.platform = p.id().into();
+        if p == Provider::GoogleCalendar {
+            c.identities = vec![RemoteIdentity {
+                account_id: "studio-calendar".into(),
+                title: "Toris Studio 캘린더".into(),
+            }];
+        }
+        c.client = ClientConfig {
+            client_id: "toris-desktop.apps.googleusercontent.com".into(),
+            redirect_uri: toris_redirect(p).into(),
+            mode: ClientMode::Toris,
+            broker: Some("https://broker.example.test".into()),
+            ..Default::default()
+        };
+        c.session = session_from_response(
+            &json!({"access_token":"old","expires_in":10,"refresh_token":"google-kept-refresh"}),
+            None,
+            100_000,
+            false,
+        )
+        .unwrap();
+        commit_connection(&service, &c).unwrap();
+        transport.responses.lock().unwrap().push_back(Ok(
+            json!({"v":1,"access_token":"fresh","token_type":"bearer","expires_in":3599,"long_lived":false}),
+        ));
+        if p == Provider::Youtube {
+            transport.responses.lock().unwrap().push_back(Ok(
+                json!({"items":[{"id":"UC_toris","snippet":{"title":"Toris"}}]}),
+            ));
+        }
+        refresh_connection_locked(&service, &c.id, false)
+            .await
+            .unwrap();
+        let last = transport
+            .broker_requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (last.base.as_str(), last.path.as_str()),
+            (
+                "https://broker.example.test",
+                format!("/v1/oauth/{}/refresh", p.id()).as_str()
+            )
+        );
+        assert_eq!(
+            last.body.unwrap(),
+            json!({"refreshToken":"google-kept-refresh"})
+        );
+        let after = read_connection(&service, &c.id).unwrap();
+        assert_eq!(after.session.access_token, "fresh");
+        assert_eq!(
+            after.session.refresh_token.as_deref(),
+            Some("google-kept-refresh")
+        );
+        assert!(transport
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.endpoint != p.token_endpoint()));
+    }
+}
+
+#[tokio::test]
+async fn own_google_client_connections_still_refresh_directly_with_their_secret() {
+    let (service, transport) = toris_service();
+    let mut c = sample("UC_mine");
+    c.platform = "youtube".into();
+    c.client = client(Provider::Youtube);
+    c.session = session_from_response(
+        &json!({"access_token":"old","expires_in":10,"refresh_token":"mine-refresh"}),
+        None,
+        100_000,
+        false,
+    )
+    .unwrap();
+    commit_connection(&service, &c).unwrap();
+    transport.responses.lock().unwrap().extend([
+        Ok(json!({"access_token":"fresh","expires_in":3599})),
+        Ok(json!({"items":[{"id":"UC_mine","snippet":{"title":"Mine"}}]})),
+    ]);
+    refresh_connection_locked(&service, &c.id, false)
+        .await
+        .unwrap();
+    assert!(transport.broker_requests.lock().unwrap().is_empty());
+    let requests = transport.requests.lock().unwrap();
+    let first = &requests[0];
+    assert_eq!(first.endpoint, "https://oauth2.googleapis.com/token");
+    assert!(first
+        .parameters
+        .contains(&("client_secret".into(), "fixture-secret".into())));
+}
+
+#[tokio::test]
+async fn toris_google_failures_need_a_new_login_only_when_the_grant_was_rejected() {
+    for (answer, reconnect) in [
+        (
+            json!({"v":1,"error":{"code":"provider_rejected","retryable":false}}),
+            true,
+        ),
+        (
+            json!({"v":1,"error":{"code":"provider_unavailable","retryable":true}}),
+            false,
+        ),
+        (
+            json!({"v":1,"error":{"code":"unsupported_platform","retryable":false}}),
+            false,
+        ),
+    ] {
+        let (service, transport) = toris_service();
+        let mut c = sample("studio-calendar");
+        c.platform = "google_calendar".into();
+        c.client = ClientConfig {
+            redirect_uri: toris_redirect(Provider::GoogleCalendar).into(),
+            mode: ClientMode::Toris,
+            broker: Some(TORIS_BROKER.into()),
+            ..Default::default()
+        };
+        c.session = session_from_response(
+            &json!({"access_token":"google-private-access","expires_in":10,"refresh_token":"google-private-refresh"}),
+            None,
+            100_000,
+            false,
+        )
+        .unwrap();
+        commit_connection(&service, &c).unwrap();
+        transport
+            .responses
+            .lock()
+            .unwrap()
+            .push_back(Err(broker_failure(&answer)));
+        let error = refresh_connection_locked(&service, &c.id, false)
+            .await
+            .unwrap_err();
+        let public = format!("{error}{}", connection_list_locked(&service).unwrap());
+        for secret in ["google-private-access", "google-private-refresh"] {
+            assert!(!public.contains(secret), "{secret} leaked: {error}");
+        }
+        assert_eq!(
+            read_connection(&service, &c.id)
+                .unwrap()
+                .session
+                .needs_reconnect,
+            reconnect,
+            "{answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn toris_youtube_disconnect_revokes_directly_with_google_not_through_the_broker() {
+    let (service, transport) = toris_service();
+    let mut c = sample("UC_toris");
+    c.platform = "youtube".into();
+    c.client = ClientConfig {
+        redirect_uri: toris_redirect(Provider::Youtube).into(),
+        mode: ClientMode::Toris,
+        broker: Some(TORIS_BROKER.into()),
+        ..Default::default()
+    };
+    c.session.refresh_token = Some("toris-private-refresh".into());
+    save_connection(&service, &c).unwrap();
+    transport.responses.lock().unwrap().push_back(Ok(json!({})));
+    disconnect_connection(&service, &c.id).await.unwrap();
+    assert!(transport.broker_requests.lock().unwrap().is_empty());
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].endpoint, "https://oauth2.googleapis.com/revoke");
+    assert_eq!(
+        requests[0].parameters,
+        vec![("token".into(), "toris-private-refresh".into())]
+    );
+}
+
+#[tokio::test]
+async fn google_offers_toris_or_the_users_own_client_and_no_built_in_secretless_mode() {
+    let (service, _) = toris_service();
+    for p in [Provider::Youtube, Provider::GoogleCalendar] {
+        let row = provider_row(&service.status_locked(), p.id());
+        assert_eq!(
+            row["clientConfigured"], false,
+            "no default client without the broker"
+        );
+        assert!(row.get("builtinAvailable").is_none() && row.get("googleTesting").is_none());
+        assert!(service
+            .save_client(p, json!({"mode":"builtin"}))
+            .await
+            .is_err());
+        service
+            .save_client(p, json!({"mode":"toris"}))
+            .await
+            .unwrap();
+        let saved = service.client_for(p).unwrap().unwrap();
+        assert_eq!(
+            (saved.mode, saved.client_secret, saved.redirect_uri),
+            (ClientMode::Toris, None, p.default_redirect())
+        );
+        assert_eq!(
+            provider_row(&service.status_locked(), p.id())["clientMode"],
+            "toris"
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_toris_youtube_access_reports_the_shared_google_quota() {
+    for (mode, shared) in [(ClientMode::Toris, true), (ClientMode::Developer, false)] {
+        let (service, _) = toris_service();
+        let mut c = sample("UC_quota");
+        c.platform = "youtube".into();
+        c.client = if mode == ClientMode::Toris {
+            ClientConfig {
+                redirect_uri: toris_redirect(Provider::Youtube).into(),
+                mode,
+                broker: Some(TORIS_BROKER.into()),
+                ..Default::default()
+            }
+        } else {
+            client(Provider::Youtube)
+        };
+        c.session = session_from_response(
+            &json!({"access_token":"live","expires_in":100000,"refresh_token":"rt","scope":"https://www.googleapis.com/auth/youtube.readonly"}),
+            None,
+            100_000,
+            false,
+        )
+        .unwrap();
+        commit_connection(&service, &c).unwrap();
+        let access = access_locked(&service, &c.id, "youtube", "UC_quota", &[], false)
+            .await
+            .unwrap();
+        assert_eq!(access.shared_quota, shared);
+    }
+}

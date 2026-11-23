@@ -1526,5 +1526,1438 @@
    "reason_sns_contract"
   ],
   "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-needs-engine",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "    visual == \"ai\"\n}",
+  "replace": "    visual != \"stock\"\n}",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-loops-clip",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "        vec![\"mov\", \"-i\"]",
+  "replace": "        vec![\"mov\", \"-stream_loop\", \"-1\", \"-i\"]",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-key-ignores-graphics",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "        &json!({\"kind\": \"motion\", \"layout\": crate::motion_scene::LAYOUT_VERSION, \"graphics\": graphics, \"width\": width}),",
+  "replace": "        &json!({\"kind\": \"motion\", \"layout\": crate::motion_scene::LAYOUT_VERSION, \"width\": width}),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-duplicate-captions",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "        || (settings.visual == \"motion\" && !settings.narration)\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-layout-unchecked",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "    if !crate::motion_scene::LAYOUTS.contains(&layout) {",
+  "replace": "    if layout.is_empty() {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-prod-list-points-unchecked",
+  "file": "desktop/src-tauri/src/production.rs",
+  "find": "        \"list\" if !(2..=3).contains(&points.len()) => {",
+  "replace": "        \"list\" if points.len() > 99 => {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "production::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-caption-band",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "        \"shorts-bold\" => Some((height * 0.62, height * 0.62 + 256.0)),",
+  "replace": "        \"shorts-bold\" => Some((height * 0.80, height * 0.80 + 256.0)),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-ref-dark-background",
+  "file": "desktop/src-tauri/src/motion_reference.rs",
+  "find": "    if luma(bg) < MIN_BACKGROUND_LUMA {",
+  "replace": "    if luma(bg) < 0.0 {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-ref-no-lift",
+  "file": "desktop/src-tauri/src/motion_reference.rs",
+  "find": "    while luma(bg) < MIN_BACKGROUND_LUMA && step < 1.0 {",
+  "replace": "    while false && step < 1.0 {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-ref-copies-text",
+  "file": "desktop/src-tauri/src/motion_reference.rs",
+  "find": "        name: name.trim().into(),\n        origin: Origin::Project,",
+  "replace": "        name: format!(\"{} {}\", name.trim(), project[\"title\"].as_str().unwrap_or(\"\")).chars().take(40).collect(),\n        origin: Origin::Project,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-ref-media-claims-motion",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "        notes: vec![\n            UNMEASURED_NOTE.into(),\n            format!(\"기준 레퍼런스: {}\", base.name),\n        ],",
+  "replace": "        notes: vec![format!(\"기준 레퍼런스: {}\", base.name)],",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-ai-reference-in-system",
+  "file": "desktop/src-tauri/src/motion_ai.rs",
+  "find": "        message[\"reference\"] = crate::motion_reference::model_tokens(\n            &crate::motion_reference::parse(&r[\"reference\"])?,\n        );",
+  "replace": "        message[\"reference\"] = serde_json::json!(crate::motion_reference::parse(&r[\"reference\"])?);",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-drafts-reference-unvalidated",
+  "file": "desktop/src-tauri/src/motion_drafts.rs",
+  "find": "        Some(value) => json!(crate::motion_reference::parse(value)?),",
+  "replace": "        Some(value) => value.clone(),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-auto-model-default-off",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "fn auto_select_default() -> bool {\n    true",
+  "replace": "fn auto_select_default() -> bool {\n    false",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-cli-login-claude-argv",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "\"claude\" => (\"claude\", &[\"auth\", \"login\"]),",
+  "replace": "\"claude\" => (\"claude\", &[\"login\"]),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-cli-login-open-tool",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        _ => return Err(\"로그인할 수 있는 CLI가 아닙니다.\".into()),",
+  "replace": "        _ => (\"sh\", &[\"-c\"]),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-cli-login-windows-metachar",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        .any(|c| matches!(c, '\"' | '%' | '&' | '^' | '|' | '<' | '>' | '!'))",
+  "replace": "        .any(|_| false)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-cli-login-unquoted",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "fn sh_quote(word: &str) -> String {\n",
+  "replace": "fn sh_quote(word: &str) -> String {\n    if true {\n        return word.to_string();\n    }\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-calendar-no-pkce",
+  "file": "desktop/src-tauri/src/oauth.rs",
+  "find": "    provider.google() || provider == Provider::Tiktok\n",
+  "replace": "    provider == Provider::Youtube || provider == Provider::Tiktok\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-google-scope-comma",
+  "file": "desktop/src-tauri/src/oauth.rs",
+  "find": "    if provider.google() {\n        \" \"\n",
+  "replace": "    if provider == Provider::Youtube {\n        \" \"\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-mode-change-keeps-grant",
+  "file": "desktop/src-tauri/src/oauth.rs",
+  "find": "                || old.mode != config.mode\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-gh-method-post",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "    let mut argv: Vec<String> = [\n        \"api\",\n        \"--hostname\",\n        \"github.com\",\n        \"--method\",\n        \"GET\",",
+  "replace": "    let mut argv: Vec<String> = [\n        \"api\",\n        \"--hostname\",\n        \"github.com\",\n        \"--method\",\n        \"POST\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cli-name-flag-injection",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "            format!(\"--worker={name}\"),",
+  "replace": "            \"--worker\".into(),\n            name.into(),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-repo-dash-allowed",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        && !raw.starts_with('-')\n        && !raw.starts_with('.')",
+  "replace": "        && !raw.starts_with('.')",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-gh-exit4-generic",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "    } else if (kind == CliKind::Gh && code == Some(4))\n        || lower.contains(\"auth login\")",
+  "replace": "    } else if lower.contains(\"auth login\")",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cli-inherits-env",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        .current_dir(folder.path())\n        .env_clear()\n",
+  "replace": "        .current_dir(folder.path())\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cli-cwd-project",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        .current_dir(folder.path())\n        .env_clear()\n",
+  "replace": "        .env_clear()\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cli-timeout-ignored",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "    let result = tokio::time::timeout(limit, async {",
+  "replace": "    let result = tokio::time::timeout(limit * 1000, async {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cf-envelope-missing",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        Some(result) => super::cloudflare_worker(&json!({\"success\": true, \"result\": result})),",
+  "replace": "        Some(result) => super::cloudflare_worker(&result),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-ops-cf-whoami-ignores-flag",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "            .is_ok_and(|v| v[\"authenticated\"] == true && v[\"tokenValid\"] != false)",
+  "replace": "            .is_ok()",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-toris-sends-secret",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "                \"redirectUri\": pending.client.redirect_uri,\n",
+  "replace": "                \"redirectUri\": pending.client.redirect_uri,\n                \"clientSecret\": \"fixture\",\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-toris-drops-verifier",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "                \"verifier\": verifier,\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-tiktok-refresh-direct",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "        Provider::Tiktok\n            | Provider::NaverBlog\n            | Provider::Facebook\n",
+  "replace": "        Provider::NaverBlog\n            | Provider::Facebook\n",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-broker-allows-http",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    if !(url.scheme() == \"https\" || loopback_dev)",
+  "replace": "    if !(url.scheme() == \"https\" || url.scheme() == \"http\" || loopback_dev)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-refresh-uses-current-broker",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    let base = client\n        .broker\n        .as_deref()\n        .map(validate_broker_url)",
+  "replace": "    let base = Some(TORIS_BROKER)\n        .map(validate_broker_url)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-start-redirect-unchecked",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    if response[\"redirectUri\"].as_str() != Some(toris_redirect(p)) {",
+  "replace": "    if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-broker-default-on",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    toris_platform(p) && config.is_some_and(|c| c[\"platforms\"][p.id()][\"enabled\"] == true)",
+  "replace": "    toris_platform(p)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-broker-error-retried",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "        Some(_) => TokenFailure::invalid(),",
+  "replace": "        Some(_) => transient(\"provider_unavailable\"),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-meta-gets-pkce",
+  "file": "desktop/src-tauri/src/oauth_connections.rs",
+  "find": "verifier.as_deref().filter(|_| uses_pkce(p))",
+  "replace": "verifier.as_deref()",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-relay-rejected",
+  "file": "desktop/src-tauri/src/oauth_connections.rs",
+  "find": "                Some(loopback) => validate_callback(p, loopback, &pending.state, callback),",
+  "replace": "                Some(_) => Err(error),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-oauth-meta-double-exchange",
+  "file": "desktop/src-tauri/src/oauth_connections.rs",
+  "find": "        return finish_connection(s, p, id, pending, session).await;\n    }\n    let mut response",
+  "replace": "        let _ = session;\n    }\n    let mut response",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-naver-broker-over-user-keys",
+  "file": "desktop/src-tauri/src/trends.rs",
+  "find": "        Some(_) if filled(&config.naver_client_id) && filled(&config.naver_client_secret) => {\n            NaverRoute::UserKeys\n        }\n        Some(_) if broker_search => NaverRoute::Broker,",
+  "replace": "        Some(_) if broker_search => NaverRoute::Broker,\n        Some(_) if filled(&config.naver_client_id) && filled(&config.naver_client_secret) => {\n            NaverRoute::UserKeys\n        }",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "naver"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-naver-broker-sends-extra",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "json!({\"query\": query, \"display\": 20, \"sort\": \"date\"})",
+  "replace": "json!({\"query\": query, \"display\": 20, \"sort\": \"date\", \"start\": 1})",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "naver"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-naver-broker-unchecked-query",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    if query.is_empty() || query.chars().count() > 100 || query.chars().any(char::is_control) {",
+  "replace": "    if false {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "naver"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-naver-compose-unescaped",
+  "file": "desktop/src-tauri/src/publication_handoff.rs",
+  "find": "                p.lines().map(html_escape).collect::<Vec<_>>().join(\"<br>\")",
+  "replace": "                p.lines().map(str::to_string).collect::<Vec<_>>().join(\"<br>\")",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "publication_handoff"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-naver-compose-any-platform",
+  "file": "desktop/src-tauri/src/publication_handoff.rs",
+  "find": "    if plan[\"platform\"] != \"naver_blog\" {\n        return Err(\"네이버 블로그 게시 계획만 글쓰기 보조를 쓸 수 있습니다.\".into());\n    }\n    validate_plan(plan)?;",
+  "replace": "    validate_plan(plan).ok();",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "publication_handoff"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-youtube-token-over-key",
+  "file": "desktop/src-tauri/src/youtube.rs",
+  "find": "        return Ok(Credential::Key(value));",
+  "replace": "        let _ = value;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "youtube"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-youtube-bearer-in-key-header",
+  "file": "desktop/src-tauri/src/youtube.rs",
+  "find": "        Credential::Bearer(value) => builder.header(\"authorization\", value.clone()),",
+  "replace": "        Credential::Bearer(value) => builder.header(\"x-goog-api-key\", value.clone()),",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "youtube"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-youtube-bearer-not-sensitive",
+  "file": "desktop/src-tauri/src/youtube.rs",
+  "find": "    value.set_sensitive(true);\n    Ok(Credential::Bearer(value))",
+  "replace": "    Ok(Credential::Bearer(value))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "youtube"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-publications-compose-extra-fields",
+  "file": "desktop/src-tauri/src/publications.rs",
+  "find": "    if object.len() != 1 || !object.contains_key(\"jobId\") {",
+  "replace": "    if !object.contains_key(\"jobId\") {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "publications"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a2.rs-publications-compose-unapproved",
+  "file": "desktop/src-tauri/src/publications.rs",
+  "find": "    let (_, _, plan) = approved_handoff(config, &input).await?;\n    crate::publication_handoff::naver_compose(&plan)",
+  "replace": "    let (_, plan, _, _) = target_job(config, &input).await?;\n    crate::publication_handoff::naver_compose(&plan)",
+  "cmd": [
+   "node",
+   "scripts/verify-publication-db.mjs"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-drafts-palette-unchecked",
+  "file": "desktop/src-tauri/src/motion_drafts.rs",
+  "find": "        if let Some(problem) = palette_problem(&input[\"draft\"], &r[\"reference\"]) {\n            return Err(problem);\n        }\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_ai::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-no-growth",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "    if one <= 0.0 || one > 0.70 * width {",
+  "replace": "    if one <= 0.0 || one > 0.0 * width {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-no-spread",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "        ((available * 0.70 - words) / (list.len() as f64 - 1.0)).max(base_gap)",
+  "replace": "        base_gap",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-no-footer",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "    if let Some((row_top, row_bottom)) = footer_row(h, subtitle_style) {",
+  "replace": "    if let Some((row_top, row_bottom)) = None::<(f64, f64)> {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-is-a-disc",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "                \"decor-ring-hole\",",
+  "replace": "                \"decor-ring-gone\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-decor-unreadable",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "        .find(|c| rgb(c).is_ok_and(|c| contrast(text, c) >= min))",
+  "replace": "        .find(|c| rgb(c).is_ok_and(|c| contrast(text, c) >= 0.0 * min))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-decor-static",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "    let accent = accent_name(r);",
+  "replace": "    let accent = \"none\";",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-fades-out",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "                &plane_colour(r, 3.0),\n                accent,",
+  "replace": "                &plane_colour(r, 3.0),\n                outro,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-hole-fades",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "                &p.background,\n                \"none\",",
+  "replace": "                &p.background,\n                outro,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-image-limit",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "    if is_image && bytes > MAX_IMAGE_BYTES {",
+  "replace": "    if is_image && bytes > MAX_VIDEO_BYTES {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-video-limit",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "    if bytes > MAX_VIDEO_BYTES {",
+  "replace": "    if bytes > MAX_VIDEO_BYTES * 2 {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-image-limit-value",
+  "file": "desktop/src-tauri/src/motion_reference.rs",
+  "find": "pub const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;",
+  "replace": "pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-size-after-read",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "    check_size(false, meta.len())?;\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-side-limit",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "    if !(1..=MAX_MEDIA_SIDE).contains(&width) || !(1..=MAX_MEDIA_SIDE).contains(&height) {",
+  "replace": "    if width == 0 || height == 0 {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-duration-limit",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "    if !(duration > 0.0 && duration <= MAX_VIDEO_SEC) {",
+  "replace": "    if !(duration > 0.0 && duration <= MAX_VIDEO_SEC * 10.0) {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-demuxers",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "            \"mov,matroska,webm\",",
+  "replace": "            \"mov,matroska,webm,concat,hls\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-media-protocols",
+  "file": "desktop/src-tauri/src/motion_reference_media.rs",
+  "find": "            \"-protocol_whitelist\",\n            \"file\",",
+  "replace": "            \"-protocol_whitelist\",\n            \"file,http,https\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_reference::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-oauth-broker-store-override",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "    Ok(s.broker_url.clone())",
+  "replace": "    Ok(s.store.read(\"broker:url\")?.unwrap_or_else(|| s.broker_url.clone()))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-cli-windows-cmd-shim-missed",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "        [\"exe\", \"cmd\", \"bat\"]",
+  "replace": "        [\"exe\"]",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-cli-windows-path-requoted",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "    Ok(format!(\"/d /c start \\\"\\\" cmd.exe /d /s /k \\\"{command}\\\"\"))",
+  "replace": "    Ok(format!(\"/d /c start \\\"\\\" cmd.exe /d /k \\\"\\\\\\\"{command}\\\\\\\"\\\"\"))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-cli-login-cleanup-follows-links",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "                && entry.file_type().is_ok_and(|t| t.is_file())\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-cli-login-cleanup-any-file",
+  "file": "desktop/src-tauri/src/agent_runtime.rs",
+  "find": "            name.starts_with(LOGIN_SCRIPT_PREFIX)\n                && name.ends_with(\".command\")",
+  "replace": "            name.ends_with(\".command\")",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "agent_runtime"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-ops-cli-config-dir-dropped",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        \"GH_CONFIG_DIR\",\n        \"XDG_CONFIG_HOME\",\n    ] {",
+  "replace": "        \"XDG_CONFIG_HOME\",\n    ] {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "a3.rs-ops-cli-token-passed",
+  "file": "desktop/src-tauri/src/ops_status_cli.rs",
+  "find": "        \"GH_CONFIG_DIR\",\n        \"XDG_CONFIG_HOME\",\n    ] {",
+  "replace": "        \"GH_CONFIG_DIR\",\n        \"XDG_CONFIG_HOME\",\n        \"GH_TOKEN\",\n    ] {",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "ops_status"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-ignores-words",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "            .chain(texts.iter())",
+  "replace": "            .chain(texts.iter().take(0))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-ignores-decor",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "        let mut obstacles: Vec<(f64, f64, f64, f64)> = decor\n            .iter()",
+  "replace": "        let mut obstacles: Vec<(f64, f64, f64, f64)> = decor\n            .iter()\n            .take(0)",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "rs.mg-scene-ring-ignores-band",
+  "file": "desktop/src-tauri/src/motion_scene.rs",
+  "find": "            obstacles.push((0.0, band_top, w, band_bottom - band_top));",
+  "replace": "            let _ = (band_top, band_bottom);",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "motion_scene::"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "js.startup-smoke-readiness-fixture-missing",
+  "file": "desktop/src-tauri/src/startup_smoke.js",
+  "find": "    if (command === 'oauth_status') return {providers: []};\n",
+  "replace": "",
+  "cmd": [
+   "node",
+   "scripts/verify-desktop-startup-smoke.mjs"
+  ],
+  "timeoutMs": 300000
+ },
+ {
+  "id": "g1.rs-oauth-google-refresh-direct",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "            | Provider::Facebook\n            | Provider::Youtube\n            | Provider::GoogleCalendar\n    )",
+  "replace": "            | Provider::Facebook\n    )",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-google-not-toris",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "            | Provider::NaverBlog\n            | Provider::Youtube\n            | Provider::GoogleCalendar\n    )",
+  "replace": "            | Provider::NaverBlog\n    )",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-google-redirect-swapped",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "Provider::GoogleCalendar => \"http://127.0.0.1:38471/oauth/google_calendar/callback\",",
+  "replace": "Provider::GoogleCalendar => \"http://127.0.0.1:38471/oauth/youtube/callback\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-unsupported-platform-drops-connections",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "        Some(\"unsupported_platform\") => transient(\"platform_unavailable\"),\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-shared-quota-unflagged",
+  "file": "desktop/src-tauri/src/oauth_connections.rs",
+  "find": "shared_quota: c.client.mode == ClientMode::Toris,",
+  "replace": "shared_quota: false,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-trends-toris-keyword-search",
+  "file": "desktop/src-tauri/src/trends.rs",
+  "find": "    (!(shared_quota && keyword.is_some())).then_some(YoutubeAuth::Login(token))",
+  "replace": "    let _ = (shared_quota, keyword);\n    Some(YoutubeAuth::Login(token))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "trends"
+  ],
+  "timeoutMs": 900000
  }
 ]

@@ -139,6 +139,12 @@
     "scripts/verify-production-ui.mjs",
     "scripts/build-media-runtime.sh",
     "desktop/src-tauri/src/motion_ai.rs",
+    "desktop/src-tauri/src/motion_reference.rs",
+    "desktop/src-tauri/src/motion_reference_media.rs",
+    "desktop/src-tauri/src/motion_reference_tests.rs",
+    "desktop/src-tauri/src/motion_scene_tests.rs",
+    "desktop/src-tauri/src/motion_reference_native.rs",
+    "desktop/src-tauri/src/motion_scene.rs",
     "desktop/src-tauri/examples/motion_ai_probe.rs",
     "desktop/src-tauri/src/production.rs",
     "desktop/src-tauri/src/production_native.rs",
@@ -152,8 +158,10 @@
    ],
    "verify": [
     "node --import tsx --test tests/video-*.test.ts tests/editing.test.ts tests/update-scene.test.ts",
-    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion:: media:: video_",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib -- motion:: media:: video_",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_ai::",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_reference::",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib motion_scene::",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib production::",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib video_runtime",
     "node scripts/verify-production-ui.mjs",
@@ -219,7 +227,26 @@
    ],
    "verify": [
     "node --import tsx --test tests/publication-*.test.ts tests/youtube-upload.test.ts",
-    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib publish oauth"
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib publish",
+    "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib oauth",
+    "node scripts/verify-desktop-readiness.mjs"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json",
+    "desktop/agent-runtime/test/ui-mutants.json"
+   ]
+  },
+  {
+   "id": "oauth-broker",
+   "label": "Toris OAuth Broker Worker(코드 교환·갱신·네이버 블로그 검색)와 Meta HTTPS 콜백의 루프백 중계",
+   "paths": [
+    "infrastructure/oauth-broker/**"
+   ],
+   "verify": [
+    "node --import tsx --test infrastructure/oauth-broker/broker.test.mjs infrastructure/oauth-callback/callback.test.mjs"
+   ],
+   "mutants": [
+    "infrastructure/oauth-broker/mutants.json"
    ]
   },
   {
@@ -238,6 +265,10 @@
     "node --import tsx --test tests/planner-client.test.ts",
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib planner::",
     "node scripts/verify-planner-ui.mjs"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json",
+    "desktop/agent-runtime/test/ui-mutants.json"
    ]
   },
   {
@@ -256,6 +287,10 @@
     "cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib ops_status",
     "node scripts/verify-ops-ui.mjs",
     "node scripts/verify-publication-db.mjs"
+   ],
+   "mutants": [
+    "desktop/src-tauri/tests/mutants.json",
+    "desktop/agent-runtime/test/ui-mutants.json"
    ]
   },
   {
@@ -356,7 +391,9 @@
     "scripts/verify-release-resume*"
    ],
    "verify": [
-    "pnpm desktop:check"
+    "pnpm desktop:check",
+    "node scripts/verify-desktop-readiness.mjs",
+    "node scripts/verify-desktop-startup-smoke.mjs"
    ],
    "mutants": [
     "desktop/src-tauri/tests/mutants.json"
@@ -385,10 +422,12 @@
     "scripts/check-secrets.sh",
     "scripts/release-security.sh",
     ".gitleaksignore",
-    "scripts/harness-check.test.mjs"
+    "scripts/harness-check.test.mjs",
+    "scripts/mutation-check.test.mjs"
    ],
    "verify": [
-    "node scripts/harness-check.mjs"
+    "node scripts/harness-check.mjs",
+    "node --test scripts/mutation-check.test.mjs"
    ]
   },
   {

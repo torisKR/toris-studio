@@ -28,6 +28,8 @@ export const STEPS = {
     ['agent UI mutants', 'node', ['scripts/mutation-check.mjs', 'desktop/agent-runtime/test/ui-mutants.json']],
     ['planner UI check', 'node', ['scripts/verify-planner-ui.mjs']],
     ['ops UI check', 'node', ['scripts/verify-ops-ui.mjs']],
+    // The packaged app's isolated startup check, run in WebKit without packaging (it only ran in installer CI before).
+    ['desktop startup smoke check', 'node', ['scripts/verify-desktop-startup-smoke.mjs']],
   ],
 };
 

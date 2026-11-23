@@ -36,6 +36,7 @@ fn access(scopes: &[&str], audit: bool) -> crate::oauth::PublishingAccess {
         token: "fixture-private-token".into(),
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
         tiktok_audit_declared: audit,
+        shared_quota: false,
     }
 }
 fn plan(platform: &str) -> Value {

@@ -49,3 +49,14 @@ test("IPC payloads carry only allowed fields and never echo secrets", async () =
   await openTask("p1", "http", call);
   assert.deepEqual(calls[2], ["ops_open_task", { product: "p1", source: "http" }]);
 });
+
+test("CLI lines: Cloudflare uses cf, falls back to wrangler only when cf is missing; login is offered only when signed out", async () => {
+  const { cliLines, INPUT_SECRETS, LEGACY_TOKENS } = await import("../desktop/src/ops-client");
+  const s = (installed: boolean, signedIn: boolean | null) => ({ installed, signedIn });
+  const lines = cliLines({ gh: s(true, true), cf: s(true, false), wrangler: s(true, true) });
+  assert.deepEqual(lines.map(l => [l.tool, l.text, l.needsLogin]), [["gh", "gh 로그인됨", false], ["cf", "cf 로그인 필요", true]]);
+  const fallback = cliLines({ gh: s(false, null), cf: s(false, null), wrangler: s(true, false) });
+  assert.deepEqual(fallback.map(l => [l.tool, l.text, l.needsLogin]), [["gh", "gh 미설치", false], ["wrangler", "wrangler 로그인 필요", true]]);
+  assert.deepEqual(INPUT_SECRETS, ["cloudflare_account", "play_service_account"], "no token is typed any more");
+  assert.deepEqual(LEGACY_TOKENS, ["github_token", "cloudflare_token"]);
+});

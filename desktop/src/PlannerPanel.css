@@ -33,3 +33,11 @@
 @media (max-width: 950px) { .planner-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 620px) { .planner-work-form, .planner-times { grid-template-columns: minmax(0, 1fr); } .planner-actions { margin-left: 0; } }
 @media (prefers-reduced-motion: reduce) { .planner-day li, .planner-work li { transition: none; } }
+
+/* Built-in Google client: the Testing limits read as a caution; the own-client form is an optional disclosure under the login. */
+.planner-calendar-connect p.planner-connect-note { padding: 8px 10px; border-left: 3px solid #e6be83; border-radius: 6px; background: #241e16; color: #e6be83; line-height: 1.7; }
+.planner-own-client { margin: 10px 0 0; }
+.planner-calendar-connect .planner-own-client summary { display: inline-flex; gap: 6px; min-height: 32px; color: #92b8ff; font-weight: 500; }
+.planner-own-client summary::before { content: "▸"; font-size: 10px; }
+.planner-own-client[open] summary::before { content: "▾"; }
+.planner-own-client ~ .social-button { margin-top: 6px; }

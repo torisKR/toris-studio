@@ -40,6 +40,11 @@ pub mod motion_ai;
 pub mod motion_drafts;
 #[cfg(feature = "desktop")]
 mod motion_native;
+pub mod motion_reference;
+pub mod motion_reference_media;
+#[cfg(feature = "desktop")]
+mod motion_reference_native;
+pub mod motion_scene;
 #[cfg(any(feature = "desktop", test))]
 pub mod native_windows;
 pub mod oauth;

@@ -1,7 +1,8 @@
 import { Activity, Check, CircleAlert, KeyRound, ListPlus, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { KIND_LABELS, SECRET_LABELS, SOURCE_LABELS, STATE_LABELS, deleteProduct, draftError, draftOf, emptyDraft, isStale, loadOverview, needsAttention, openTask, orderedStatuses, refreshOps, saveProduct, saveSecret, type OpsOverview, type OpsStatus, type Product, type ProductDraft, type SecretKind } from "./ops-client";
+import { INPUT_SECRETS, KIND_LABELS, LEGACY_TOKENS, SECRET_LABELS, cliLines, loadCliStatus, type CliStatus, SOURCE_LABELS, STATE_LABELS, deleteProduct, draftError, draftOf, emptyDraft, isStale, loadOverview, needsAttention, openTask, orderedStatuses, refreshOps, saveProduct, saveSecret, type OpsOverview, type OpsStatus, type Product, type ProductDraft, type SecretKind } from "./ops-client";
+import { startCliLogin } from "./agent-client";
 import "./OpsPanel.css";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -47,6 +48,27 @@ function SecretRow({ kind, saved, onSaved }: { kind: SecretKind; saved: boolean;
     {error && <p className="social-form-error" role="alert">{error}</p>}
     <div className="ops-secret-actions"><button className="social-button compact" disabled={busy || !value.trim()}>{busy ? <LoaderCircle size={13} className="social-spin" /> : <Check size={13} />}저장</button>{saved && <button type="button" className="social-button compact subtle" disabled={busy} onClick={() => void submit(null)}>삭제</button>}</div>
   </form>;
+}
+
+/** GitHub and Cloudflare status come from the user's own CLI login; the app never holds those tokens. */
+function CliLogins() {
+  const [status, setStatus] = useState<CliStatus | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(() => { loadCliStatus().then(setStatus).catch(e => setError(message(e))); }, []);
+  useEffect(() => { load(); }, [load]);
+  async function login(tool: string) {
+    setError("");
+    try { await startCliLogin(tool); window.addEventListener("focus", load, { once: true }); }
+    catch (e) { setError(message(e)); }
+  }
+  if (!status) return error ? <p className="social-form-error" role="alert">{error}</p> : <p className="ops-note"><LoaderCircle size={13} className="social-spin" />CLI 로그인 확인 중</p>;
+  return <div className="ops-cli">
+    {cliLines(status).map(line => <p key={line.tool} className="ops-cli-line"><strong>{line.service}</strong> <span className={line.text.endsWith("로그인됨") ? "ops-saved" : "ops-missing"}>{line.text}</span>
+      {line.needsLogin && <button type="button" className="social-button compact" onClick={() => void login(line.tool)}>{line.tool} 로그인</button>}
+    </p>)}
+    <small>로그인은 터미널에서 각 CLI가 직접 처리합니다. 마친 뒤 이 창으로 돌아오면 다시 확인합니다. CLI가 없으면 공개 저장소만 조회합니다.</small>
+    {error && <p className="social-form-error" role="alert">{error}</p>}
+  </div>;
 }
 
 /** Read-only status of every product the business runs, with failures turned into planner work. */
@@ -109,7 +131,7 @@ export function OpsPanel({ active, databaseConnected, onOpenPlanner }: { active:
   const now = new Date();
   const products = data?.products ?? [];
   const attention = products.reduce((sum, product) => sum + product.statuses.filter(needsAttention).length, 0);
-  const missing = (Object.keys(SECRET_LABELS) as SecretKind[]).filter(kind => !data?.secrets[kind]).length;
+  const missing = INPUT_SECRETS.filter(kind => !data?.secrets[kind]).length;
   return <section className="ops" aria-label="운영 상태">
     <div className="ops-bar">
       <span className="ops-count">{products.length}개 제품{attention > 0 && <span className="ops-alert">확인 필요 {attention}</span>}</span>
@@ -124,8 +146,10 @@ export function OpsPanel({ active, databaseConnected, onOpenPlanner }: { active:
     {notice && <div className="social-notice success" role="status"><Check size={17} /><span>{notice.text}</span>{notice.planner && <button className="social-button compact" onClick={onOpenPlanner}>일정·작업 열기</button>}<button className="social-dismiss" aria-label="알림 닫기" onClick={() => setNotice(null)}><X size={15} /></button></div>}
     {showSecrets && <section id="ops-secrets" className="ops-card ops-secrets" aria-label="운영 연결 설정">
       <h2>연결 설정</h2>
-      <p className="ops-note">값은 OS 키체인에만 저장되고 화면으로 다시 돌아오지 않습니다. 읽기 권한만 준 토큰을 쓰세요.</p>
-      <div className="ops-secret-grid">{(Object.keys(SECRET_LABELS) as SecretKind[]).map(kind => <SecretRow key={kind} kind={kind} saved={!!data?.secrets[kind]} onSaved={(secrets, text) => { setData(current => current ? { ...current, secrets } : current); setNotice({ text }); }} />)}</div>
+      <p className="ops-note">GitHub·Cloudflare는 내 컴퓨터의 gh·cf 로그인으로 읽기 전용 조회를 합니다. 아래 값은 OS 키체인에만 저장되고 화면으로 다시 돌아오지 않습니다.</p>
+      <CliLogins />
+      {LEGACY_TOKENS.filter(kind => data?.secrets[kind]).map(kind => <p key={kind} className="ops-cli-line"><span>예전에 저장한 {SECRET_LABELS[kind].label}: CLI가 없을 때만 씁니다.</span><button type="button" className="social-button compact subtle" onClick={() => void saveSecret(kind, null).then(secrets => { setData(current => current ? { ...current, secrets } : current); setNotice({ text: SECRET_LABELS[kind].label + " 삭제됨" }); }).catch(e => setError(message(e)))}>저장된 {SECRET_LABELS[kind].label} 삭제</button></p>)}
+      <div className="ops-secret-grid">{INPUT_SECRETS.map(kind => <SecretRow key={kind} kind={kind} saved={!!data?.secrets[kind]} onSaved={(secrets, text) => { setData(current => current ? { ...current, secrets } : current); setNotice({ text }); }} />)}</div>
     </section>}
     {loading && !data ? <p className="ops-empty"><LoaderCircle size={15} className="social-spin" />불러오는 중</p>
       : products.length === 0 ? <div className="ops-card ops-empty-card"><Activity size={22} aria-hidden="true" /><p>앱·웹·서비스를 추가하면 CI, 배포, 헬스체크, Play 심사 상태를 한 화면에서 봅니다.</p><button className="social-button primary compact" onClick={() => setDraft(emptyDraft())}><Plus size={14} />첫 제품 추가</button></div>

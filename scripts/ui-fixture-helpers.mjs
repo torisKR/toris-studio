@@ -11,6 +11,11 @@ export const unhandled=Symbol('unhandled fixture IPC');
 /** Explicit read-only shell fixtures. Unexpected native mutations still fail. */
 export function shellFixture(command,args={}){
  if(command==='oauth_connections')return {connections:[],bindings:[],warnings:[]};
+ // Broker unreachable and no SNS login: the fresh-install defaults the connection and readiness screens read.
+ if(command==='oauth_connection_dispatch'&&args.input?.action==='brokerConfig')return {available:{tiktok:false,threads:false,instagram:false,facebook:false,naver_blog:false},naverSearch:false,clients:{}};
+ if(command==='oauth_status')return {providers:[]};
+ // Model auto-assign reads the saved choice; opted out here so shell fixtures never save a model.
+ if(command==='agent_settings_get')return {settings:{projectsRoot:'/fixture/projects',ollamaUrl:'http://127.0.0.1:11434',agentModel:null,contentModel:null,image:null,embedding:{provider:'local',model:''},modelAutoSelect:false},keys:{},chromaUrl:'http://127.0.0.1:18765'};
  if(command==='analytics_dispatch'){
   if(args.input?.action==='status')return {schemaReady:false,migrationRequired:true,paused:false,jobs:[],capabilities:[],limits:{maxBytes:5242880,maxRows:10000,maxColumns:100}};
   if(args.input?.action==='query')return {observations:[],hasMore:false,coverage:[],totalIsNotComputed:true};

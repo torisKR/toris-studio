@@ -116,3 +116,23 @@ test("hub runs are started and resumed by the host only", async () => {
   await assert.rejects(runtime.handle("run.start", { workflow: "nope", host: true }), /알 수 없는 워크플로/);
   runtime.shutdown();
 });
+
+test("content workflows use the content model; coding keeps the agent model", () => {
+  const settings = parseSettings({ projectsRoot: mkdtempSync(path.join(tmpdir(), "hub-model-")), chromaUrl: "http://127.0.0.1:9", contentModel: { provider: "claude-cli", model: "sonnet" }, agentModel: null });
+  const seen: unknown[] = [];
+  const manager = new RunManager(() => settings, () => {}, s => { seen.push(s.agentModel); throw new Error("모델 없음"); });
+  for (const workflow of ["weekly-content", "ops-triage", "video-production"]) {
+    const run = manager.start("", "", workflow, workflow === "ops-triage" ? { products: [] } : workflow === "video-production" ? {} : { now: "2026-10-27T00:00:00Z" });
+    manager.cancel(run.runId);
+  }
+  assert.deepEqual(seen, [settings.contentModel, settings.contentModel, settings.contentModel], "every content workflow is offered the content model");
+  const both = parseSettings({ projectsRoot: tmpdir(), chromaUrl: "http://127.0.0.1:9", contentModel: { provider: "claude-cli", model: "sonnet" }, agentModel: { provider: "codex-cli", model: "" } });
+  const coding: unknown[] = [];
+  assert.throws(() => new RunManager(() => both, () => {}, s => { coding.push(s.agentModel); throw new Error("x"); }).start(path.basename(mkdtempSync(path.join(tmpdir(), "hub-"))), "x", "coding"));
+  assert.deepEqual(coding, [both.agentModel], "code work stays on the agent model");
+  const fallback = parseSettings({ projectsRoot: tmpdir(), chromaUrl: "http://127.0.0.1:9", contentModel: null, agentModel: { provider: "codex-cli", model: "" } });
+  const used: unknown[] = [];
+  const run = new RunManager(() => fallback, () => {}, s => { used.push(s.agentModel); throw new Error("x"); }).start("", "", "weekly-content", { now: "2026-10-27T00:00:00Z" });
+  assert.ok(run.runId);
+  assert.deepEqual(used, [fallback.agentModel], "without a content model the agent model writes");
+});

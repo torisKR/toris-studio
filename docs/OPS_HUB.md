@@ -28,20 +28,29 @@
 
 ### 연결 설정
 
-운영 상태 탭의 **연결 설정**에 저장한 값은 OS 키체인(`kr.toris.studio.ops.v1`)에만 들어가고 화면으로 돌아오지 않습니다.
+GitHub와 Cloudflare는 **내 컴퓨터의 공식 CLI 로그인**으로 읽습니다. 앱은 그 토큰을 보지 않습니다.
 
-- GitHub 토큰: 공개 저장소는 없어도 됩니다. 비공개 저장소는 Actions·Contents 읽기 권한만 준 fine-grained 토큰을 쓰세요.
-- Cloudflare 계정 ID와 토큰: Workers Scripts·Pages 읽기 권한만 준 API 토큰.
+- GitHub: `gh`가 있으면 `gh api --method GET`으로 `repos/<owner>/<repo>/actions/runs`(최근 1건)와 `releases`(최근 1건)만 읽습니다. `gh`가 없으면 공개 저장소를 비인증 REST로 읽습니다.
+- Cloudflare: `cf`가 있으면 `cf workers deployments list --worker=<이름>`, `cf pages get <프로젝트>`를 쓰고, 없으면 `wrangler deployments list --name=<이름> --json`, `wrangler pages deployment list --project-name=<프로젝트> --json`을 씁니다. 여러 계정이 있으면 아래 Cloudflare 계정 ID를 `CLOUDFLARE_ACCOUNT_ID`로 넘깁니다.
+- 실행 방식(`desktop/src-tauri/src/ops_status_cli.rs`): 고정된 읽기 전용 argv만 실행합니다. 이름은 `--worker=<이름>`처럼 한 값으로 넘겨 플래그로 해석되지 않게 하고, `-`로 시작하는 이름은 거절합니다. 환경 변수를 비운 뒤(`GH_TOKEN`·`GITHUB_TOKEN`·`CLOUDFLARE_API_TOKEN`은 전달하지 않고, 설정 폴더를 옮긴 사용자를 위해 `GH_CONFIG_DIR`·`XDG_CONFIG_HOME`만 넘김) 빈 임시 폴더에서 20초 제한으로 실행합니다. CLI 오류 원문은 화면에 보내지 않고 `미로그인`·`없음·권한 없음`·`권한·한도`·`시간 초과`로만 분류합니다.
+- 로그인: **연결 설정**에 각 CLI의 설치·로그인 상태가 보이고, 로그인이 필요하면 **gh 로그인** / **cf 로그인**(cf가 없으면 **wrangler 로그인**)이 시스템 터미널에서 그 CLI의 공식 로그인 명령을 엽니다. 이 창으로 돌아오면 다시 확인합니다.
+
+**연결 설정**에 직접 입력하는 값은 OS 키체인(`kr.toris.studio.ops.v1`)에만 들어가고 화면으로 돌아오지 않습니다.
+
+- Cloudflare 계정 ID: 계정이 여럿일 때만 필요합니다.
 - Play 서비스 계정 JSON: Google Play Developer API의 `androidpublisher` 범위는 읽기 전용 범위가 따로 없어 관리 권한까지 포함합니다. Play Console에서 이 서비스 계정에 앱 정보 보기 권한만 주세요.
+- 예전 버전에서 저장한 GitHub·Cloudflare 토큰은 CLI가 없을 때만 쓰며, 화면에서는 **삭제**만 할 수 있습니다. 새로 입력하는 칸은 없습니다.
+
+출력 형식 근거: `desktop/src-tauri/tests/fixtures/ops-cli/`에 실제 `gh`(2.100.0)·`cf`(1.0.0-beta.14) 읽기 전용 출력을 계정 식별자를 지워 저장했습니다. Pages는 이 계정에 프로젝트가 없어 `cf schema` 기준의 합성 응답(`cf-pages-get.synthetic.json`)이고, `wrangler` 출력 형식은 Cloudflare 문서 기준이며 실제로 실행해 보지 않았습니다.
 
 ## 검증
 
 ```bash
 node --import tsx --test tests/planner-client.test.ts tests/ops-client.test.ts
-cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib planner:: ops_status::
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --no-default-features --lib planner:: ops_status
 node scripts/verify-planner-ui.mjs   # Chromium + IPC fixture
 node scripts/verify-ops-ui.mjs       # Chromium + IPC fixture
 node scripts/verify-publication-db.mjs  # 격리 PostgreSQL에서 012/013 제약과 실제 쿼리
 ```
 
-실제 Google 계정 동기화와 GitHub·Cloudflare·Play 토큰 호출은 위 검사에 포함되지 않습니다.
+실제 Google 계정 동기화, 다른 계정에서의 `gh`·`cf`·`wrangler` 로그인과 Play 호출은 위 검사에 포함되지 않습니다. CLI 실행 경계(환경 변수·작업 폴더·시간 제한)는 가짜 실행 파일로 검사합니다.

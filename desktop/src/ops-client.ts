@@ -33,6 +33,21 @@ export const SECRET_LABELS: Record<SecretKind, { label: string; hint: string; mu
   cloudflare_token: { label: "Cloudflare 토큰", hint: "Workers Scripts·Pages 읽기 권한만 준 API 토큰" },
   play_service_account: { label: "Play 서비스 계정 JSON", hint: "Play Console에서 앱 정보 보기 권한만 준 서비스 계정 키", multiline: true },
 };
+/** Values the user still types. GitHub and Cloudflare tokens come from the user's own gh/cf login instead. */
+export const INPUT_SECRETS: SecretKind[] = ["cloudflare_account", "play_service_account"];
+/** Tokens saved by older versions: used only when the CLI is missing, and can only be deleted. */
+export const LEGACY_TOKENS: SecretKind[] = ["github_token", "cloudflare_token"];
+export type CliState = { installed: boolean; signedIn: boolean | null };
+export type CliStatus = { gh: CliState; cf: CliState; wrangler: CliState };
+export function loadCliStatus(call: BridgeInvoke = nativeInvoke): Promise<CliStatus> {
+  return call("ops_cli_status") as Promise<CliStatus>;
+}
+/** One line per CLI: installed? signed in? Cloudflare uses cf, or wrangler when cf is missing. */
+export function cliLines(status: CliStatus): Array<{ tool: "gh" | "cf" | "wrangler"; service: string; text: string; needsLogin: boolean }> {
+  const line = (tool: "gh" | "cf" | "wrangler", service: string, s: CliState) => ({ tool, service, needsLogin: s.installed && s.signedIn === false, text: !s.installed ? `${tool} 미설치` : s.signedIn ? `${tool} 로그인됨` : s.signedIn === false ? `${tool} 로그인 필요` : `${tool} 확인 중` });
+  const cloudflare = status.cf.installed || !status.wrangler.installed ? line("cf", "Cloudflare", status.cf) : line("wrangler", "Cloudflare", status.wrangler);
+  return [line("gh", "GitHub", status.gh), cloudflare];
+}
 export const KIND_LABELS: Record<ProductKind, string> = { app: "앱", web: "웹", service: "서비스" };
 
 const ATTENTION: readonly OpsState[] = ["failing", "deploy_failed", "unhealthy", "halted", "error"];

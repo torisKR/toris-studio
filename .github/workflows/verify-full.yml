@@ -1,0 +1,114 @@
+name: Full verification (verify:full)
+
+# `pnpm verify:full` and the broker mutants on a macOS arm64 runner, for when they cannot run locally.
+# Runs by hand (Actions → Run workflow, once this file is on the default branch) or when a pull request
+# gets the `verify-full` label. No secrets are used, so it also runs on pull requests.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-full:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'verify-full'
+    runs-on: macos-latest
+    # GitHub-hosted jobs stop at 360 minutes; the Rust mutants alone recompile the test binary 178 times.
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: aarch64-apple-darwin
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      CHROMA_PORT: '18765'
+    steps:
+      - name: Prepare isolated test paths
+        run: |
+          {
+            printf 'TORIS_TEST_SCRATCH=%s/studio-publications\n' "$RUNNER_TEMP"
+            printf 'TORIS_SNS_UI_ARTIFACTS=%s/studio-sns-ui\n' "$RUNNER_TEMP"
+            printf 'TORIS_PUBLICATION_UI_ARTIFACTS=%s/studio-publication-ui\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: '1.96.0'
+          targets: ${{ env.TARGET }}
+          components: rustfmt
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: desktop/src-tauri -> target
+          cache-on-failure: true
+      - name: Install locked packages and test browsers
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          # Chromium for the fixture UI checks, WebKit for the desktop startup smoke check.
+          pnpm exec playwright install chromium webkit
+      - name: Check the OAuth broker and callback, then the broker mutants
+        run: |
+          node --import tsx --test infrastructure/oauth-broker/broker.test.mjs infrastructure/oauth-callback/callback.test.mjs
+          node scripts/mutation-check.mjs infrastructure/oauth-broker/mutants.json
+      - name: Build and verify pinned media (FFmpeg, fonts) like the native installer job
+        run: node scripts/prepare-media.mjs prepare "$TARGET"
+      - name: Bundle the agent runtime used by the Rust agent_runtime tests
+        run: pnpm agent:build
+      - name: Install PostgreSQL (publication DB mutant) and GNU timeout (agent_runtime mutant)
+        run: |
+          brew install postgresql@17 coreutils
+          printf 'TORIS_TEST_PG_BIN=%s/bin\n' "$(brew --prefix postgresql@17)" >> "$GITHUB_ENV"
+          # Only `timeout` (rs.waiters-hang-on-exit): the rest of gnubin would shadow the BSD tools other steps use.
+          mkdir -p "$RUNNER_TEMP/gnu-timeout"
+          ln -sf "$(brew --prefix coreutils)/bin/gtimeout" "$RUNNER_TEMP/gnu-timeout/timeout"
+          "$RUNNER_TEMP/gnu-timeout/timeout" --version > /dev/null
+          printf '%s/gnu-timeout\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Start ChromaDB for the RAG live test and its mutants
+        env:
+          ANONYMIZED_TELEMETRY: 'FALSE'
+        run: |
+          # Same version as infrastructure/agent-vector-db/compose.yaml; macOS runners have no Docker.
+          python3 -m venv "$RUNNER_TEMP/chroma-venv"
+          "$RUNNER_TEMP/chroma-venv/bin/pip" install --quiet 'chromadb==1.5.9'
+          nohup "$RUNNER_TEMP/chroma-venv/bin/chroma" run --host 127.0.0.1 --port "$CHROMA_PORT" --path "$RUNNER_TEMP/chroma-data" > "$RUNNER_TEMP/chroma.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS "http://127.0.0.1:$CHROMA_PORT/api/v2/heartbeat" > /dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo '::error::ChromaDB did not answer its heartbeat; the RAG live mutants would survive.'
+          tail -n 40 "$RUNNER_TEMP/chroma.log"
+          exit 1
+      - name: pnpm verify:full
+        if: ${{ !cancelled() }}
+        env:
+          TORIS_TEST_CHROMA_URL: http://127.0.0.1:18765
+        run: pnpm verify:full
+      - name: Preserve UI check artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verify-full-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/studio-sns-ui
+            ${{ runner.temp }}/studio-publication-ui
+            ${{ runner.temp }}/chroma.log
+            docs/review/motion
+            /private/tmp/toris-*
+          if-no-files-found: ignore
+          retention-days: 7

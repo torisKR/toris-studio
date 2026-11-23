@@ -147,7 +147,8 @@ impl Provider {
     fn secret_required(self) -> bool {
         !self.google()
     }
-    /// Google installed-app clients: PKCE, offline access, no client secret required.
+    /// Google desktop clients: PKCE and offline access. The user's own client may omit its secret here;
+    /// Toris's Google client is exchanged and refreshed by the Toris broker, which holds the secret.
     fn google(self) -> bool {
         matches!(self, Self::Youtube | Self::GoogleCalendar)
     }
@@ -252,6 +253,36 @@ struct ClientConfig {
     redirect_uri: String,
     #[serde(default)]
     tiktok_audit_declared: bool,
+    /// Whose OAuth app this is. Records saved before modes existed are the user's own app.
+    #[serde(default)]
+    mode: ClientMode,
+    /// Toris mode only: the broker origin that issued the grant; refreshes go back to it.
+    #[serde(default)]
+    broker: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ClientMode {
+    /// The user's own developer app (client ID, secret where the provider needs one).
+    #[default]
+    Developer,
+    /// Toris's public client (Google included); the code exchange and refresh go through the Toris broker.
+    Toris,
+}
+
+/// Google logins prove the code with PKCE (Toris's broker binds the same verifier); TikTok Desktop requires it too.
+fn uses_pkce(provider: Provider) -> bool {
+    provider.google() || provider == Provider::Tiktok
+}
+
+/// Google joins scopes with spaces; Meta and TikTok take comma lists.
+fn scope_separator(provider: Provider) -> &'static str {
+    if provider.google() {
+        " "
+    } else {
+        ","
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -290,6 +321,8 @@ struct PendingLogin {
     cancel: watch::Sender<bool>,
     publishing: bool,
     provider_id: Option<String>,
+    /// Toris Meta logins: the loopback address the toris.kr callback relays the browser to.
+    callback_uri: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -552,6 +585,12 @@ impl TokenFailure {
         }
     }
     fn message(self) -> String {
+        if self.outcome == "upgrade_required" {
+            return "Toris 연결을 쓰려면 앱을 최신 버전으로 업데이트하세요.".into();
+        }
+        if self.outcome == "rate_limited" || self.outcome == "quota_exhausted" {
+            return "요청이 많아 잠시 처리할 수 없습니다. 잠시 후 다시 시도하세요.".into();
+        }
         if self.permanent {
             "SNS 인증이 만료되었거나 취소되었습니다. 다시 연결하세요.".into()
         } else {
@@ -561,9 +600,14 @@ impl TokenFailure {
 }
 trait TokenTransport: Send + Sync {
     fn send(&self, request: TokenRequest) -> TokenFuture<'_>;
+    /// Toris OAuth Broker call (JSON). Only Toris-mode logins and refreshes use it.
+    fn broker(&self, request: BrokerRequest) -> TokenFuture<'_>;
 }
 struct OfficialTransport;
 impl TokenTransport for OfficialTransport {
+    fn broker(&self, request: BrokerRequest) -> TokenFuture<'_> {
+        Box::pin(send_broker(request))
+    }
     fn send(&self, request: TokenRequest) -> TokenFuture<'_> {
         Box::pin(async move {
             // Fixed endpoint allowlist prevents an edited configuration becoming SSRF or
@@ -727,8 +771,28 @@ struct OAuthService {
     gate: Mutex<()>,
     pending: StdMutex<HashMap<String, PendingLogin>>,
     loopback_listener: StdMutex<Option<JoinHandle<()>>>,
+    /// Loopback callback port; tests bind an ephemeral one.
+    callback_port: u16,
+    /// Toris OAuth Broker origin. A constant in the app; only tests inject another one.
+    broker_url: String,
+    /// Last `/v1/config` answer and when it was fetched (None: unreachable).
+    broker_config: StdMutex<Option<(u64, Option<Value>)>>,
 }
 impl OAuthService {
+    #[cfg(test)]
+    fn with_broker(mut self, url: &str) -> Self {
+        self.broker_url = url.into();
+        self
+    }
+    #[cfg(test)]
+    fn with_callback_port(mut self, port: u16) -> Self {
+        self.callback_port = port;
+        self
+    }
+    /// The stored client: the user's own app or Toris mode. There is no built-in default.
+    fn client_for(&self, provider: Provider) -> Result<Option<ClientConfig>, String> {
+        self.read::<ClientConfig>("client", provider)
+    }
     fn new(
         store: Arc<dyn CredentialStore>,
         transport: Arc<dyn TokenTransport>,
@@ -741,6 +805,9 @@ impl OAuthService {
             gate: Mutex::new(()),
             pending: StdMutex::new(HashMap::new()),
             loopback_listener: StdMutex::new(None),
+            callback_port: CALLBACK_PORT,
+            broker_url: TORIS_BROKER.into(),
+            broker_config: StdMutex::new(None),
         }
     }
     fn read<T: for<'de> Deserialize<'de>>(
@@ -819,7 +886,7 @@ impl OAuthService {
         self.cleanup_pending();
         let now = self.clock.now();
         let providers: Vec<Value> = PROVIDERS.into_iter().map(|provider| {
-            let client_result = self.read::<ClientConfig>("client", provider);
+            let client_result = self.client_for(provider);
             let session_result = self.read::<TokenSession>("session", provider);
             let error = client_result.as_ref().err().or(session_result.as_ref().err()).cloned();
             let client = client_result.ok().flatten(); let session = session_result.ok().flatten();
@@ -835,6 +902,7 @@ impl OAuthService {
                 else { provider.help().into() });
             let audit: Vec<AuditEvent> = self.read("audit", provider).ok().flatten().unwrap_or_default();
             json!({ "platform":provider.id(), "label":provider.label(), "clientConfigured":configured,
+                "clientMode":client.as_ref().map(|c| c.mode),
                 "connected":connected, "uploadAuthorized":connected && provider == Provider::Youtube && session.as_ref().is_some_and(|s| has_upload_scope(&s.scopes)), "publishingAuthorized":connected && session.as_ref().is_some_and(|s| provider.publishing_authorized(&s.scopes)), "publishingScopes":session.as_ref().map(|s| s.scopes.clone()).unwrap_or_default(), "expiresAt":session.as_ref().and_then(|s| timestamp(s.expires_at)),
                 "refreshable":refreshable, "needsReconnect":needs_reconnect, "detail":detail,
                 "tiktokAuditDeclared":provider == Provider::Tiktok && client.as_ref().is_some_and(|c| c.tiktok_audit_declared), "redirectUri":client.as_ref().map(|c| c.redirect_uri.as_str()), "pending":pending,
@@ -858,7 +926,20 @@ impl OAuthService {
             ]
             .contains(&key.as_str())
         }) {
-            return Err("지원하지 않는 OAuth 설정입니다.".into());
+            if !(object.len() == 1 && object.contains_key("mode")) {
+                return Err("지원하지 않는 OAuth 설정입니다.".into());
+            }
+        }
+        if let Some(mode) = object.get("mode") {
+            let config = match mode.as_str() {
+                Some("toris") if toris_platform(provider) => ClientConfig {
+                    redirect_uri: toris_redirect(provider).into(),
+                    mode: ClientMode::Toris,
+                    ..Default::default()
+                },
+                _ => return Err("지원하지 않는 OAuth 연결 방식입니다.".into()),
+            };
+            return self.replace_client(provider, config);
         }
         let mut config = self
             .read::<ClientConfig>("client", provider)?
@@ -897,6 +978,15 @@ impl OAuthService {
                 _ => unreachable!(),
             }
         }
+        config.mode = ClientMode::Developer;
+        config.broker = None;
+        self.replace_client(provider, config)
+    }
+    fn replace_client(
+        &self,
+        provider: Provider,
+        mut config: ClientConfig,
+    ) -> Result<Value, String> {
         validate_client(provider, &config)?;
         // Invalidate a grant if its client or redirect changes. It must never be
         // silently attached to a different developer application/account context.
@@ -905,6 +995,7 @@ impl OAuthService {
             old.client_id != config.client_id
                 || old.client_secret != config.client_secret
                 || old.redirect_uri != config.redirect_uri
+                || old.mode != config.mode
         });
         if changed {
             if let Some(original) = self.store.read(&format!("session:{}", provider.id()))? {
@@ -966,7 +1057,7 @@ impl OAuthService {
             None
         };
         let state = random_secret();
-        let verifier = (provider.google() || provider == Provider::Tiktok).then(random_secret);
+        let verifier = uses_pkce(provider).then(random_secret);
         let authorization_url =
             authorization_url_for_mode(provider, &config, &state, verifier.as_deref(), upload)?;
         let (cancel, receiver) = watch::channel(false);
@@ -983,6 +1074,7 @@ impl OAuthService {
                     cancel,
                     publishing: upload,
                     provider_id: Some(provider.id().into()),
+                    callback_uri: None,
                 },
             );
         if let Err(error) = self.audit(provider, "login_started", "pending") {
@@ -1293,6 +1385,14 @@ fn random_secret() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 fn validate_client(provider: Provider, client: &ClientConfig) -> Result<(), String> {
+    if client.mode == ClientMode::Toris {
+        // No secret, ever; the public client ID arrives from the broker when a login starts.
+        return (toris_platform(provider)
+            && client.client_secret.is_none()
+            && client.redirect_uri == toris_redirect(provider))
+        .then_some(())
+        .ok_or_else(|| "Toris 연결 설정을 확인하세요.".to_string());
+    }
     if client.client_id.trim().is_empty()
         || client.client_id.len() > 2048
         || client.client_id.chars().any(char::is_control)
@@ -1718,6 +1818,7 @@ fn service() -> &'static Arc<OAuthService> {
 pub async fn status() -> Result<Value, String> {
     let mut status = service().status().await?;
     let connections = connections().await?;
+    let broker = broker_view(service()).await;
     if let Some(providers) = status["providers"].as_array_mut() {
         for provider in providers {
             let platform = provider["platform"].as_str().unwrap_or("").to_owned();
@@ -1727,6 +1828,7 @@ pub async fn status() -> Result<Value, String> {
                 .flatten()
                 .filter(|c| c["platform"] == platform && c["disconnected"] == false)
                 .collect::<Vec<_>>();
+            provider["torisAvailable"] = json!(broker["available"][platform.as_str()] == true);
             provider["legacyAvailable"] =
                 json!(provider["connected"] == true || provider["refreshable"] == true);
             provider["connected"] = json!(matching.iter().any(|c| c["connected"] == true));
@@ -1778,6 +1880,8 @@ pub(crate) struct PublishingAccess {
     pub token: String,
     pub scopes: Vec<String>,
     pub tiktok_audit_declared: bool,
+    /// A Toris connection: Google API calls bill Toris's project quota, which every user shares.
+    pub shared_quota: bool,
 }
 pub(crate) async fn publishing_access(platform: &str) -> Result<PublishingAccess, String> {
     connections_impl::unique_access(platform).await
@@ -1798,6 +1902,25 @@ fn granted_permissions(response: &Value) -> Result<Vec<String>, String> {
 }
 pub async fn begin_youtube_upload_login() -> Result<Value, String> {
     begin_publish_login("youtube".into()).await
+}
+/// Read token of the one connected YouTube account, for public Data API reads without an API key.
+/// Native-only: used for fixed googleapis.com endpoints and never returned over IPC.
+pub(crate) async fn youtube_read_token() -> Result<String, String> {
+    Ok(youtube_read_login().await?.0)
+}
+/// The YouTube read token and whether it bills Toris's shared Google project quota (Toris 연결).
+pub(crate) async fn youtube_read_login() -> Result<(String, bool), String> {
+    let access = publishing_access("youtube").await?;
+    let readonly = "https://www.googleapis.com/auth/youtube.readonly";
+    if !access.scopes.is_empty()
+        && !access
+            .scopes
+            .iter()
+            .any(|s| s == readonly || has_upload_scope(std::slice::from_ref(s)))
+    {
+        return Err("YouTube 읽기 권한이 없습니다.".into());
+    }
+    Ok((access.token, access.shared_quota))
 }
 /// Token remains native-only and is used solely for fixed Google API endpoints.
 pub(crate) async fn youtube_upload_access() -> Result<String, String> {
@@ -1840,6 +1963,14 @@ pub async fn disconnect(platform: String) -> Result<Value, String> {
     let id = unique_connection_id(&platform).await?;
     connection_dispatch(json!({"action":"disconnect","connectionId":id})).await?;
     status().await
+}
+/// Whether the Toris broker serves Naver blog search now (cached config; false when unreachable).
+pub async fn naver_search_available() -> bool {
+    broker_view(service()).await["naverSearch"] == true
+}
+/// Naver blog search through the Toris broker, for users without their own Naver search key.
+pub async fn naver_search(query: &str) -> Result<Value, String> {
+    naver_search_with(service(), query).await
 }
 pub async fn refresh_due() -> Result<(), String> {
     connections_impl::refresh_all().await
@@ -1966,8 +2097,19 @@ pub(super) mod tests {
     pub(super) struct MockTransport {
         pub(super) responses: StdMutex<VecDeque<Result<Value, TokenFailure>>>,
         pub(super) requests: StdMutex<Vec<TokenRequest>>,
+        pub(super) broker_requests: StdMutex<Vec<BrokerRequest>>,
     }
     impl TokenTransport for MockTransport {
+        fn broker(&self, request: BrokerRequest) -> TokenFuture<'_> {
+            self.broker_requests.lock().unwrap().push(request);
+            let response = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unexpected broker request");
+            Box::pin(async move { response })
+        }
         fn send(&self, request: TokenRequest) -> TokenFuture<'_> {
             self.requests.lock().unwrap().push(request);
             let response = self
@@ -2020,6 +2162,7 @@ pub(super) mod tests {
             } else {
                 provider.default_redirect()
             },
+            ..Default::default()
         }
     }
     fn add_pending(service: &OAuthService, provider: Provider, state: &str, expires_at: u64) {
@@ -2034,6 +2177,7 @@ pub(super) mod tests {
                 cancel,
                 publishing: false,
                 provider_id: None,
+                callback_uri: None,
             },
         );
     }
@@ -2645,6 +2789,10 @@ pub(super) mod tests {
         assert!(store.inner.0.lock().unwrap().is_empty());
     }
 }
+
+#[path = "oauth_broker.rs"]
+mod broker;
+use broker::*;
 
 #[path = "oauth_connections.rs"]
 mod connections_impl;

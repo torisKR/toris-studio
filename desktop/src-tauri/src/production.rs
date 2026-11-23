@@ -21,8 +21,9 @@ pub const STYLES: [&str; 4] = ["realistic", "cinematic", "animation", "documenta
 pub const QUALITIES: [&str; 3] = ["preview", "standard", "high"];
 pub const SUBTITLES: [&str; 3] = ["shorts-bold", "clean-bottom", "none"];
 pub const BGMS: [&str; 3] = ["none", "ambient", "pulse"];
-/// Scene source: licence-cleared stock photo with motion graphics, or a local Wan2.1 clip.
-pub const VISUALS: [&str; 2] = ["stock", "ai"];
+/// Scene source: licence-cleared stock photo shorts, a local Wan2.1 clip, or a motion graphic
+/// drawn by the Rust compositor from a reference (motion_scene.rs).
+pub const VISUALS: [&str; 3] = ["stock", "ai", "motion"];
 /// "card": fixed two-line title on top, media in the middle, captions and credit (shorts style).
 pub const LAYOUTS: [&str; 2] = ["card", "full"];
 pub const CAMERAS: [&str; 5] = ["zoom-in", "zoom-out", "pan-left", "pan-right", "pan-up"];
@@ -59,6 +60,9 @@ pub struct Settings {
     pub visual: String,
     #[serde(default = "default_layout")]
     pub layout: String,
+    /// Motion jobs only: the reference id (built-in or saved). Empty = the default built-in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference: String,
 }
 fn default_speaker() -> String {
     "Sohee".into()
@@ -98,8 +102,28 @@ pub fn parse_settings(input: &Value) -> Result<Settings, String> {
     check(&settings.speaker, crate::tts_runtime::SPEAKERS, "화자")?;
     check(&settings.visual, &VISUALS, "장면 소스")?;
     check(&settings.layout, &LAYOUTS, "화면 구성")?;
-    // Stock-photo jobs never run the video engine; an empty choice means the default engine.
-    let engine = if settings.engine.is_empty() && settings.visual == "stock" {
+    if settings.visual == "motion" {
+        crate::motion_scene::canvas(&settings.aspect)?;
+        if settings.layout != "full" {
+            return Err("모션 그래픽 장면은 전체 화면 구성만 씁니다.".into());
+        }
+    }
+    if !settings.reference.is_empty() {
+        if settings.visual != "motion" {
+            return Err("레퍼런스는 모션 그래픽 장면에만 씁니다.".into());
+        }
+        let id = settings.reference.as_str();
+        let builtin = id.starts_with("builtin-")
+            && id.len() <= 40
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !builtin && Uuid::parse_str(id).is_err() {
+            return Err("레퍼런스 ID 형식 오류".into());
+        }
+    }
+    // Only AI clips run the video engine; an empty choice elsewhere means the default engine.
+    let engine = if settings.engine.is_empty() && !needs_engine(&settings.visual) {
         crate::video_runtime::DEFAULT_ENGINE.to_owned()
     } else {
         settings.engine.clone()
@@ -121,10 +145,67 @@ pub fn output_size(aspect: &str) -> (u32, u32) {
     }
 }
 
-/// Stock photo cuts are shorter (about 3.5 s, like shorts); AI clips stay about 5 s.
+/// Stock photo cuts are shorter (about 3.5 s, like shorts); AI clips stay about 5 s; motion
+/// scenes use the default reference rhythm (callers with a reference use motion_scene_count).
 pub fn scene_count(duration: u32, visual: &str) -> usize {
+    if visual == "motion" {
+        return motion_scene_count(duration, 4.0);
+    }
     let each = if visual == "stock" { 3.5 } else { 5.0 };
     ((duration as f64 / each).ceil() as usize).clamp(if visual == "stock" { 3 } else { 2 }, 12)
+}
+
+/// The single rule for "does this job run the Wan2.1 engine". Stock photos and motion graphics
+/// never do; every engine check, credit and label goes through here.
+pub fn needs_engine(visual: &str) -> bool {
+    visual == "ai"
+}
+/// Motion scenes follow the reference rhythm (preferred scene length), 3~12 scenes.
+pub fn motion_scene_count(duration: u32, scene_sec: f64) -> usize {
+    let each = if scene_sec.is_finite() && scene_sec > 0.0 {
+        scene_sec
+    } else {
+        4.0
+    };
+    ((duration as f64 / each).ceil() as usize).clamp(3, 12)
+}
+/// Input options for a scene clip in the full-frame composer. AI clips loop to fill a longer
+/// narration; a motion graphic must not restart, so it plays once and holds (clip_hold_filter).
+fn clip_input_args(kind: &str) -> Vec<&'static str> {
+    if kind == "motion" {
+        vec!["mov", "-i"]
+    } else {
+        vec!["mov", "-stream_loop", "-1", "-i"]
+    }
+}
+fn clip_hold_filter(kind: &str, clip: f64, duration: f64) -> String {
+    let extra = duration - clip;
+    if kind != "motion" || extra <= 0.001 {
+        return String::new();
+    }
+    format!(",tpad=stop_mode=clone:stop_duration={extra:.3}")
+}
+/// Caption cues for one scene. A motion scene without narration already shows its words as the
+/// graphic, so it burns no duplicate captions.
+fn cues_for(settings: &Settings, text: &str, voice: f64, duration: f64) -> Vec<(f64, f64, String)> {
+    if settings.subtitle_style == "none"
+        || text.is_empty()
+        || (settings.visual == "motion" && !settings.narration)
+    {
+        return vec![];
+    }
+    if settings.visual == "stock" {
+        return vec![(
+            0.0,
+            voice
+                .min(duration)
+                .max(0.5)
+                .max(duration - 0.05)
+                .min(duration),
+            spoken(text),
+        )];
+    }
+    caption_cues(text, voice, duration)
 }
 
 fn bad_text(text: &str) -> bool {
@@ -201,6 +282,8 @@ pub fn validate_storyboard(raw: &Value, settings: &Settings) -> Result<Value, St
                 "camera",
                 "stat",
                 "imageId",
+                "layout",
+                "points",
             ]
             .contains(&key.as_str())
             {
@@ -289,10 +372,23 @@ pub fn validate_storyboard(raw: &Value, settings: &Settings) -> Result<Value, St
         if settings.narration && narration.is_empty() {
             return Err(format!("{}번 장면의 나레이션이 비어 있습니다.", index + 1));
         }
-        out.push(json!({"id": id, "order": index + 1, "durationSec": (duration * 10.0).round() / 10.0,
+        let mut entry = json!({"id": id, "order": index + 1, "durationSec": (duration * 10.0).round() / 10.0,
             "script": text(scene, "script", 600, false)?, "narration": narration, "caption": text(scene, "caption", 160, false)?,
             "prompt": text(scene, "prompt", 600, settings.visual == "ai")?, "negativePrompt": text(scene, "negativePrompt", 300, false)?, "transition": transition,
-            "search": search, "emphasis": emphasis, "camera": camera, "stat": stat, "imageId": image_id}));
+            "search": search, "emphasis": emphasis, "camera": camera, "stat": stat, "imageId": image_id});
+        if settings.visual == "motion" {
+            let (layout, points) = motion_fields(scene, &entry, index)?;
+            entry["layout"] = json!(layout);
+            entry["points"] = json!(points);
+        } else if scene.get("layout").is_some_and(|v| !v.is_null())
+            || scene.get("points").is_some_and(|v| !v.is_null())
+        {
+            return Err(format!(
+                "{}번 장면: 배치(layout)·목록(points)은 모션 그래픽 장면에만 씁니다.",
+                index + 1
+            ));
+        }
+        out.push(entry);
     }
     if (total - settings.duration_sec as f64).abs() > settings.duration_sec as f64 * 0.25 + 1.0 {
         return Err(format!(
@@ -304,6 +400,54 @@ pub fn validate_storyboard(raw: &Value, settings: &Settings) -> Result<Value, St
         json!({"title": title, "headline": headline, "story": story, "style": style, "scenes": out, "template": raw["template"] == true,
               "provider": raw["provider"].as_str().unwrap_or(""), "model": raw["model"].as_str().unwrap_or("")}),
     )
+}
+
+/// Motion scene layout and list points, checked against the closed layout vocabulary.
+fn motion_fields(
+    raw: &Value,
+    entry: &Value,
+    index: usize,
+) -> Result<(String, Vec<String>), String> {
+    let n = index + 1;
+    let layout = raw["layout"].as_str().unwrap_or("");
+    if !crate::motion_scene::LAYOUTS.contains(&layout) {
+        return Err(format!(
+            "{n}번 장면의 배치는 {} 중 하나입니다.",
+            crate::motion_scene::LAYOUTS.join(", ")
+        ));
+    }
+    let caption = entry["caption"].as_str().unwrap_or("");
+    if caption.chars().count() > 40 {
+        return Err(format!("{n}번 장면의 화면 제목은 40자 이하입니다."));
+    }
+    if caption.is_empty() && layout != "stat" {
+        return Err(format!("{n}번 장면의 화면 제목이 비어 있습니다."));
+    }
+    let points: Vec<String> = match raw.get("points") {
+        None | Some(Value::Null) => vec![],
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty() && p.chars().count() <= 24 && !bad_text(p))
+                    .map(str::to_owned)
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(format!("{n}번 장면의 목록 항목은 24자 이하 문장입니다."))?,
+        _ => return Err(format!("{n}번 장면의 목록 형식을 확인하세요.")),
+    };
+    match layout {
+        "list" if !(2..=3).contains(&points.len()) => {
+            Err(format!("{n}번 장면(목록)에는 항목이 2~3개 필요합니다."))
+        }
+        "list" => Ok((layout.into(), points)),
+        _ if !points.is_empty() => Err(format!("{n}번 장면: 목록 항목은 목록 배치에만 씁니다.")),
+        "stat" if entry["stat"].is_null() => {
+            Err(format!("{n}번 장면(숫자)에는 숫자 카드가 필요합니다."))
+        }
+        _ => Ok((layout.into(), points)),
+    }
 }
 
 /// Visual prompt the engine receives: scene prompt + the shared style so scenes look consistent.
@@ -576,10 +720,41 @@ pub fn new_job(settings: &Settings) -> Value {
         crate::video_runtime::generation_size(&settings.aspect, &settings.quality)
             .unwrap_or(("832x480", 49, 30));
     let (w, h) = output_size(&settings.aspect);
-    json!({"version": 1, "id": id, "settings": settings, "status": "planning", "stage": "plan", "stages": stages,
+    let mut job = json!({"version": 1, "id": id, "settings": settings, "status": "planning", "stage": "plan", "stages": stages,
         "generation": {"size": gen, "frames": frames, "steps": steps, "fps": 16, "output": format!("{w}x{h}")},
         "storyboard": null, "scenes": [], "outputs": {}, "qa": null, "provenance": null, "errors": [], "metrics": [],
-        "createdAt": now(), "updatedAt": now()})
+        "createdAt": now(), "updatedAt": now()});
+    // Motion jobs keep a snapshot of their reference, so later edits never change a job.
+    // Saved (non built-in) references are attached by the host, which can read the store.
+    if settings.visual == "motion" {
+        let wanted = if settings.reference.is_empty() {
+            crate::motion_reference::DEFAULT_ID
+        } else {
+            settings.reference.as_str()
+        };
+        job["reference"] = crate::motion_reference::builtins()
+            .into_iter()
+            .find(|r| r.id == wanted)
+            .map(|r| json!(r))
+            .unwrap_or(Value::Null);
+    }
+    job
+}
+
+/// The job's reference snapshot (motion jobs). A missing or edited-by-hand snapshot is an error.
+pub fn job_reference(job: &Value) -> Result<crate::motion_reference::Reference, String> {
+    if job["reference"].is_null() {
+        return Err("이 작업의 모션 레퍼런스가 없습니다. 새로 만들어 주세요.".into());
+    }
+    crate::motion_reference::parse(&job["reference"])
+}
+
+/// Scene video entry for a motion graphic: the built graphics scene and its cache key.
+fn motion_entry(graphics: Value, width: u32) -> Value {
+    let key = cache_key(
+        &json!({"kind": "motion", "layout": crate::motion_scene::LAYOUT_VERSION, "graphics": graphics, "width": width}),
+    );
+    json!({"status": "pending", "kind": "motion", "key": key, "graphics": graphics})
 }
 
 /// After a restart nothing is running: a stage that was running goes back to pending so
@@ -667,6 +842,21 @@ pub fn apply_storyboard(job: &mut Value, storyboard: Value) -> Result<(), String
         } else {
             json!({"status": "skipped", "key": akey})
         };
+        if settings.visual == "motion" {
+            let reference = job_reference(job)?;
+            let graphics = crate::motion_scene::build(
+                scene,
+                &reference,
+                &settings.aspect,
+                &settings.subtitle_style,
+            )
+            .map_err(|e| format!("{}번 장면: {e}", index + 1))?;
+            let video = motion_entry(graphics, output_size(&settings.aspect).0);
+            let key = video["key"].as_str().unwrap_or("").to_owned();
+            let video = keep("video", &key).unwrap_or(video);
+            scenes.push(json!({"id": id, "order": index + 1, "durationSec": scene["durationSec"], "video": video, "voice": voice}));
+            continue;
+        }
         if settings.visual == "stock" {
             let chosen = chosen_candidate(job, &id, scene["imageId"].as_str().unwrap_or(""));
             let video = stock_entry(chosen.as_ref(), &id);
@@ -835,6 +1025,8 @@ pub fn mark_retry(job: &mut Value, scene_id: Option<&str>, stage: &str) -> Resul
                     .map(|at| list[(at + 1) % list.len()].clone())
                     .or_else(|| list.first().cloned());
                 scene["video"] = stock_entry(next.as_ref(), id);
+            } else if part == "video" && scene["video"]["kind"] == "motion" {
+                // Deterministic render: the same key re-renders the same frames (render_at caches by hash).
             } else if part == "video" && scene["video"]["status"] == "done" {
                 let seed = (scene["video"]["seed"].as_u64().unwrap_or(0) as u32)
                     .wrapping_mul(1_103_515_245)
@@ -1059,6 +1251,9 @@ impl Productions {
                 match work {
                     Work::Scene(scene) if job["settings"]["visual"] == "stock" => {
                         self.stock_scene(id, &scene).await?
+                    }
+                    Work::Scene(scene) if job["settings"]["visual"] == "motion" => {
+                        self.motion_scene(id, &scene).await?
                     }
                     Work::Scene(scene) => {
                         // Video and TTS models compete for the same 24GB: stop the TTS server the app owns.
@@ -1289,6 +1484,50 @@ impl Productions {
         Ok(())
     }
 
+    /// Motion scene: the built graphics scene rendered once by the Rust CPU compositor. No video
+    /// engine, no TTS stop; the renderer's job gate keeps it apart from editor exports.
+    async fn motion_scene(&self, id: &str, scene: &str) -> Result<(), String> {
+        let job = self
+            .update(id, |job| {
+                job["stage"] = json!("scenes");
+                job["stages"]["scenes"]["status"] = json!("running");
+                let s = scene_mut(job, scene)?;
+                s["video"]["status"] = json!("running");
+                s["video"]["error"] = Value::Null;
+                Ok(())
+            })
+            .await?;
+        let settings: Settings =
+            serde_json::from_value(job["settings"].clone()).map_err(|_| "작업 설정 오류")?;
+        let entry = job["scenes"]
+            .as_array()
+            .and_then(|l| l.iter().find(|s| s["id"] == scene))
+            .cloned()
+            .ok_or("장면을 찾을 수 없습니다.")?;
+        let result = render_motion_scene(id, scene, &settings, &entry, &media_root()?).await;
+        match result {
+            Ok(done) => self
+                .update(id, |job| {
+                    let s = scene_mut(job, scene)?;
+                    s["video"] = done.clone();
+                    count_done(job, "scenes", "video");
+                    Ok(())
+                })
+                .await
+                .map(|_| ()),
+            Err(error) => {
+                self.update(id, |job| {
+                    let s = scene_mut(job, scene)?;
+                    s["video"]["status"] = json!("failed");
+                    s["video"]["error"] = json!(error);
+                    Ok(())
+                })
+                .await?;
+                Err(format!("{scene} 장면: {error}"))
+            }
+        }
+    }
+
     /// Stock scene: the picked photo, else the scene's other candidates, else a drawn card. One bad
     /// download never stops the job; what was skipped is logged on the job.
     async fn stock_scene(&self, id: &str, scene: &str) -> Result<(), String> {
@@ -1443,13 +1682,7 @@ impl Productions {
                 let text = if settings.narration { story["narration"].as_str().unwrap_or("") } else { story["caption"].as_str().unwrap_or("") };
                 let voice = scene["voice"]["durationSec"].as_f64().unwrap_or(duration);
                 // Photo shorts keep a scene's line whole (3~4 s cuts, word-wrapped box) so no word is split across cues.
-                let cues = if settings.subtitle_style == "none" || text.is_empty() {
-                    vec![]
-                } else if settings.visual == "stock" {
-                    vec![(0.0, voice.min(duration).max(0.5).max(duration - 0.05).min(duration), spoken(text))]
-                } else {
-                    caption_cues(text, voice, duration)
-                };
+                let cues = cues_for(&settings, text, voice, duration);
                 scene["captionCues"] = json!(cues.iter().map(|(s, e, t)| json!({"startSec": (s * 1000.0).round() / 1000.0, "endSec": (e * 1000.0).round() / 1000.0, "text": t})).collect::<Vec<_>>());
                 all.extend(cues.into_iter().map(|(s, e, t)| (s + offset, e + offset, t)));
                 offset += duration;
@@ -1588,6 +1821,53 @@ async fn stock_file(id: &str, scene: &str, dir: &Path, candidate: &Value) -> Res
     Ok(entry)
 }
 
+/// Renders one motion scene under `media` (the public media root) and returns its done entry.
+pub async fn render_motion_scene(
+    job_id: &str,
+    scene: &str,
+    settings: &Settings,
+    entry: &Value,
+    media: &Path,
+) -> Result<Value, String> {
+    if entry["video"]["kind"] != "motion" {
+        return Err("모션 그래픽 장면이 아닙니다.".into());
+    }
+    let graphics = &entry["video"]["graphics"];
+    let duration = graphics["elements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|e| e["start"].as_f64().unwrap_or(0.0) + e["duration"].as_f64().unwrap_or(0.0))
+        .fold(0.0f64, f64::max)
+        .max(1.0 / 24.0);
+    let project = crate::motion_scene::project(job_id, &settings.aspect, scene, duration, graphics);
+    let dir = media.join(job_id).join("scenes").join(scene);
+    let width = output_size(&settings.aspect).0;
+    let rendered = {
+        let _render = crate::media::lock_for_video_activity()?;
+        crate::graphics_export::render_at(project, &dir, &dir, width, None).await?
+    };
+    let file = PathBuf::from(
+        rendered["path"]
+            .as_str()
+            .ok_or("모션 장면 출력 경로 오류")?,
+    );
+    let name = file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("모션 장면 출력 경로 오류")?
+        .to_owned();
+    let mut done = entry["video"].clone();
+    done["status"] = json!("done");
+    done["path"] = json!(format!("/productions/{job_id}/scenes/{scene}/{name}"));
+    done["file"] = json!(file);
+    done["sha256"] = json!(sha256_path(&file)?);
+    done["durationSec"] = rendered["durationSec"].clone();
+    done["source"] = json!("rust-graphics");
+    done["error"] = Value::Null;
+    Ok(done)
+}
+
 /// Drawn card for a scene with no usable photo.
 fn graphic_file(
     id: &str,
@@ -1667,9 +1947,20 @@ pub async fn compose(
     working: &Path,
     output: &Path,
 ) -> Result<f64, String> {
+    compose_at(job, settings, working, output, &crate::media::public_dir()?).await
+}
+
+/// `compose` with an explicit public media root (tests render into a temporary folder).
+pub async fn compose_at(
+    job: &Value,
+    settings: &Settings,
+    working: &Path,
+    output: &Path,
+    media: &Path,
+) -> Result<f64, String> {
     let (width, height) = output_size(&settings.aspect);
     let font = crate::media::load_font()?;
-    let media = crate::media::public_dir()?;
+    let media = media.to_path_buf();
     let board = job["storyboard"]["scenes"]
         .as_array()
         .ok_or("스토리보드가 없습니다.")?;
@@ -1709,15 +2000,18 @@ pub async fn compose(
             "-protocol_whitelist",
             "file,pipe",
             "-format_whitelist",
-            "mov",
-            "-stream_loop",
-            "-1",
-            "-i",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
+        let kind = scene["video"]["kind"].as_str().unwrap_or("ai");
+        arguments.extend(clip_input_args(kind).iter().map(|s| s.to_string()));
         arguments.push(clip.to_string_lossy().into_owned());
+        let hold = clip_hold_filter(
+            kind,
+            scene["video"]["durationSec"].as_f64().unwrap_or(duration),
+            duration,
+        );
         let mut inputs = 1;
         let audio_index = inputs;
         if let Some(path) = &audio {
@@ -1741,7 +2035,7 @@ pub async fn compose(
             );
         }
         inputs += 1;
-        let mut filter = format!("[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps=24[base]");
+        let mut filter = format!("[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1,fps=24{hold}[base]");
         let mut last = "[base]".to_owned();
         if settings.subtitle_style != "none" {
             for (cue_index, cue) in scene["captionCues"]
@@ -2301,7 +2595,7 @@ pub fn scene_credit(scene: &Value) -> String {
                 c["license"].as_str().unwrap_or("")
             )
         }
-        Some("graphic") => String::new(),
+        Some("graphic") | Some("motion") => String::new(),
         _ => "AI 생성 장면 · Wan2.1".into(),
     }
 }
@@ -2699,10 +2993,10 @@ pub fn publication_payload(job: &Value, media_id: &str) -> Value {
         .map(|w| w.to_owned())
         .collect();
     for extra in [
-        if job["settings"]["visual"] == "stock" {
-            "쇼츠영상"
-        } else {
-            "AI영상"
+        match job["settings"]["visual"].as_str() {
+            Some("stock") => "쇼츠영상",
+            Some("motion") => "모션그래픽",
+            _ => "AI영상",
         },
         "쇼츠",
     ] {
@@ -2716,10 +3010,10 @@ pub fn publication_payload(job: &Value, media_id: &str) -> Value {
         .flatten()
         .filter_map(|c| c.as_str().map(str::to_owned))
         .collect();
-    let made = if job["settings"]["visual"] == "stock" {
-        "이 영상은 Toris Studio에서 상업적 이용 가능한 사진과 로컬 음성 모델(Qwen3-TTS)로 만들었습니다."
-    } else {
-        "이 영상은 Toris Studio에서 로컬 AI 모델(Wan2.1·Qwen3-TTS)로 만들었습니다."
+    let made = match job["settings"]["visual"].as_str() {
+        Some("stock") => "이 영상은 Toris Studio에서 상업적 이용 가능한 사진과 로컬 음성 모델(Qwen3-TTS)로 만들었습니다.",
+        Some("motion") => "이 영상은 Toris Studio의 로컬 모션 그래픽 합성기와 로컬 음성 모델(Qwen3-TTS)로 만들었습니다.",
+        _ => "이 영상은 Toris Studio에서 로컬 AI 모델(Wan2.1·Qwen3-TTS)로 만들었습니다.",
     };
     let description = if credits.is_empty() {
         format!("{story}\n\n{made}")
@@ -3060,7 +3354,7 @@ pub fn provenance(job: &Value, settings: &Settings, final_path: &Path) -> Result
         && engine.code_license == "MIT";
     let scenes_list = job["scenes"].as_array().cloned().unwrap_or_default();
     // An AI job is credited to its engine; a stock job only if some scene really ran inference.
-    let ai_used = settings.visual != "stock"
+    let ai_used = needs_engine(&settings.visual)
         || scenes_list
             .iter()
             .any(|s| s["video"]["source"] == "ai-inference");
@@ -3074,6 +3368,13 @@ pub fn provenance(job: &Value, settings: &Settings, final_path: &Path) -> Result
     let mut components = Vec::new();
     if ai_used {
         components.push(json!({"role": "video", "name": engine.label, "repo": engine.repo, "revision": engine.revision, "weightsLicense": engine.weights_license, "code": format!("ml-explore/mlx-examples@{}", crate::video_runtime::MLX_EXAMPLES_COMMIT), "codeLicense": engine.code_license, "commercialUse": engine_commercial}));
+    }
+    if settings.visual == "motion" {
+        // The look follows a closed reference; the graphics are drawn by the app, not generated.
+        let reference = &job["reference"];
+        components.push(json!({"role": "motion", "name": "Toris Studio 모션 그래픽 합성기", "renderer": "rust-graphics-ffmpeg",
+            "layoutVersion": crate::motion_scene::LAYOUT_VERSION, "commercialUse": true,
+            "reference": {"id": reference["id"], "name": reference["name"], "origin": reference["origin"], "source": reference["source"]}}));
     }
     let mut seen = std::collections::HashSet::new();
     for photo in &photos {
@@ -3617,5 +3918,578 @@ mod tests {
         let project = editor_project(&job, &s).unwrap();
         crate::media::validate_project(&project).unwrap();
         assert_eq!(project["scenes"][0]["mediaType"], "video");
+    }
+
+    // ------------------------------------------------------------ motion graphics scenes
+
+    fn motion_input(aspect: &str, layout: &str, reference: &str) -> Value {
+        json!({"topic": "아침 루틴으로 집중력 높이기", "durationSec": 16, "aspect": aspect, "style": "documentary", "narration": true,
+            "subtitleStyle": "shorts-bold", "bgm": "none", "quality": "preview", "engine": "", "visual": "motion", "layout": layout, "reference": reference})
+    }
+    fn motion_settings() -> Settings {
+        parse_settings(&motion_input("9:16", "full", "")).unwrap()
+    }
+    fn motion_scene_json(i: usize) -> Value {
+        let layout = crate::motion_scene::LAYOUTS[i % 4];
+        json!({"id": format!("s{}", i + 1), "order": i + 1, "durationSec": 4.0, "script": "물 한 잔으로 하루를 시작합니다.", "narration": "물 한 잔으로 시작해요.",
+            "caption": "아침 10분 루틴", "prompt": "", "transition": "fade", "layout": layout,
+            "points": if layout == "list" { json!(["물 한 잔", "창문 열기"]) } else { json!([]) },
+            "stat": if layout == "stat" { json!({"value": "10분", "label": "아침 준비 시간"}) } else { Value::Null }})
+    }
+    fn motion_board(n: usize) -> Value {
+        json!({"title": "아침 10분", "story": "아침 루틴", "style": {"look": "", "palette": "", "consistency": ""},
+            "scenes": (0..n).map(motion_scene_json).collect::<Vec<_>>()})
+    }
+
+    #[test]
+    fn motion_jobs_never_require_the_video_engine() {
+        assert!(needs_engine("ai"));
+        assert!(!needs_engine("stock"));
+        assert!(!needs_engine("motion"));
+        let s = motion_settings();
+        assert_eq!(s.engine, crate::video_runtime::DEFAULT_ENGINE);
+        let job = new_job(&s);
+        assert_eq!(job["reference"]["id"], crate::motion_reference::DEFAULT_ID);
+    }
+
+    #[test]
+    fn motion_rejects_square_card_and_references_on_other_sources() {
+        assert!(parse_settings(&motion_input("1:1", "full", ""))
+            .unwrap_err()
+            .contains("9:16"));
+        assert!(parse_settings(&motion_input("9:16", "card", "")).is_err());
+        assert!(parse_settings(&motion_input("16:9", "full", "builtin-pop-contrast")).is_ok());
+        assert!(parse_settings(&motion_input("9:16", "full", "../etc")).is_err());
+        let mut stock = motion_input("9:16", "card", "builtin-pop-contrast");
+        stock["visual"] = json!("stock");
+        assert!(
+            parse_settings(&stock).is_err(),
+            "references only steer motion scenes"
+        );
+        assert_eq!(
+            new_job(
+                &parse_settings(&motion_input("16:9", "full", "builtin-pop-contrast")).unwrap()
+            )["reference"]["id"],
+            "builtin-pop-contrast"
+        );
+    }
+
+    #[test]
+    fn motion_scene_count_follows_reference_rhythm() {
+        assert_eq!(motion_scene_count(30, 4.0), 8);
+        assert_eq!(motion_scene_count(15, 8.0), 3);
+        assert_eq!(motion_scene_count(120, 2.5), 12);
+        assert_eq!(scene_count(30, "motion"), motion_scene_count(30, 4.0));
+        assert_eq!(scene_count(30, "ai"), 6, "other sources keep their counts");
+    }
+
+    #[test]
+    fn motion_storyboard_requires_layout_and_matching_data() {
+        let s = motion_settings();
+        let good = validate_storyboard(&motion_board(4), &s).unwrap();
+        assert_eq!(good["scenes"][2]["layout"], "list");
+        assert_eq!(
+            good["scenes"][2]["points"],
+            json!(["물 한 잔", "창문 열기"])
+        );
+        assert_eq!(good["scenes"][1]["stat"]["value"], "10분");
+        for layout in crate::motion_scene::LAYOUTS {
+            let mut b = motion_board(4);
+            b["scenes"][0] = motion_scene_json(
+                crate::motion_scene::LAYOUTS
+                    .iter()
+                    .position(|l| *l == layout)
+                    .unwrap(),
+            );
+            b["scenes"][0]["id"] = json!("s1");
+            validate_storyboard(&b, &s).unwrap_or_else(|e| panic!("{layout}: {e}"));
+        }
+        let broken: [(&str, Value); 6] = [
+            ("layout", json!("chart")),
+            ("layout", Value::Null),
+            ("points", json!(["하나"])),
+            ("caption", json!("가".repeat(41))),
+            ("caption", json!("")),
+            ("points", json!(["물", "창", "적기", "넷"])),
+        ];
+        for (key, value) in broken {
+            let mut b = motion_board(4);
+            b["scenes"][2][key] = value.clone();
+            assert!(validate_storyboard(&b, &s).is_err(), "{key}={value}");
+        }
+        let mut unknown_on_title = motion_board(4);
+        unknown_on_title["scenes"][0]["layout"] = json!("chart");
+        assert!(
+            validate_storyboard(&unknown_on_title, &s).is_err(),
+            "only the closed layouts pass, even without points"
+        );
+        let mut points_on_title = motion_board(4);
+        points_on_title["scenes"][0]["points"] = json!(["a1", "b2"]);
+        assert!(validate_storyboard(&points_on_title, &s).is_err());
+        let mut stat_missing = motion_board(4);
+        stat_missing["scenes"][1]["stat"] = Value::Null;
+        assert!(validate_storyboard(&stat_missing, &s).is_err());
+        let mut on_ai = board(6, 5.0);
+        on_ai["scenes"][0]["layout"] = json!("title");
+        assert!(
+            validate_storyboard(&on_ai, &settings()).is_err(),
+            "layout belongs to motion jobs"
+        );
+    }
+
+    #[test]
+    fn stock_and_ai_storyboards_do_not_gain_motion_keys() {
+        let ai = validate_storyboard(&board(6, 5.0), &settings()).unwrap();
+        assert!(ai["scenes"][0].get("layout").is_none() && ai["scenes"][0].get("points").is_none());
+        let stock = validate_storyboard(&stock_board(5), &stock_settings()).unwrap();
+        assert!(stock["scenes"][0].get("layout").is_none());
+    }
+
+    #[test]
+    fn motion_scenes_are_built_graphics_and_only_the_edited_scene_changes() {
+        let s = motion_settings();
+        let mut job = new_job(&s);
+        apply_storyboard(&mut job, motion_board(4)).unwrap();
+        let scenes = job["scenes"].as_array().unwrap().clone();
+        for scene in &scenes {
+            assert_eq!(scene["video"]["kind"], "motion");
+            assert_eq!(scene["video"]["status"], "pending");
+            assert_eq!(scene["video"]["graphics"]["version"], 1);
+            assert_eq!(scene["video"]["key"].as_str().unwrap().len(), 16);
+        }
+        for scene in job["scenes"].as_array_mut().unwrap() {
+            scene["video"]["status"] = json!("done");
+            scene["video"]["path"] = json!("/productions/x/a.mp4");
+        }
+        let mut edited = motion_board(4);
+        edited["scenes"][1]["caption"] = json!("다른 제목");
+        apply_storyboard(&mut job, edited.clone()).unwrap();
+        assert_eq!(job["scenes"][0]["video"]["status"], "done");
+        assert_eq!(job["scenes"][1]["video"]["status"], "pending");
+        assert_ne!(job["scenes"][1]["video"]["key"], scenes[1]["video"]["key"]);
+        let before = job["scenes"][0]["video"]["key"].clone();
+        job["reference"] = json!(crate::motion_reference::builtins()[2]);
+        apply_storyboard(&mut job, edited).unwrap();
+        assert_ne!(
+            job["scenes"][0]["video"]["key"], before,
+            "the job's reference snapshot is part of the key"
+        );
+        mark_retry(&mut job, Some("s1"), "scenes").unwrap();
+        assert_eq!(job["scenes"][0]["video"]["status"], "pending");
+        assert!(
+            job["scenes"][0]["video"].get("seed").is_none(),
+            "motion scenes have no seed"
+        );
+    }
+
+    #[test]
+    fn legacy_jobs_read_without_reference() {
+        let s = settings();
+        assert_eq!(s.reference, "");
+        assert!(
+            serde_json::to_value(&s).unwrap().get("reference").is_none(),
+            "old job.json stays byte-compatible"
+        );
+        assert!(new_job(&s).get("reference").is_none_or(Value::is_null));
+    }
+
+    #[test]
+    fn motion_clips_hold_the_last_frame_instead_of_looping() {
+        assert!(clip_input_args("ai").contains(&"-stream_loop"));
+        assert!(!clip_input_args("motion").contains(&"-stream_loop"));
+        assert_eq!(clip_hold_filter("ai", 4.0, 5.5), "");
+        assert_eq!(clip_hold_filter("motion", 4.0, 4.0), "");
+        assert_eq!(
+            clip_hold_filter("motion", 4.0, 5.5),
+            ",tpad=stop_mode=clone:stop_duration=1.500"
+        );
+    }
+
+    #[test]
+    fn motion_without_narration_burns_no_duplicate_captions() {
+        let mut s = motion_settings();
+        s.narration = false;
+        assert!(cues_for(&s, "아침 10분 루틴", 4.0, 4.0).is_empty());
+        s.narration = true;
+        assert!(!cues_for(&s, "물 한 잔으로 시작해요.", 3.0, 4.0).is_empty());
+        let ai = settings();
+        let mut silent = ai.clone();
+        silent.narration = false;
+        assert!(
+            !cues_for(&silent, "하늘길", 5.0, 5.0).is_empty(),
+            "AI jobs keep caption-only subtitles"
+        );
+    }
+
+    async fn ffmpeg(args: &[&str]) -> Vec<u8> {
+        crate::media::run_command(
+            "ffmpeg",
+            &args.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+            None,
+            120,
+        )
+        .await
+        .unwrap()
+    }
+    async fn probe(file: &Path) -> Value {
+        let args: Vec<String> = [
+            "-v",
+            "error",
+            "-show_streams",
+            "-show_format",
+            "-of",
+            "json",
+        ]
+        .iter()
+        .map(|a| a.to_string())
+        .chain([file.to_string_lossy().into_owned()])
+        .collect();
+        serde_json::from_slice(
+            &crate::media::run_command("ffprobe", &args, None, 30)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    async fn frame(file: &Path, at: f64, out: &Path) -> image::RgbImage {
+        ffmpeg(&[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+            &format!("{at:.3}"),
+            "-i",
+            file.to_str().unwrap(),
+            "-frames:v",
+            "1",
+            out.to_str().unwrap(),
+        ])
+        .await;
+        image::open(out).unwrap().to_rgb8()
+    }
+    /// Mean absolute difference over the top `share` of the frame (content area, above captions).
+    fn top_difference(a: &image::RgbImage, b: &image::RgbImage, share: f64) -> f64 {
+        let rows = (a.height() as f64 * share) as u32;
+        let mut sum = 0u64;
+        for y in 0..rows {
+            for x in 0..a.width() {
+                for c in 0..3 {
+                    sum += (a.get_pixel(x, y)[c] as i32 - b.get_pixel(x, y)[c] as i32)
+                        .unsigned_abs() as u64;
+                }
+            }
+        }
+        sum as f64 / (rows as f64 * a.width() as f64 * 3.0)
+    }
+
+    /// Proposal §6 real-render items 1~3 (+4: frames saved to TORIS_MOTION_FRAMES) and a colour reference
+    /// measured from a real video file. Everything is written to a temporary folder except the frame PNGs.
+    #[tokio::test]
+    #[ignore = "real FFmpeg/FFprobe and the bundled font: renders motion scenes and composes them"]
+    async fn motion_scenes_render_and_compose_with_real_ffmpeg() {
+        let public = tempfile::tempdir().unwrap();
+        let frames_dir = std::env::var_os("TORIS_MOTION_FRAMES").map(PathBuf::from);
+        if let Some(dir) = &frames_dir {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for (aspect, reference, size) in [
+            ("9:16", "builtin-midnight-data", (1080, 1920)),
+            ("16:9", "builtin-pop-contrast", (1920, 1080)),
+            ("9:16", "builtin-paper-editorial", (1080, 1920)),
+        ] {
+            let mut input = motion_input(aspect, "full", reference);
+            input["durationSec"] = json!(10);
+            let s = parse_settings(&input).unwrap();
+            let mut job = new_job(&s);
+            let id = job["id"].as_str().unwrap().to_owned();
+            let mut board = motion_board(3);
+            for scene in board["scenes"].as_array_mut().unwrap() {
+                scene["durationSec"] = json!(3.0);
+            }
+            apply_storyboard(&mut job, board).unwrap();
+            // 1. Each scene renders as H.264, the output size, 24 fps, its storyboard length.
+            for i in 0..3 {
+                let entry = job["scenes"][i].clone();
+                let scene_id = entry["id"].as_str().unwrap().to_owned();
+                let started = std::time::Instant::now();
+                let done = render_motion_scene(
+                    &id,
+                    &scene_id,
+                    &s,
+                    &entry,
+                    &public.path().join("productions"),
+                )
+                .await
+                .unwrap();
+                let file = PathBuf::from(done["file"].as_str().unwrap());
+                let info = probe(&file).await;
+                let video = info["streams"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|st| st["codec_type"] == "video")
+                    .unwrap();
+                assert_eq!(video["codec_name"], "h264");
+                assert_eq!(
+                    (
+                        video["width"].as_u64().unwrap(),
+                        video["height"].as_u64().unwrap()
+                    ),
+                    size
+                );
+                assert_eq!(video["r_frame_rate"], "24/1");
+                let seconds: f64 = info["format"]["duration"]
+                    .as_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!((seconds - 3.0).abs() < 0.1, "{seconds}");
+                let layout = crate::motion_scene::LAYOUTS[i];
+                println!("RENDER {aspect} {reference} {layout}: {}x{} h264 24fps {seconds:.2}s in {:.1}s", size.0, size.1, started.elapsed().as_secs_f64());
+                if let Some(dir) = &frames_dir {
+                    for (name, at) in [("first", 0.05), ("middle", 1.5), ("last", 2.9)] {
+                        let out = dir.join(format!(
+                            "{}-{reference}-{layout}-{name}.png",
+                            aspect.replace(':', "x")
+                        ));
+                        frame(&file, at, &out).await;
+                        println!("FRAME {}", out.display());
+                    }
+                }
+                job["scenes"][i]["video"] = done;
+            }
+            // 2. Narration 1.5 s longer than scene 1: the final holds the last frame, never restarts the animation.
+            let voice = public
+                .path()
+                .join("productions")
+                .join(&id)
+                .join("voice/s1/v.wav");
+            std::fs::create_dir_all(voice.parent().unwrap()).unwrap();
+            ffmpeg(&[
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=4.5",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                voice.to_str().unwrap(),
+            ])
+            .await;
+            job["scenes"][0]["voice"] = json!({"status": "done", "path": format!("/productions/{id}/voice/s1/v.wav"), "durationSec": 4.5});
+            job["scenes"][0]["durationSec"] = json!(4.5);
+            for scene in job["scenes"].as_array_mut().unwrap() {
+                let duration = scene["durationSec"].as_f64().unwrap();
+                let cues = cues_for(&s, "물 한 잔으로 시작해요.", duration.min(3.0), duration);
+                scene["captionCues"] = json!(cues
+                    .iter()
+                    .map(|(a, b, t)| json!({"startSec": a, "endSec": b, "text": t}))
+                    .collect::<Vec<_>>());
+            }
+            let working = tempfile::tempdir_in(public.path()).unwrap();
+            let final_path = public
+                .path()
+                .join(format!("final-{}.mp4", aspect.replace(':', "x")));
+            let total = compose_at(&job, &s, working.path(), &final_path, public.path())
+                .await
+                .unwrap();
+            let info = probe(&final_path).await;
+            let seconds: f64 = info["format"]["duration"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(
+                (seconds - total).abs() < 0.15 && (total - 10.5).abs() < 0.1,
+                "final {seconds} vs scenes {total}"
+            );
+            let scratch = tempfile::tempdir().unwrap();
+            let start = frame(&final_path, 0.05, &scratch.path().join("a.png")).await;
+            let held_a = frame(&final_path, 3.3, &scratch.path().join("b.png")).await;
+            let held_b = frame(&final_path, 4.0, &scratch.path().join("c.png")).await;
+            let hold = top_difference(&held_a, &held_b, 0.55);
+            let restart = top_difference(&start, &held_a, 0.55);
+            println!("HOLD {aspect}: final {seconds:.2}s (scenes {total:.2}s), top diff 3.3s↔4.0s {hold:.2}, 0.05s↔3.3s {restart:.2}");
+            assert!(hold < 1.0, "the extra narration time holds the last frame");
+            assert!(restart > 2.0, "the held frame is not the opening frame");
+            // 3. QA black-frame ratio stays below the 0.2 gate even on the darkest built-in background.
+            let black = black_ratio(&final_path).await.unwrap();
+            println!("BLACK {aspect} {reference}: {black:.3}");
+            assert!(0.2 > black, "QA black-frame ratio {black}");
+            // A colour reference measured from this real video file (bundled FFmpeg sampling).
+            let base = crate::motion_reference::builtins().remove(1);
+            let measured = crate::motion_reference::from_media(&final_path, "실제 영상 색", &base)
+                .await
+                .unwrap();
+            crate::motion_reference::validate(&measured).unwrap();
+            let src = measured.source.clone().unwrap();
+            assert_eq!(src.kind, Some(crate::motion_reference::MediaKind::Video));
+            assert_eq!(
+                (src.width, src.height),
+                (Some(size.0 as u32), Some(size.1 as u32))
+            );
+            assert!(measured
+                .notes
+                .iter()
+                .any(|n| n == crate::motion_reference::UNMEASURED_NOTE));
+            assert_eq!(measured.rhythm, base.rhythm);
+            let expected = crate::motion_reference::rgb(
+                &job["reference"]["palette"]["background"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+            .unwrap();
+            let got = crate::motion_reference::rgb(&measured.palette.background).unwrap();
+            assert!(
+                crate::motion_reference::contrast(expected, got) < 1.25,
+                "{} vs {}",
+                measured.palette.background,
+                job["reference"]["palette"]["background"]
+            );
+            println!(
+                "VIDEO-REFERENCE {aspect}: {}",
+                serde_json::to_string(&measured).unwrap()
+            );
+        }
+    }
+
+    /// B-3 gallery for design review: the last frame of every built-in reference × layout × aspect,
+    /// and composed frames with and without burned captions. Writes PNGs to TORIS_MOTION_GALLERY.
+    #[tokio::test]
+    #[ignore = "real FFmpeg/FFprobe and the bundled font: renders 48 scenes and 8 composed comparisons"]
+    async fn motion_gallery_renders_every_reference_layout_and_aspect() {
+        let gallery =
+            PathBuf::from(std::env::var("TORIS_MOTION_GALLERY").expect("TORIS_MOTION_GALLERY"));
+        std::fs::create_dir_all(&gallery).unwrap();
+        let public = tempfile::tempdir().unwrap();
+        let media = public.path().join("productions");
+        for r in crate::motion_reference::builtins() {
+            for aspect in ["9:16", "16:9"] {
+                let mut input = motion_input(aspect, "full", &r.id);
+                input["durationSec"] = json!(10);
+                let s = parse_settings(&input).unwrap();
+                let mut job = new_job(&s);
+                let id = job["id"].as_str().unwrap().to_owned();
+                let mut board = motion_board(4);
+                for scene in board["scenes"].as_array_mut().unwrap() {
+                    scene["durationSec"] = json!(2.0);
+                }
+                apply_storyboard(&mut job, board).unwrap();
+                for (i, layout) in crate::motion_scene::LAYOUTS.iter().enumerate() {
+                    let entry = job["scenes"][i].clone();
+                    let scene_id = entry["id"].as_str().unwrap().to_owned();
+                    let done = render_motion_scene(&id, &scene_id, &s, &entry, &media)
+                        .await
+                        .unwrap();
+                    for (name, at) in [("middle", 1.0), ("last", 1.95)] {
+                        let out = gallery.join(format!(
+                            "{}-{}-{layout}-{name}.png",
+                            aspect.replace(':', "x"),
+                            r.id
+                        ));
+                        frame(Path::new(done["file"].as_str().unwrap()), at, &out).await;
+                        println!("GALLERY {}", out.display());
+                    }
+                }
+            }
+        }
+        for reference in [
+            "builtin-midnight-data",
+            "builtin-bold-block",
+            "builtin-calm-pastel",
+            "builtin-pop-contrast",
+        ] {
+            for aspect in ["9:16", "16:9"] {
+                for style in ["none", "shorts-bold"] {
+                    let mut input = motion_input(aspect, "full", reference);
+                    input["durationSec"] = json!(10);
+                    input["subtitleStyle"] = json!(style);
+                    let s = parse_settings(&input).unwrap();
+                    let mut job = new_job(&s);
+                    let id = job["id"].as_str().unwrap().to_owned();
+                    let mut board = motion_board(2);
+                    for scene in board["scenes"].as_array_mut().unwrap() {
+                        scene["durationSec"] = json!(5.0);
+                    }
+                    apply_storyboard(&mut job, board).unwrap();
+                    for i in 0..2 {
+                        let entry = job["scenes"][i].clone();
+                        let scene_id = entry["id"].as_str().unwrap().to_owned();
+                        job["scenes"][i]["video"] =
+                            render_motion_scene(&id, &scene_id, &s, &entry, &media)
+                                .await
+                                .unwrap();
+                        let cues = cues_for(&s, "물 한 잔으로 하루를 시작해요.", 4.5, 5.0);
+                        job["scenes"][i]["captionCues"] = json!(cues
+                            .iter()
+                            .map(|(a, b, t)| json!({"startSec": a, "endSec": b, "text": t}))
+                            .collect::<Vec<_>>());
+                    }
+                    let working = tempfile::tempdir_in(public.path()).unwrap();
+                    let final_path = public.path().join(format!("compare-{id}.mp4"));
+                    compose_at(&job, &s, working.path(), &final_path, public.path())
+                        .await
+                        .unwrap();
+                    for (scene, at) in [("title", 4.0), ("stat", 9.0)] {
+                        let out = gallery.join(format!(
+                            "compare-{}-{reference}-{scene}-{style}.png",
+                            aspect.replace(':', "x")
+                        ));
+                        frame(&final_path, at, &out).await;
+                        println!("COMPARE {}", out.display());
+                    }
+                    let black = black_ratio(&final_path).await.unwrap();
+                    println!("BLACK compare {aspect} {reference} {style}: {black:.3}");
+                    assert!(0.2 > black, "QA black-frame ratio {black}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn provenance_credits_the_motion_renderer_not_wan() {
+        let s = motion_settings();
+        let mut job = new_job(&s);
+        apply_storyboard(&mut job, motion_board(4)).unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"mp4").unwrap();
+        let record = provenance(&job, &s, file.path()).unwrap();
+        let roles: Vec<&str> = record["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["role"].as_str().unwrap())
+            .collect();
+        assert!(
+            roles.contains(&"motion") && !roles.contains(&"video"),
+            "{roles:?}"
+        );
+        let motion = record["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["role"] == "motion")
+            .unwrap();
+        assert_eq!(
+            motion["reference"]["id"],
+            crate::motion_reference::DEFAULT_ID
+        );
+        assert_eq!(record["commercialUse"], true);
+        let draft = publication_payload(&job, "8f0f2b4e-6a1d-4c7e-9d1b-2f6a0c3e5b7a");
+        assert!(!draft["description"].as_str().unwrap().contains("Wan2.1"));
+        assert!(draft["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("모션그래픽")));
+        assert_eq!(scene_credit(&json!({"video": {"kind": "motion"}})), "");
     }
 }
