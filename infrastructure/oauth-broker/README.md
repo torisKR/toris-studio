@@ -4,7 +4,7 @@
 
 **상태: 2026-11-20에 `https://oauth.toris.kr`로 배포했고, 모든 플랫폼은 꺼져 있습니다.** 제공자 클라이언트 ID와 시크릿을 아직 넣지 않았기 때문입니다. 배포 뒤 확인한 것: `/v1/config` 200(모두 `enabled:false`), `Origin` 헤더 403, 브라우저 UA와 0.7.0 앱 426, 꺼진 플랫폼 404, 알 수 없는 경로 400, `workers.dev` 주소 꺼짐, Workers 로그·Logpush·tail 소비자 없음. 실제 제공자 호출과 실제 로그인은 확인하지 않았습니다. Google(`youtube`, `google_calendar`)은 저장소에만 추가했고 아직 배포하지 않았습니다. 배포에는 `GOOGLE_CLIENT_SECRET` 비밀값이 필요합니다(아래 2·3).
 
-배포는 저장소 밖 폴더에서 했습니다. 이 디렉터리에는 Wrangler 의존성을 두지 않으므로, `worker.ts`와 `wrangler.jsonc`를 임시 폴더에 복사하고 `wrangler`를 설치한 뒤 `wrangler deploy` → `wrangler triggers deploy` → `wrangler secret bulk` 순으로 실행합니다. 처음 만들 때는 업로드 직후 Worker가 조회되지 않아 `wrangler deploy`가 오류로 끝날 수 있습니다. 업로드는 된 것이니 잠시 뒤 `wrangler triggers deploy`를 다시 실행합니다. `toris-site` Worker가 이 영역의 와일드카드 경로를 갖고 있어서 사용자 지정 도메인만으로는 요청이 오지 않습니다. 그래서 `oauth.toris.kr/*` 경로를 함께 둡니다.
+첫 배포(2026-11-20)는 저장소 밖 폴더에서 했습니다. `worker.ts`와 `wrangler.jsonc`를 임시 폴더에 복사하고 `wrangler`를 설치한 뒤 `wrangler deploy` → `wrangler triggers deploy` → `wrangler secret bulk` 순으로 실행했습니다. 이후 배포는 GitHub Actions의 **Deploy OAuth broker** 워크플로(`.github/workflows/oauth-broker-deploy.yml`)로 합니다(아래 배포 절차). 처음 만들 때는 업로드 직후 Worker가 조회되지 않아 `wrangler deploy`가 오류로 끝날 수 있습니다. 업로드는 된 것이니 잠시 뒤 `wrangler triggers deploy`를 다시 실행합니다. `toris-site` Worker가 이 영역의 와일드카드 경로를 갖고 있어서 사용자 지정 도메인만으로는 요청이 오지 않습니다. 그래서 `oauth.toris.kr/*` 경로를 함께 둡니다.
 
 ## 엔드포인트
 
@@ -37,6 +37,14 @@
 
 ## 배포 절차 (사람이 승인한 뒤에만)
 
+배포는 **Deploy OAuth broker** 워크플로로 합니다. 로컬에 Wrangler를 설치하지 않습니다. 이 디렉터리에도 Wrangler 의존성을 두지 않으며, 워크플로가 CI 안에서 고정 버전(`WRANGLER_VERSION`)을 임시 폴더에 설치합니다. `wrangler.jsonc`의 `$schema`는 편집기용 경로이고 Wrangler는 그 파일을 읽지 않으므로 CI에서 문제가 되지 않습니다.
+
+- 준비: GitHub 저장소 시크릿 `CLOUDFLARE_API_TOKEN`(Workers 스크립트·경로 편집 권한)과 `CLOUDFLARE_ACCOUNT_ID`. 없으면 워크플로가 첫 단계에서 이름을 밝혀 실패합니다.
+- 실행: Actions → **Deploy OAuth broker** → Run workflow, 브랜치 `main`. 다른 브랜치에서는 작업이 건너뜁니다.
+- 순서: 체크아웃 → 브로커·콜백 테스트 → `wrangler` 설치 → `wrangler deploy`(작업 폴더 `infrastructure/oauth-broker`) → `wrangler triggers deploy` → `https://oauth.toris.kr/v1/config`를 `User-Agent: TorisStudio/<tauri.conf.json의 앱 버전>`으로 불러 플랫폼별 `enabled`를 출력.
+- 제공자 시크릿(아래 2)은 이 워크플로가 다루지 않습니다. Cloudflare 대시보드(Workers & Pages → `toris-oauth-broker` → Settings → Variables and Secrets)나 `wrangler secret put`으로 Cloudflare에 직접 넣습니다. `wrangler deploy`는 이미 넣은 시크릿을 유지합니다. 시크릿을 먼저 넣고 배포해도, 배포한 뒤 넣어도 됩니다. 플랫폼은 클라이언트 ID와 시크릿이 모두 있을 때만 켜집니다.
+- 로그: 워크플로는 공개 `/v1/config`의 `minAppVersion`과 `enabled` 값만 출력합니다. Cloudflare 토큰은 환경 변수로만 넘기고 출력하지 않습니다.
+
 ### 1. 제공자 앱에 등록할 리디렉션 주소
 
 | 플랫폼 | 리디렉션 주소 | 비고 |
@@ -51,7 +59,7 @@
 
 Meta 3종의 콜백 중계는 `infrastructure/oauth-callback/worker.ts`에 있습니다. 그 변경을 먼저 배포해야 Meta 로그인이 앱으로 돌아옵니다.
 
-### 2. 비밀값 (`wrangler secret put <이름>`)
+### 2. 비밀값 (Cloudflare 대시보드나 `wrangler secret put <이름>`, 워크플로 밖)
 
 `TIKTOK_CLIENT_SECRET`, `THREADS_APP_SECRET`, `INSTAGRAM_APP_SECRET`, `FACEBOOK_APP_SECRET`, `NAVER_LOGIN_CLIENT_SECRET`, `NAVER_SEARCH_CLIENT_SECRET`, `GOOGLE_CLIENT_SECRET`, `STATE_SIGNING_KEYS`
 
@@ -76,7 +84,7 @@ Meta 3종의 콜백 중계는 `infrastructure/oauth-callback/worker.ts`에 있�
 
 ### 6. 배포 뒤 확인
 
-- `GET https://oauth.toris.kr/v1/config`에 `User-Agent: TorisStudio/<현재 버전>`으로 요청해 `enabled` 값을 확인합니다.
+- `GET https://oauth.toris.kr/v1/config`에 `User-Agent: TorisStudio/<현재 버전>`으로 요청해 `enabled` 값을 확인합니다. 배포 워크플로의 마지막 단계가 이 값을 출력합니다.
 - `Origin`을 붙인 요청이 403인지, 브라우저 UA가 426인지 확인합니다.
 - 실제 로그인은 각 제공자의 테스트 계정으로 앱에서 한 번씩 진행합니다.
 - Google: Google Cloud의 OAuth 동의 화면 게시 상태가 '프로덕션'인지 확인합니다. '테스트'면 등록된 테스트 사용자만 로그인할 수 있고 갱신 토큰이 7일 뒤 만료됩니다. YouTube와 Calendar로 각각 로그인 → 한 시간 뒤 자동 갱신 → 연결 해제(철회)까지 한 번씩 확인합니다.
@@ -110,4 +118,4 @@ node --import tsx --test infrastructure/oauth-broker/broker.test.mjs infrastruct
 node scripts/mutation-check.mjs infrastructure/oauth-broker/mutants.json
 ```
 
-테스트는 실제 Worker 모듈을 가짜 `fetch`·가짜 요청 제한·메모리 저장소로 실행합니다. 증거 수준은 단위 테스트입니다.
+테스트는 실제 Worker 모듈을 가짜 `fetch`·가짜 요청 제한·메모리 저장소로 실행합니다. 증거 수준은 단위 테스트입니다. CI에서는 `desktop.yml`의 `contracts` 작업이 테스트를, **Full verification (verify:full)** 워크플로가 테스트와 변형 검사를 돌립니다.

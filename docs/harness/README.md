@@ -23,6 +23,8 @@
 
 작업 중에는 전체를 돌리지 말고 바꾼 기능의 `verify` 명령만 돌립니다(아래 기능 지도). 전체는 마지막에 한 번 돌립니다.
 
+**로컬에서 `verify:full`을 돌릴 수 없을 때**(저장공간 부족 등)는 GitHub Actions의 **Full verification (verify:full)** 워크플로(`.github/workflows/verify-full.yml`)를 씁니다. PR에 `verify-full` 라벨을 붙이면 돌고, 이 파일이 기본 브랜치에 들어간 뒤에는 Actions → Run workflow로도 돌릴 수 있습니다. macOS arm64 실행기에서 `desktop.yml`의 `native` 작업과 같은 Rust·Node·Go 버전으로 고정 미디어(`prepare-media`)와 에이전트 런타임 번들을 준비하고, Playwright Chromium·WebKit, 변형 검사가 쓰는 PostgreSQL 17·GNU `timeout`, RAG 라이브 테스트용 ChromaDB(`chromadb==1.5.9`, 포트 18765)를 띄운 뒤 브로커·콜백 테스트와 브로커 변형, 그리고 `pnpm verify:full`을 실행합니다. 시크릿을 쓰지 않습니다. Rust 변형만 178개라 몇 시간이 걸릴 수 있고 작업 제한은 350분입니다. 실패하면 UI 검사 산출물이 아티팩트로 남습니다.
+
 ## 기능 지도: `features.json`
 
 기능마다 어떤 파일을 소유하고 무엇이 그 동작을 증명하는지 적습니다.
