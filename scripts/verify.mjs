@@ -36,14 +36,26 @@ export const STEPS = {
 function main() {
   const level = process.argv[2] === 'full' ? 'full' : 'fast';
   const steps = level === 'full' ? [...STEPS.fast, ...STEPS.full] : STEPS.fast;
+  // CI (verify-full.yml) only: run every step once and list all failures. The default stops at the first one.
+  const keepGoing = process.argv.includes('--keep-going');
+  const failed = [];
   const started = Date.now();
   for (const [index, [label, command, args]] of steps.entries()) {
     console.log(`\n▶ [${index + 1}/${steps.length}] ${label}: ${command} ${args.join(' ')}`);
     const run = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
     if (run.status !== 0) {
-      console.error(`\n✖ ${label} 실패 (exit ${run.status ?? run.signal}). 나머지 단계는 실행하지 않았습니다.`);
-      process.exit(run.status || 1);
+      const exit = run.status ?? run.signal;
+      if (!keepGoing) {
+        console.error(`\n✖ ${label} 실패 (exit ${exit}). 나머지 단계는 실행하지 않았습니다.`);
+        process.exit(run.status || 1);
+      }
+      console.error(`\n✖ ${label} 실패 (exit ${exit}). --keep-going이라 다음 단계를 계속합니다.`);
+      failed.push(`[${index + 1}/${steps.length}] ${label} (exit ${exit})`);
     }
+  }
+  if (failed.length) {
+    console.error(`\n✖ verify ${level}: ${failed.length}/${steps.length}단계 실패\n${failed.map(f => `  - ${f}`).join('\n')}`);
+    process.exit(1);
   }
   console.log(`\n✔ verify ${level}: ${steps.length}단계 통과 (${Math.round((Date.now() - started) / 1000)}초)`);
 }

@@ -23,7 +23,7 @@
 
 작업 중에는 전체를 돌리지 말고 바꾼 기능의 `verify` 명령만 돌립니다(아래 기능 지도). 전체는 마지막에 한 번 돌립니다.
 
-**로컬에서 `verify:full`을 돌릴 수 없을 때**(저장공간 부족 등)는 GitHub Actions의 **Full verification (verify:full)** 워크플로(`.github/workflows/verify-full.yml`)를 씁니다. PR에 `verify-full` 라벨을 붙이면 돌고, 이 파일이 기본 브랜치에 들어간 뒤에는 Actions → Run workflow로도 돌릴 수 있습니다. macOS arm64 실행기에서 `desktop.yml`의 `native` 작업과 같은 Rust·Node·Go 버전으로 고정 미디어(`prepare-media`)와 에이전트 런타임 번들을 준비하고, Playwright Chromium·WebKit, 변형 검사가 쓰는 PostgreSQL 17·GNU `timeout`, RAG 라이브 테스트용 ChromaDB(`chromadb==1.5.9`, 포트 18765)를 띄운 뒤 브로커·콜백 테스트와 브로커 변형, 그리고 `pnpm verify:full`을 실행합니다. 시크릿을 쓰지 않습니다. Rust 변형만 178개라 몇 시간이 걸릴 수 있고 작업 제한은 350분입니다. 실패하면 UI 검사 산출물이 아티팩트로 남습니다.
+**로컬에서 `verify:full`을 돌릴 수 없을 때**(저장공간 부족 등)는 GitHub Actions의 **Full verification (verify:full)** 워크플로(`.github/workflows/verify-full.yml`)를 씁니다. PR에 `verify-full` 라벨을 붙이면 돌고, 이 파일이 기본 브랜치에 들어간 뒤에는 Actions → Run workflow로도 돌릴 수 있습니다. macOS arm64 실행기에서 `desktop.yml`의 `native` 작업과 같은 Rust·Node·Go 버전으로 고정 미디어(`prepare-media`)와 에이전트 런타임 번들을 준비하고, Playwright Chromium·WebKit, 변형 검사가 쓰는 PostgreSQL 17·GNU `timeout`, RAG 라이브 테스트용 ChromaDB(`chromadb==1.5.9`, `setup-python`으로 고정한 Python 3.12, 포트 18765)를 띄운 뒤 브로커·콜백 테스트와 브로커 변형, 그리고 `node scripts/verify.mjs full --keep-going`을 실행합니다. `--keep-going`은 CI 전용으로, 한 단계가 실패해도 나머지 단계를 한 번씩 모두 돌리고 끝에 실패한 단계를 모아 보여 줍니다(로컬 `pnpm verify:full`은 그대로 첫 실패에서 멈춥니다). 실패한 단계와 `SURVIVED`·`invalid` 변형은 실행 요약(Step Summary)에 모입니다. 시크릿을 쓰지 않습니다. Rust 변형만 178개라 몇 시간이 걸릴 수 있고 작업 제한은 350분입니다. 실패하면 UI 검사 산출물이 아티팩트로 남습니다.
 
 ## 기능 지도: `features.json`
 

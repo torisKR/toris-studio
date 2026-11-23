@@ -65,7 +65,7 @@ jobs:
       - name: Check the OAuth broker and callback, then the broker mutants
         run: |
           node --import tsx --test infrastructure/oauth-broker/broker.test.mjs infrastructure/oauth-callback/callback.test.mjs
-          node scripts/mutation-check.mjs infrastructure/oauth-broker/mutants.json
+          node scripts/mutation-check.mjs infrastructure/oauth-broker/mutants.json 2>&1 | tee "$RUNNER_TEMP/broker-mutants.log"
       - name: Build and verify pinned media (FFmpeg, fonts) like the native installer job
         run: node scripts/prepare-media.mjs prepare "$TARGET"
       - name: Bundle the agent runtime used by the Rust agent_runtime tests
@@ -79,12 +79,21 @@ jobs:
           ln -sf "$(brew --prefix coreutils)/bin/gtimeout" "$RUNNER_TEMP/gnu-timeout/timeout"
           "$RUNNER_TEMP/gnu-timeout/timeout" --version > /dev/null
           printf '%s/gnu-timeout\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # The runner's own python3 can be newer than onnxruntime's wheels (3.15 had none), so ChromaDB gets a
+      # pinned interpreter. chromadb 1.5.9 is an abi3-py39 wheel; onnxruntime decides the upper bound.
+      - name: Python for ChromaDB
+        id: chroma-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+          update-environment: false
       - name: Start ChromaDB for the RAG live test and its mutants
         env:
           ANONYMIZED_TELEMETRY: 'FALSE'
+          CHROMA_PYTHON: ${{ steps.chroma-python.outputs.python-path }}
         run: |
           # Same version as infrastructure/agent-vector-db/compose.yaml; macOS runners have no Docker.
-          python3 -m venv "$RUNNER_TEMP/chroma-venv"
+          "$CHROMA_PYTHON" -m venv "$RUNNER_TEMP/chroma-venv"
           "$RUNNER_TEMP/chroma-venv/bin/pip" install --quiet 'chromadb==1.5.9'
           nohup "$RUNNER_TEMP/chroma-venv/bin/chroma" run --host 127.0.0.1 --port "$CHROMA_PORT" --path "$RUNNER_TEMP/chroma-data" > "$RUNNER_TEMP/chroma.log" 2>&1 &
           for _ in $(seq 1 60); do
@@ -94,11 +103,27 @@ jobs:
           echo '::error::ChromaDB did not answer its heartbeat; the RAG live mutants would survive.'
           tail -n 40 "$RUNNER_TEMP/chroma.log"
           exit 1
-      - name: pnpm verify:full
+      # `--keep-going` runs every verify:full step once even after a failure (the steps do not depend on each
+      # other), so one run shows all failures; locally `pnpm verify:full` still stops at the first one.
+      - name: pnpm verify:full (all steps)
         if: ${{ !cancelled() }}
         env:
           TORIS_TEST_CHROMA_URL: http://127.0.0.1:18765
-        run: pnpm verify:full
+        run: node scripts/verify.mjs full --keep-going 2>&1 | tee "$RUNNER_TEMP/verify-full.log"
+      - name: Summarize failed steps and surviving or invalid mutants
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '## Full verification'
+            for name in broker-mutants verify-full; do
+              log="$RUNNER_TEMP/$name.log"
+              [ -f "$log" ] || { printf -- '- `%s`: 실행되지 않음\n' "$name"; continue; }
+              echo "### $name"
+              echo '```'
+              grep -E '^✖ (SURVIVED|invalid) |^✖ .*실패 \(exit|^✖ verify |^  - \[|mutants killed$|^✔ verify ' "$log" || echo '(해당 줄 없음)'
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve UI check artifacts on failure
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -108,6 +133,8 @@ jobs:
             ${{ runner.temp }}/studio-sns-ui
             ${{ runner.temp }}/studio-publication-ui
             ${{ runner.temp }}/chroma.log
+            ${{ runner.temp }}/broker-mutants.log
+            ${{ runner.temp }}/verify-full.log
             docs/review/motion
             /private/tmp/toris-*
           if-no-files-found: ignore
