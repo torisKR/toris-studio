@@ -370,12 +370,51 @@
  "timeoutMs": 300000
 },
 {
- "id": "a2.ui-calendar-no-testing-notice",
+ "id": "g1.ui-calendar-no-unverified-notice",
  "file": "desktop/src/CalendarConnection.tsx",
- "find": "provider.clientMode === \"google_builtin\" && provider.googleTesting &&",
- "replace": "false &&",
+ "find": "{toris && <p className=\"planner-connect-note\">",
+ "replace": "{false && <p className=\"planner-connect-note\">",
  "cmd": ["node", "scripts/verify-planner-ui.mjs"],
  "timeoutMs": 300000
+},
+{
+ "id": "g1.ui-calendar-login-skips-toris-save",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "if (toris && provider?.clientMode !== \"toris\") await invoke(",
+ "replace": "if (false) await invoke(",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "g1.ui-calendar-toris-without-broker",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "const toris = !own && !!provider.torisAvailable;",
+ "replace": "const toris = !own;",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "g1.ui-calendar-secret-optional-label",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "클라이언트 보안 비밀 <small>필수</small>",
+ "replace": "클라이언트 보안 비밀 <small>선택</small>",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "g1.ui-calendar-no-revert-to-toris",
+ "file": "desktop/src/CalendarConnection.tsx",
+ "find": "{own && provider.torisAvailable && <button",
+ "replace": "{false && <button",
+ "cmd": ["node", "scripts/verify-planner-ui.mjs"],
+ "timeoutMs": 300000
+},
+{
+ "id": "g1.ui-sns-google-note-missing",
+ "file": "desktop/src/sns/SnsConnections.tsx",
+ "find": "return platform===\"youtube\"?`${base}",
+ "replace": "return false?`${base}",
+ "cmd": ["node", "--import", "tsx", "--test", "tests/publication-connection-mode.test.ts"]
 },
 {
  "id": "a2.ui-ops-cf-wrangler-swap",
@@ -403,8 +442,8 @@
 {
  "id": "a2.ui-sns-toris-not-default",
  "file": "desktop/src/sns/SnsConnections.tsx",
- "find": ":toris?\"toris\":builtin?\"google_builtin\":\"developer\";",
- "replace": ":builtin?\"google_builtin\":\"developer\";",
+ "find": "const mode:Mode=stored!==\"developer\"&&toris?\"toris\":\"developer\";",
+ "replace": "const mode:Mode=stored===\"toris\"&&toris?\"toris\":\"developer\";",
  "cmd": ["node", "--import", "tsx", "--test", "tests/publication-connection-mode.test.ts"]
 },
 {

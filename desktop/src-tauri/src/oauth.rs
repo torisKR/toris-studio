@@ -147,7 +147,8 @@ impl Provider {
     fn secret_required(self) -> bool {
         !self.google()
     }
-    /// Google installed-app clients: PKCE, offline access, no client secret required.
+    /// Google desktop clients: PKCE and offline access. The user's own client may omit its secret here;
+    /// Toris's Google client is exchanged and refreshed by the Toris broker, which holds the secret.
     fn google(self) -> bool {
         matches!(self, Self::Youtube | Self::GoogleCalendar)
     }
@@ -266,45 +267,11 @@ enum ClientMode {
     /// The user's own developer app (client ID, secret where the provider needs one).
     #[default]
     Developer,
-    /// Toris's public client; the code exchange and refresh go through the Toris broker.
+    /// Toris's public client (Google included); the code exchange and refresh go through the Toris broker.
     Toris,
-    /// Toris's Google installed-app client: no secret, PKCE only.
-    GoogleBuiltin,
 }
 
-/// Toris's Google desktop OAuth client ID. Empty until registered: built-in mode is then off.
-const GOOGLE_PUBLIC_CLIENT_ID: &str = match option_env!("TORIS_GOOGLE_CLIENT_ID") {
-    Some(id) => id,
-    None => "",
-};
-/// While the Google app is in "Testing", refresh tokens expire after 7 days.
-const GOOGLE_CLIENT_TESTING: bool = match option_env!("TORIS_GOOGLE_CLIENT_STATUS") {
-    Some(status) => !status.eq_ignore_ascii_case("production"),
-    None => true,
-};
-const GOOGLE_TESTING_GRANT_SECONDS: u64 = 7 * DAY;
-
-/// Toris's own Google client for this provider, or None when it is not Google or no ID is built in.
-fn builtin_google_client(provider: Provider, client_id: &str) -> Option<ClientConfig> {
-    (provider.google() && !client_id.is_empty()).then(|| ClientConfig {
-        client_id: client_id.into(),
-        client_secret: None,
-        redirect_uri: provider.default_redirect(),
-        mode: ClientMode::GoogleBuiltin,
-        ..Default::default()
-    })
-}
-
-/// What a failed manual refresh tells the user. A rejected grant of Toris's Google client while that app
-/// is still in Google's "Testing" state is the weekly expiry, so it says so instead of a generic message.
-fn refresh_failure_message(client: &ClientConfig, failure: TokenFailure, testing: bool) -> String {
-    if failure.permanent && testing && client.mode == ClientMode::GoogleBuiltin {
-        return "Google 테스트 단계 로그인은 7일마다 만료됩니다. 다시 로그인하세요.".into();
-    }
-    failure.message()
-}
-
-/// Google logins with no secret must prove the code with PKCE; TikTok Desktop requires it too.
+/// Google logins prove the code with PKCE (Toris's broker binds the same verifier); TikTok Desktop requires it too.
 fn uses_pkce(provider: Provider) -> bool {
     provider.google() || provider == Provider::Tiktok
 }
@@ -316,15 +283,6 @@ fn scope_separator(provider: Provider) -> &'static str {
     } else {
         ","
     }
-}
-
-/// When a "Testing" Google app's login stops refreshing: 7 days after the first login, not the last refresh.
-fn relogin_by(client: &ClientConfig, session: &TokenSession, testing: bool) -> Option<u64> {
-    (testing && client.mode == ClientMode::GoogleBuiltin && session.login_at > 0).then(|| {
-        session
-            .login_at
-            .saturating_add(GOOGLE_TESTING_GRANT_SECONDS)
-    })
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -341,9 +299,6 @@ struct TokenSession {
     retry_at: u64,
     #[serde(default)]
     scopes: Vec<String>,
-    /// First login time; refreshes keep it. 0 for sessions saved before it was recorded.
-    #[serde(default)]
-    login_at: u64,
 }
 impl TokenSession {
     fn refreshable(&self, provider: Provider, now: u64) -> bool {
@@ -816,8 +771,6 @@ struct OAuthService {
     gate: Mutex<()>,
     pending: StdMutex<HashMap<String, PendingLogin>>,
     loopback_listener: StdMutex<Option<JoinHandle<()>>>,
-    /// Toris's built-in Google client ID; empty turns the built-in mode off.
-    google_client_id: String,
     /// Loopback callback port; tests bind an ephemeral one.
     callback_port: u16,
     /// Toris OAuth Broker origin. A constant in the app; only tests inject another one.
@@ -836,16 +789,9 @@ impl OAuthService {
         self.callback_port = port;
         self
     }
-    #[cfg(test)]
-    fn with_google_client(mut self, id: &str) -> Self {
-        self.google_client_id = id.into();
-        self
-    }
-    /// The stored client, or Toris's built-in one for Google when the user saved none.
+    /// The stored client: the user's own app or Toris mode. There is no built-in default.
     fn client_for(&self, provider: Provider) -> Result<Option<ClientConfig>, String> {
-        Ok(self
-            .read::<ClientConfig>("client", provider)?
-            .or_else(|| builtin_google_client(provider, &self.google_client_id)))
+        self.read::<ClientConfig>("client", provider)
     }
     fn new(
         store: Arc<dyn CredentialStore>,
@@ -859,7 +805,6 @@ impl OAuthService {
             gate: Mutex::new(()),
             pending: StdMutex::new(HashMap::new()),
             loopback_listener: StdMutex::new(None),
-            google_client_id: GOOGLE_PUBLIC_CLIENT_ID.into(),
             callback_port: CALLBACK_PORT,
             broker_url: TORIS_BROKER.into(),
             broker_config: StdMutex::new(None),
@@ -957,7 +902,7 @@ impl OAuthService {
                 else { provider.help().into() });
             let audit: Vec<AuditEvent> = self.read("audit", provider).ok().flatten().unwrap_or_default();
             json!({ "platform":provider.id(), "label":provider.label(), "clientConfigured":configured,
-                "clientMode":client.as_ref().map(|c| c.mode), "builtinAvailable":builtin_google_client(provider, &self.google_client_id).is_some(), "googleTesting":provider.google() && GOOGLE_CLIENT_TESTING,
+                "clientMode":client.as_ref().map(|c| c.mode),
                 "connected":connected, "uploadAuthorized":connected && provider == Provider::Youtube && session.as_ref().is_some_and(|s| has_upload_scope(&s.scopes)), "publishingAuthorized":connected && session.as_ref().is_some_and(|s| provider.publishing_authorized(&s.scopes)), "publishingScopes":session.as_ref().map(|s| s.scopes.clone()).unwrap_or_default(), "expiresAt":session.as_ref().and_then(|s| timestamp(s.expires_at)),
                 "refreshable":refreshable, "needsReconnect":needs_reconnect, "detail":detail,
                 "tiktokAuditDeclared":provider == Provider::Tiktok && client.as_ref().is_some_and(|c| c.tiktok_audit_declared), "redirectUri":client.as_ref().map(|c| c.redirect_uri.as_str()), "pending":pending,
@@ -987,8 +932,6 @@ impl OAuthService {
         }
         if let Some(mode) = object.get("mode") {
             let config = match mode.as_str() {
-                Some("builtin") => builtin_google_client(provider, &self.google_client_id)
-                    .ok_or("Toris 기본 Google 클라이언트를 쓸 수 없습니다. 내 Google 클라이언트를 입력하세요.")?,
                 Some("toris") if toris_platform(provider) => ClientConfig {
                     redirect_uri: toris_redirect(provider).into(),
                     mode: ClientMode::Toris,
@@ -1783,7 +1726,6 @@ fn session_from_response(
         expires_at: now.saturating_add(lifetime),
         refresh_expires_at,
         issued_at: now,
-        login_at: previous.map_or(now, |p| p.login_at),
         long_lived,
         needs_reconnect: false,
         failures: 0,
@@ -1896,11 +1838,6 @@ pub async fn status() -> Result<Value, String> {
                 json!(platform == "youtube" && provider["publishingAuthorized"] == true);
             provider["needsReconnect"] =
                 json!(matching.iter().any(|c| c["needsReconnect"] == true));
-            // Earliest weekly re-login among this platform's built-in Google connections (Testing app).
-            provider["reloginBy"] = json!(matching
-                .iter()
-                .filter_map(|c| c["reloginBy"].as_str())
-                .min());
             provider["connectionCount"] = json!(matching
                 .iter()
                 .map(|c| c["connectionId"].as_str())
@@ -1943,6 +1880,8 @@ pub(crate) struct PublishingAccess {
     pub token: String,
     pub scopes: Vec<String>,
     pub tiktok_audit_declared: bool,
+    /// A Toris connection: Google API calls bill Toris's project quota, which every user shares.
+    pub shared_quota: bool,
 }
 pub(crate) async fn publishing_access(platform: &str) -> Result<PublishingAccess, String> {
     connections_impl::unique_access(platform).await
@@ -1967,6 +1906,10 @@ pub async fn begin_youtube_upload_login() -> Result<Value, String> {
 /// Read token of the one connected YouTube account, for public Data API reads without an API key.
 /// Native-only: used for fixed googleapis.com endpoints and never returned over IPC.
 pub(crate) async fn youtube_read_token() -> Result<String, String> {
+    Ok(youtube_read_login().await?.0)
+}
+/// The YouTube read token and whether it bills Toris's shared Google project quota (Toris 연결).
+pub(crate) async fn youtube_read_login() -> Result<(String, bool), String> {
     let access = publishing_access("youtube").await?;
     let readonly = "https://www.googleapis.com/auth/youtube.readonly";
     if !access.scopes.is_empty()
@@ -1977,7 +1920,7 @@ pub(crate) async fn youtube_read_token() -> Result<String, String> {
     {
         return Err("YouTube 읽기 권한이 없습니다.".into());
     }
-    Ok(access.token)
+    Ok((access.token, access.shared_quota))
 }
 /// Token remains native-only and is used solely for fixed Google API endpoints.
 pub(crate) async fn youtube_upload_access() -> Result<String, String> {

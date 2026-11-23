@@ -17,6 +17,8 @@ const REDIRECTS = {
   threads: 'https://toris.kr/oauth/threads/callback',
   instagram: 'https://toris.kr/oauth/instagram/callback',
   facebook: 'https://toris.kr/oauth/facebook/callback',
+  youtube: 'http://127.0.0.1:38471/oauth/youtube/callback',
+  google_calendar: 'http://127.0.0.1:38471/oauth/google_calendar/callback',
 };
 
 function b64url(bytes) { return Buffer.from(bytes).toString('base64url'); }
@@ -46,8 +48,9 @@ function makeEnv(overrides = {}) {
     FACEBOOK_APP_ID: 'facebook-app-id', NAVER_LOGIN_CLIENT_ID: 'naver-login-id', NAVER_SEARCH_CLIENT_ID: 'naver-search-id',
     TIKTOK_CLIENT_SECRET: 'tiktok-secret', THREADS_APP_SECRET: 'threads-secret', INSTAGRAM_APP_SECRET: 'instagram-secret',
     FACEBOOK_APP_SECRET: 'facebook-secret', NAVER_LOGIN_CLIENT_SECRET: 'naver-login-secret', NAVER_SEARCH_CLIENT_SECRET: 'naver-search-secret',
+    GOOGLE_CLIENT_ID: 'google-client-id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'google-secret',
     STATE_SIGNING_KEYS: JSON.stringify({ k2: KEY_CURRENT.toString('base64'), k1: KEY_PREVIOUS.toString('base64') }),
-    STATE_KEY_ID: 'k2', MIN_APP_VERSION: '0.8.0', ENABLED_PLATFORMS: 'tiktok,threads,instagram,facebook,naver_blog',
+    STATE_KEY_ID: 'k2', MIN_APP_VERSION: '0.8.0', ENABLED_PLATFORMS: 'tiktok,threads,instagram,facebook,naver_blog,youtube,google_calendar',
     NAVER_SEARCH_DAILY_BUDGET: '20000',
     START_LIMITER: limiter('start'), TOKEN_LIMITER: limiter('token'), REFRESH_LIMITER: limiter('refresh'), SEARCH_LIMITER: limiter('search'),
     SEARCH_BUDGET: { idFromName: name => name, get: () => ({ fetch: (url, init) => budget.fetch(new Request(url, init)) }) },
@@ -110,7 +113,7 @@ test('config lists enabled platforms without secrets or client IDs, with version
   const text = await response.text();
   assert.deepEqual(JSON.parse(text), {
     v: 1, minAppVersion: '0.8.0',
-    platforms: { tiktok: { enabled: true }, threads: { enabled: true }, instagram: { enabled: true }, facebook: { enabled: false }, naver_blog: { enabled: true } },
+    platforms: { tiktok: { enabled: true }, threads: { enabled: true }, instagram: { enabled: true }, facebook: { enabled: false }, naver_blog: { enabled: true }, youtube: { enabled: false }, google_calendar: { enabled: false } },
     naverSearch: { enabled: true },
   });
   for (const value of Object.values(env)) if (typeof value === 'string' && /secret|-id|key/.test(value)) assert.ok(!text.includes(value), value);
@@ -122,6 +125,18 @@ test('config reports a platform disabled when its client secret is missing', asy
   const value = await (await call(env, '/v1/config', { method: 'GET' })).json();
   assert.equal(value.platforms.tiktok.enabled, false);
   assert.equal(value.naverSearch.enabled, false);
+});
+
+test('Google platforms are enabled only with the shared Google client ID, its secret, and the enabled list', async () => {
+  const enabled = async overrides => {
+    const { env } = makeEnv(overrides);
+    const { platforms } = await (await call(env, '/v1/config', { method: 'GET' })).json();
+    return [platforms.youtube.enabled, platforms.google_calendar.enabled];
+  };
+  assert.deepEqual(await enabled({}), [true, true]);
+  assert.deepEqual(await enabled({ GOOGLE_CLIENT_SECRET: undefined }), [false, false]);
+  assert.deepEqual(await enabled({ GOOGLE_CLIENT_ID: '' }), [false, false]);
+  assert.deepEqual(await enabled({ ENABLED_PLATFORMS: 'tiktok,youtube' }), [true, false]);
 });
 
 test('any request with an Origin header is refused before work', async () => {
@@ -370,6 +385,82 @@ test('provider errors map to provider_rejected or provider_unavailable without e
   assert.equal(seen.length, 0);
 });
 
+test('Google exchange sends the PKCE verifier, the secret, and each platform\'s own loopback redirect', async t => {
+  const seen = noConsole(t);
+  const { env } = makeEnv();
+  for (const platform of ['youtube', 'google_calendar']) {
+    await withProvider(() => json({ access_token: 'google-at', expires_in: 3599, refresh_token: 'google-rt', scope: 'https://www.googleapis.com/auth/youtube.readonly', token_type: 'Bearer', id_token: 'drop-me' }), async calls => {
+      const response = await call(env, `/v1/oauth/${platform}/token`, { body: tokenBody(platform, { code: '4/0Ab-synthetic' }) });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { v: 1, access_token: 'google-at', token_type: 'bearer', expires_in: 3599, refresh_token: 'google-rt', scope: 'https://www.googleapis.com/auth/youtube.readonly', long_lived: false });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, 'POST');
+      assert.equal(calls[0].redirect, 'manual');
+      assert.equal(calls[0].url, 'https://oauth2.googleapis.com/token');
+      assert.deepEqual(form(calls[0].body), { client_id: 'google-client-id.apps.googleusercontent.com', client_secret: 'google-secret', code: '4/0Ab-synthetic', code_verifier: VERIFIER, grant_type: 'authorization_code', redirect_uri: REDIRECTS[platform] });
+    });
+  }
+  await withProvider(noProvider, async () => {
+    await expectError(await call(env, '/v1/oauth/google_calendar/token', { body: tokenBody('youtube', { redirectUri: REDIRECTS.google_calendar }) }), 400, 'state_invalid');
+    await expectError(await call(env, '/v1/oauth/youtube/token', { body: tokenBody('youtube', { redirectUri: REDIRECTS.google_calendar }) }), 400, 'redirect_mismatch');
+  });
+  assert.equal(seen.length, 0);
+});
+
+test('Google start names the shared public client and the platform loopback', async () => {
+  const { env } = makeEnv();
+  for (const platform of ['youtube', 'google_calendar']) {
+    const value = await (await call(env, `/v1/oauth/${platform}/start`, { body: { purpose: 'publish', challenge: CHALLENGE } })).json();
+    assert.equal(value.clientId, 'google-client-id.apps.googleusercontent.com');
+    assert.equal(value.redirectUri, REDIRECTS[platform]);
+  }
+});
+
+test('Google refresh sends the secret and omits a refresh token Google did not rotate', async () => {
+  const { env, limiterCalls } = makeEnv();
+  await withProvider(() => json({ access_token: 'fresh-at', expires_in: 3599, scope: 'https://www.googleapis.com/auth/calendar.app.created', token_type: 'Bearer' }), async calls => {
+    for (const platform of ['youtube', 'google_calendar']) {
+      const value = await (await call(env, `/v1/oauth/${platform}/refresh`, { body: { refreshToken: 'google-old-rt' } })).json();
+      assert.deepEqual(value, { v: 1, access_token: 'fresh-at', token_type: 'bearer', expires_in: 3599, scope: 'https://www.googleapis.com/auth/calendar.app.created', long_lived: false });
+    }
+    assert.equal(calls.length, 2);
+    for (const c of calls) {
+      assert.equal(c.url, 'https://oauth2.googleapis.com/token');
+      assert.deepEqual(form(c.body), { client_id: 'google-client-id.apps.googleusercontent.com', client_secret: 'google-secret', grant_type: 'refresh_token', refresh_token: 'google-old-rt' });
+    }
+    await expectError(await call(env, '/v1/oauth/youtube/refresh', { body: { accessToken: 'wrong-field' } }), 400, 'bad_request');
+    assert.equal(calls.length, 2);
+  });
+  assert.ok(limiterCalls.every(c => c.name === 'refresh'));
+});
+
+test('Google: only invalid_grant needs a new login; other client errors are retryable server problems', async t => {
+  const seen = noConsole(t);
+  const { env } = makeEnv();
+  const marker = 'google-raw-error-marker';
+  const cases = [
+    [json({ error: 'invalid_grant', error_description: marker }, 400), 401, 'provider_rejected', false],
+    [json({ error: 'invalid_client', error_description: marker }, 401), 502, 'provider_unavailable', true],
+    [json({ error: 'invalid_request', error_description: 'client_secret is missing.' }, 400), 502, 'provider_unavailable', true],
+    [json({ error: 'unauthorized_client' }, 400), 502, 'provider_unavailable', true],
+    [json({}, 403), 502, 'provider_unavailable', true],
+    [new Response(marker, { status: 503 }), 502, 'provider_unavailable', true],
+    [json({ access_token: 'at' }), 401, 'provider_rejected', false],
+  ];
+  for (const [answer, status, code, retryable] of cases) {
+    for (const [path, body] of [['/v1/oauth/youtube/token', tokenBody('youtube')], ['/v1/oauth/google_calendar/refresh', { refreshToken: 'rt' }]]) {
+      await withProvider(() => answer.clone(), async () => {
+        const response = await call(env, path, { body });
+        const text = await response.text();
+        assert.ok(!text.includes(marker) && !text.includes('client_secret'), text);
+        assert.equal(response.status, status, `${path} ${code}`);
+        assert.deepEqual(JSON.parse(text), { v: 1, error: { code, retryable } });
+      });
+    }
+  }
+  assert.equal(seen.length, 0);
+});
+
 test('refresh routes TikTok, Naver, and Facebook through the provider and refuses Threads and Instagram', async () => {
   const { env, limiterCalls } = makeEnv();
   await withProvider(() => json({ access_token: 'new-at', expires_in: '7200', refresh_token: 'new-rt', refresh_expires_in: 999, token_type: 'Bearer', scope: 'user.info.basic' }), async calls => {
@@ -501,7 +592,10 @@ test('Worker source has no console calls; deploy config disables logs and declar
     REFRESH_LIMITER: { limit: 30, period: 60 }, SEARCH_LIMITER: { limit: 30, period: 60 },
   });
   assert.deepEqual(config.durable_objects.bindings, [{ name: 'SEARCH_BUDGET', class_name: 'SearchBudget' }]);
-  for (const secret of ['TIKTOK_CLIENT_SECRET', 'THREADS_APP_SECRET', 'INSTAGRAM_APP_SECRET', 'FACEBOOK_APP_SECRET', 'NAVER_LOGIN_CLIENT_SECRET', 'NAVER_SEARCH_CLIENT_SECRET', 'STATE_SIGNING_KEYS']) {
+  // The Google client ID is public; its secret is set with `wrangler secret put GOOGLE_CLIENT_SECRET`.
+  assert.equal(config.vars.GOOGLE_CLIENT_ID, '796397762596-oodtcfqbqrfjb0eqvcjc0hpl0e6pts1h.apps.googleusercontent.com');
+  assert.deepEqual(config.vars.ENABLED_PLATFORMS.split(','), ['tiktok', 'threads', 'instagram', 'facebook', 'naver_blog', 'youtube', 'google_calendar']);
+  for (const secret of ['GOOGLE_CLIENT_SECRET', 'TIKTOK_CLIENT_SECRET', 'THREADS_APP_SECRET', 'INSTAGRAM_APP_SECRET', 'FACEBOOK_APP_SECRET', 'NAVER_LOGIN_CLIENT_SECRET', 'NAVER_SEARCH_CLIENT_SECRET', 'STATE_SIGNING_KEYS']) {
     assert.equal(config.vars[secret], undefined, secret);
   }
 });

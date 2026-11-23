@@ -6,13 +6,18 @@ import { External } from "../External";
 import { connectionApi, PLATFORM_NAMES, type Connection, type Connections, type Binding } from "./model";
 const providers=["youtube","instagram","facebook","threads","tiktok","naver_blog"];
 const guides:Record<string,string>={youtube:"https://developers.google.com/identity/protocols/oauth2/native-app",instagram:"https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/",facebook:"https://developers.facebook.com/docs/facebook-login/",threads:"https://developers.facebook.com/documentation/threads/get-started",tiktok:"https://developers.tiktok.com/doc/login-kit-desktop/",naver_blog:"https://developers.naver.com/docs/login/devguide/devguide.md"};
-type BrokerView={available:Record<string,boolean>;naverSearch:boolean;clients?:Record<string,{mode:string|null;builtinAvailable:boolean}>};
-type Mode="toris"|"google_builtin"|"developer";
-/** Which connection the user gets by default: their own app if they saved one, else Toris's (broker or built-in Google), else their own. */
+type BrokerView={available:Record<string,boolean>;naverSearch:boolean;clients?:Record<string,{mode:string|null}>};
+type Mode="toris"|"developer";
+/** Which connection the user gets by default: their own app if they saved one, else Toris 연결 when the broker serves the platform. */
 export function connectionMode(broker:BrokerView|null,platform:string):{offer:boolean;mode:Mode;stored:string|null}{
- const toris=!!broker?.available[platform],builtin=!!broker?.clients?.[platform]?.builtinAvailable,stored=broker?.clients?.[platform]?.mode??null;
- const mode:Mode=stored==="developer"?"developer":stored==="toris"&&toris?"toris":stored==="google_builtin"&&builtin?"google_builtin":toris?"toris":builtin?"google_builtin":"developer";
- return {offer:toris||builtin,mode,stored};
+ const toris=!!broker?.available[platform],stored=broker?.clients?.[platform]?.mode??null;
+ const mode:Mode=stored!=="developer"&&toris?"toris":"developer";
+ return {offer:toris,mode,stored};
+}
+/** What Toris 연결 means here. Google adds its unverified-app screen, the shared search quota and its project-wide revocation. */
+export function torisNote(platform:string):string{
+ const base="Toris 서버가 로그인 코드를 토큰으로 바꿔 줍니다. 토큰은 이 기기 키체인에만 저장되고 클라이언트 비밀 값은 입력하지 않습니다.";
+ return platform==="youtube"?`${base} Google 로그인 화면에 확인되지 않은 앱 경고가 나올 수 있습니다. 키워드 트렌드 검색에는 내 YouTube Data API 키가 필요합니다. 연결을 해제하면 같은 Google 계정의 Toris 연결 Google Calendar 권한도 함께 철회될 수 있습니다.`:base;
 }
 export function SnsConnections({connections,bindings=[],channel,onChanged}:{connections:Connection[];bindings?:Binding[];channel?:SocialChannel;onChanged:(value?:Connections)=>void}){
  const [platform,setPlatform]=useState(providers.includes(channel?.platform??"")?channel!.platform:"youtube");
@@ -24,7 +29,7 @@ export function SnsConnections({connections,bindings=[],channel,onChanged}:{conn
  useEffect(()=>{connectionApi<BrokerView>({action:"brokerConfig"}).then(setBroker).catch(()=>setBroker(null));},[]);
  useEffect(()=>{setModeChoice("");},[platform]);
  const how=connectionMode(broker,platform),mode=modeChoice||how.mode;
- async function addAccount(){if(mode!=="developer"&&how.stored!==mode){await invoke("oauth_save_client",{platform,input:{mode:mode==="toris"?"toris":"builtin"}});setBroker(b=>b?{...b,clients:{...b.clients,[platform]:{mode,builtinAvailable:!!b.clients?.[platform]?.builtinAvailable}}}:b);}await login(platform);}
+ async function addAccount(){if(mode!=="developer"&&how.stored!==mode){await invoke("oauth_save_client",{platform,input:{mode}});setBroker(b=>b?{...b,clients:{...b.clients,[platform]:{mode}}}:b);}await login(platform);}
  useEffect(()=>{if(pending&&connections.some(c=>c.connectionId===pending.connectionId&&c.connected)){setPending(null);setCallback("");setMessage("로그인을 확인했습니다. 실제 계정을 선택해 채널에 연결하세요.");}},[connections,pending]);
  const binding=bindings.find(b=>b.channelId===channel?.id);
  async function run(action:()=>Promise<void>){if(busy)return;setBusy(true);setMessage("");try{await action();}catch(e){setMessage(String(e));}finally{setBusy(false);}}
@@ -39,11 +44,10 @@ export function SnsConnections({connections,bindings=[],channel,onChanged}:{conn
    <div className="workspace-form-row"><label>추가할 플랫폼<select value={platform} onChange={e=>setPlatform(e.target.value as typeof platform)}>{providers.filter(p=>!channel||p===channel.platform).map(p=><option key={p} value={p}>{PLATFORM_NAMES[p]}</option>)}</select></label><button className="social-button primary" disabled={busy} onClick={()=>void run(addAccount)}><LogIn size={16}/>계정 추가</button></div>
    {how.offer&&<div role="radiogroup" aria-label="연결 방식" className="sns-connection-modes"><span className="sns-connection-modes-title" aria-hidden="true">연결 방식</span>
     {broker?.available[platform]&&<label><input type="radio" name="sns-connection-mode" checked={mode==="toris"} onChange={()=>setModeChoice("toris")}/>Toris 연결 (로그인만)</label>}
-    {broker?.clients?.[platform]?.builtinAvailable&&<label><input type="radio" name="sns-connection-mode" checked={mode==="google_builtin"} onChange={()=>setModeChoice("google_builtin")}/>Toris 기본 Google 클라이언트 (로그인만)</label>}
     <label><input type="radio" name="sns-connection-mode" checked={mode==="developer"} onChange={()=>setModeChoice("developer")}/>내 개발자 앱</label>
-    {mode!=="developer"&&<small>{mode==="toris"?"Toris 서버가 로그인 코드를 토큰으로 바꿔 줍니다. 토큰은 이 기기 키체인에만 저장되고 클라이언트 비밀 값은 입력하지 않습니다.":"Toris가 등록한 Google 데스크톱 클라이언트로 로그인합니다. 비밀 값 없이 PKCE로 확인합니다."}</small>}
+    {mode!=="developer"&&<small>{torisNote(platform)}</small>}
    </div>}
-   {(!how.offer||mode==="developer")&&<details className="sns-client-settings" open={how.offer||undefined}><summary>플랫폼 앱 연결 설정</summary><p>공식 개발자 앱의 설정입니다. 분석과 게시에 필요한 권한은 각각 동의받습니다. OAuth는 시스템 브라우저에서 진행합니다.</p><External url={guides[platform]}>공식 설정 안내</External><label>클라이언트 ID<input value={clientId} onChange={e=>setClientId(e.target.value)} autoComplete="off"/></label><label>클라이언트 비밀 값 · 필요한 플랫폼만<input type="password" value={clientSecret} onChange={e=>setClientSecret(e.target.value)} autoComplete="new-password"/></label><label>등록된 리디렉션 URL<input value={redirectUri} onChange={e=>setRedirectUri(e.target.value)} placeholder="공식 앱에 등록한 주소"/></label><button className="social-button" disabled={busy||!clientId.trim()} onClick={()=>void run(async()=>{await invoke("oauth_save_client",{platform,input:{clientId:clientId.trim(),clientSecret,redirectUri:redirectUri.trim()}});setClientSecret("");setMessage("플랫폼 앱 설정을 보안 저장소에 저장했습니다. 계정 추가로 진행하세요.");onChanged();})}>연결 설정 저장</button></details>}
+   {(!how.offer||mode==="developer")&&<details className="sns-client-settings" open={how.offer||undefined}><summary>플랫폼 앱 연결 설정</summary><p>공식 개발자 앱의 설정입니다. 분석과 게시에 필요한 권한은 각각 동의받습니다. OAuth는 시스템 브라우저에서 진행합니다.</p><External url={guides[platform]}>공식 설정 안내</External><label>클라이언트 ID<input value={clientId} onChange={e=>setClientId(e.target.value)} autoComplete="off"/></label><label>클라이언트 비밀 값 · {platform==="youtube"?"필수":"필요한 플랫폼만"}<input type="password" value={clientSecret} onChange={e=>setClientSecret(e.target.value)} autoComplete="new-password"/></label><label>등록된 리디렉션 URL<input value={redirectUri} onChange={e=>setRedirectUri(e.target.value)} placeholder="공식 앱에 등록한 주소"/></label><button className="social-button" disabled={busy||!clientId.trim()} onClick={()=>void run(async()=>{await invoke("oauth_save_client",{platform,input:{clientId:clientId.trim(),clientSecret,redirectUri:redirectUri.trim()}});setClientSecret("");setMessage("플랫폼 앱 설정을 보안 저장소에 저장했습니다. 계정 추가로 진행하세요.");onChanged();})}>연결 설정 저장</button></details>}
   </>}
   {pending&&<section className="sns-callback"><strong>로그인 완료 대기</strong><button className="social-button compact" disabled={busy} onClick={()=>void run(async()=>{await connectionApi({action:"cancelLogin",connectionId:pending.connectionId});setPending(null);setCallback("");setMessage("로그인 요청을 취소했습니다. 기존 계정은 유지됩니다.");})}>로그인 요청 취소</button><p>자동 콜백이 완료되면 계정 목록을 새로고침합니다. 수동 콜백 환경에서는 공식 로그인 후 이동한 전체 URL을 붙여넣으세요.</p><label>콜백 URL<input type="url" value={callback} onChange={e=>setCallback(e.target.value)} autoComplete="off"/></label><button className="social-button" disabled={busy||!callback.trim()} onClick={()=>void run(async()=>{onChanged(await connectionApi<Connections>({action:"completeLogin",connectionId:pending.connectionId,callbackUrl:callback.trim()}));setCallback("");setPending(null);setMessage("실제 계정 확인을 마쳤습니다.");})}>로그인 완료 확인</button></section>}
   {message&&<p className="social-notice info" role="status">{message}</p>}

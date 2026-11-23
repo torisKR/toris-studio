@@ -47,7 +47,7 @@ try{
   if(command==='oauth_connections')return {connections,bindings,warnings:[]};
   if(command==='oauth_connection_dispatch'&&args.input.action==='brokerConfig')return brokerView;
   if(command==='oauth_connection_dispatch'&&args.input.action==='beginLogin'){assert.ok(torisScenario,'login only in the Toris scenario');torisLogins.push(args.input);return {connectionId:'00000000-0000-4000-8000-00000000c0de',platform:args.input.platform,purpose:args.input.purpose,pending:true,manualCallback:false};}
-  if(command==='oauth_save_client'){assert.ok(torisScenario,'client changes only in the Toris scenario');clientSaves.push(args);brokerView={...brokerView,clients:{...brokerView.clients,[args.platform]:{mode:args.input.mode==='toris'?'toris':'developer',builtinAvailable:false}}};return {providers:[]};}
+  if(command==='oauth_save_client'){assert.ok(torisScenario,'client changes only in the Toris scenario');clientSaves.push(args);brokerView={...brokerView,clients:{...brokerView.clients,[args.platform]:{mode:args.input.mode==='toris'?'toris':'developer'}}};return {providers:[]};}
   if(command==='oauth_connection_dispatch'){
    assert.equal(args.input.action,'bindChannel','No OAuth/provider operation belongs to this browser fixture');
    const {channelId,connectionId,accountId}=args.input;assert.equal(channelId,'channel-youtube');assert.equal(connectionId,connections[1].connectionId);assert.equal(accountId,connections[1].accountId);

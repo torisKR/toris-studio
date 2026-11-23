@@ -119,6 +119,48 @@
     "test": "infrastructure/oauth-broker/broker.test.mjs"
   },
   {
+    "id": "broker.google-drops-verifier",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "code, code_verifier: verifier, grant_type: 'authorization_code', redirect_uri: redirect }));",
+    "replace": "code, grant_type: 'authorization_code', redirect_uri: redirect }));",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-calendar-uses-youtube-redirect",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "google_calendar: 'http://127.0.0.1:38471/oauth/google_calendar/callback'",
+    "replace": "google_calendar: 'http://127.0.0.1:38471/oauth/youtube/callback'",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-refresh-no-secret",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "{ client_id: id, client_secret: secret, grant_type: 'refresh_token', refresh_token: refreshToken }",
+    "replace": "{ client_id: id, grant_type: 'refresh_token', refresh_token: refreshToken }",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-invalid-client-rejected",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "error !== 'invalid_grant') return fail('provider_unavailable');",
+    "replace": "error !== 'invalid_grant') return tokenFrom(result);",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-enabled-without-secret",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "youtube: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],",
+    "replace": "youtube: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_ID'],",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
+    "id": "broker.google-errorless-4xx-rejected",
+    "file": "infrastructure/oauth-broker/worker.ts",
+    "find": "result.status >= 400 && result.status < 500 && error !== 'invalid_grant'",
+    "replace": "result.status >= 400 && result.status < 500 && error !== undefined && error !== 'invalid_grant'",
+    "test": "infrastructure/oauth-broker/broker.test.mjs"
+  },
+  {
     "id": "callback.relay-copies-all-keys",
     "file": "infrastructure/oauth-callback/worker.ts",
     "find": "for (const key of RELAYED_KEYS) {",

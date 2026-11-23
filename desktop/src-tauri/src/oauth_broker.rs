@@ -1,6 +1,7 @@
 //! "Toris 연결": Toris's public OAuth apps, with the code exchange and secret-needing refreshes done by
 //! the Toris OAuth Broker (infrastructure/oauth-broker). The app never holds a client secret; tokens come
-//! back in the response and stay in Rust and the OS credential store. Google never uses the broker.
+//! back in the response and stay in Rust and the OS credential store. Google (YouTube, Calendar) uses it too:
+//! Google's desktop clients need their secret for the exchange and every hourly refresh.
 use super::*;
 
 /// The broker every Toris connection uses unless the user stored another (validated) origin.
@@ -55,10 +56,12 @@ pub(crate) fn toris_platform(p: Provider) -> bool {
             | Provider::Instagram
             | Provider::Facebook
             | Provider::NaverBlog
+            | Provider::Youtube
+            | Provider::GoogleCalendar
     )
 }
 
-/// Fixed redirect per platform, identical to the broker's: loopback for TikTok and Naver, HTTPS for Meta.
+/// Fixed redirect per platform, identical to the broker's: loopback for TikTok, Naver and Google, HTTPS for Meta.
 pub(crate) fn toris_redirect(p: Provider) -> &'static str {
     match p {
         Provider::Tiktok => "http://127.0.0.1:38471/oauth/tiktok/callback",
@@ -66,7 +69,8 @@ pub(crate) fn toris_redirect(p: Provider) -> &'static str {
         Provider::Threads => "https://toris.kr/oauth/threads/callback",
         Provider::Instagram => "https://toris.kr/oauth/instagram/callback",
         Provider::Facebook => "https://toris.kr/oauth/facebook/callback",
-        Provider::Youtube | Provider::GoogleCalendar => "",
+        Provider::Youtube => "http://127.0.0.1:38471/oauth/youtube/callback",
+        Provider::GoogleCalendar => "http://127.0.0.1:38471/oauth/google_calendar/callback",
     }
 }
 
@@ -74,11 +78,16 @@ pub(crate) fn toris_redirect(p: Provider) -> &'static str {
 fn refresh_needs_broker(p: Provider) -> bool {
     matches!(
         p,
-        Provider::Tiktok | Provider::NaverBlog | Provider::Facebook
+        Provider::Tiktok
+            | Provider::NaverBlog
+            | Provider::Facebook
+            | Provider::Youtube
+            | Provider::GoogleCalendar
     )
 }
 
-/// Broker error codes: a rejected or mismatched login needs a new login; capacity problems are retried.
+/// Broker error codes: a rejected or mismatched login needs a new login; capacity problems are retried, and so
+/// is a platform switched off at the broker, so its connections survive until it is switched back on.
 pub(crate) fn broker_failure(body: &Value) -> TokenFailure {
     let transient = |outcome| TokenFailure::transient(outcome);
     match body["error"]["code"].as_str() {
@@ -86,6 +95,7 @@ pub(crate) fn broker_failure(body: &Value) -> TokenFailure {
         Some("quota_exhausted") => transient("quota_exhausted"),
         Some("provider_unavailable") => transient("provider_unavailable"),
         Some("internal") => transient("broker_internal"),
+        Some("unsupported_platform") => transient("platform_unavailable"),
         Some("upgrade_required") => TokenFailure {
             permanent: true,
             outcome: "upgrade_required",
@@ -309,7 +319,7 @@ pub(crate) async fn broker_view(s: &OAuthService) -> Value {
         "naverSearch": config.as_ref().is_some_and(|c| c["naverSearch"]["enabled"] == true),
         "clients": PROVIDERS.into_iter().map(|p| {
             let mode = s.client_for(p).ok().flatten().map(|c| c.mode);
-            (p.id().to_string(), json!({"mode": mode, "builtinAvailable": builtin_google_client(p, &s.google_client_id).is_some()}))
+            (p.id().to_string(), json!({"mode": mode}))
         }).collect::<serde_json::Map<String, Value>>(),
     })
 }

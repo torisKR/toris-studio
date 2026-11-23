@@ -41,9 +41,11 @@
     "FACEBOOK_APP_ID": "",
     "NAVER_LOGIN_CLIENT_ID": "",
     "NAVER_SEARCH_CLIENT_ID": "",
+    // Toris Studio Desktop (Google). Public; GOOGLE_CLIENT_SECRET is a Worker secret.
+    "GOOGLE_CLIENT_ID": "796397762596-oodtcfqbqrfjb0eqvcjc0hpl0e6pts1h.apps.googleusercontent.com",
     "STATE_KEY_ID": "k1",
     "MIN_APP_VERSION": "0.8.0",
-    "ENABLED_PLATFORMS": "tiktok,threads,instagram,facebook,naver_blog",
+    "ENABLED_PLATFORMS": "tiktok,threads,instagram,facebook,naver_blog,youtube,google_calendar",
     "NAVER_SEARCH_DAILY_BUDGET": "20000"
   }
 }

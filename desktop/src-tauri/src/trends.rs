@@ -560,6 +560,20 @@ async fn youtube_request(
     serde_json::from_str(&raw).map_err(|_| SOURCE_ERROR.into())
 }
 
+/// YouTube trend credential: the user's Data API key, else their YouTube login's read token. Keyword search
+/// (search.list) is capped at 100 calls a day per Google project; a Toris connection's project is shared by
+/// every user, so its token never spends that cap. Popular charts are cheap reads and still use it.
+fn youtube_auth(
+    key: Option<&str>,
+    login: Option<(String, bool)>,
+    keyword: Option<&str>,
+) -> Option<YoutubeAuth> {
+    if let Some(key) = key.filter(|key| !key.is_empty()) {
+        return Some(YoutubeAuth::Key(key.to_string()));
+    }
+    let (token, shared_quota) = login?;
+    (!(shared_quota && keyword.is_some())).then_some(YoutubeAuth::Login(token))
+}
 /// YouTube search credential: the user's Data API key, else their YouTube login's read token.
 pub enum YoutubeAuth {
     Key(String),
@@ -694,22 +708,22 @@ pub async fn collect_selected(
         }
         Ok::<_, String>(records)
     };
+    let youtube_key = config
+        .youtube_api_key
+        .as_deref()
+        .filter(|key| !key.is_empty());
+    let youtube_login = if matches!(source, "all" | "youtube") && youtube_key.is_none() {
+        crate::oauth::youtube_read_login().await.ok()
+    } else {
+        None
+    };
+    let toris_search_skipped =
+        keyword.is_some() && youtube_login.as_ref().is_some_and(|(_, shared)| *shared);
     let youtube = async {
         if !matches!(source, "all" | "youtube") {
             return Ok(None);
         }
-        let auth = match config
-            .youtube_api_key
-            .as_deref()
-            .filter(|key| !key.is_empty())
-        {
-            Some(key) => Some(YoutubeAuth::Key(key.to_string())),
-            None => crate::oauth::youtube_read_token()
-                .await
-                .ok()
-                .map(YoutubeAuth::Login),
-        };
-        match auth {
+        match youtube_auth(youtube_key, youtube_login, keyword) {
             Some(auth) => collect_youtube(&client, &auth, &now, keyword)
                 .await
                 .map(Some),
@@ -777,7 +791,12 @@ pub async fn collect_selected(
     {
         result.warnings.push("현재 키워드는 Google 인기 목록에서만 필터링됩니다. YouTube·네이버 검색에는 로컬 API 설정이 필요합니다.".into());
     }
-    if matches!(source, "all" | "youtube")
+    if toris_search_skipped {
+        result.warnings.push(
+            "Toris 연결 YouTube 계정으로는 키워드 검색을 하지 않습니다(모든 사용자가 하루 100회를 나눠 씁니다). YouTube Data API 키를 넣으면 검색할 수 있습니다."
+                .into(),
+        );
+    } else if matches!(source, "all" | "youtube")
         && youtube_skipped
         && config.youtube_api_key.as_deref().is_none_or(str::is_empty)
     {
@@ -806,6 +825,44 @@ pub async fn collect_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn youtube_keyword_search_on_a_toris_connection_needs_the_users_own_key() {
+        let auth = |key, login: Option<(&str, bool)>, keyword| match youtube_auth(
+            key,
+            login.map(|(t, s)| (t.to_string(), s)),
+            keyword,
+        ) {
+            Some(YoutubeAuth::Key(_)) => "key",
+            Some(YoutubeAuth::Login(_)) => "login",
+            None => "skip",
+        };
+        assert_eq!(
+            auth(Some("k"), Some(("t", true)), Some("ai")),
+            "key",
+            "the user's key wins"
+        );
+        assert_eq!(
+            auth(Some(""), Some(("t", false)), Some("ai")),
+            "login",
+            "an empty key is no key"
+        );
+        assert_eq!(
+            auth(None, Some(("t", true)), Some("ai")),
+            "skip",
+            "search.list on Toris's shared Google quota is not spent"
+        );
+        assert_eq!(
+            auth(None, Some(("t", true)), None),
+            "login",
+            "popular charts are cheap reads"
+        );
+        assert_eq!(
+            auth(None, Some(("t", false)), Some("ai")),
+            "login",
+            "the user's own Google client"
+        );
+        assert_eq!(auth(None, None, Some("ai")), "skip");
+    }
     #[test]
     fn naver_search_uses_the_users_keys_first_then_the_toris_broker() {
         let mut config = AppConfig::default();

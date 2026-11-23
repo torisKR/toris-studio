@@ -1868,74 +1868,6 @@
   "timeoutMs": 900000
  },
  {
-  "id": "a2.rs-oauth-relogin-from-last-refresh",
-  "file": "desktop/src-tauri/src/oauth.rs",
-  "find": "        login_at: previous.map_or(now, |p| p.login_at),",
-  "replace": "        login_at: now,",
-  "cmd": [
-   "cargo",
-   "test",
-   "--manifest-path",
-   "desktop/src-tauri/Cargo.toml",
-   "--no-default-features",
-   "--lib",
-   "--",
-   "oauth"
-  ],
-  "timeoutMs": 900000
- },
- {
-  "id": "a2.rs-oauth-builtin-sends-secret",
-  "file": "desktop/src-tauri/src/oauth.rs",
-  "find": "        client_secret: None,\n        redirect_uri: provider.default_redirect(),\n        mode: ClientMode::GoogleBuiltin,",
-  "replace": "        client_secret: Some(String::new()),\n        redirect_uri: provider.default_redirect(),\n        mode: ClientMode::GoogleBuiltin,",
-  "cmd": [
-   "cargo",
-   "test",
-   "--manifest-path",
-   "desktop/src-tauri/Cargo.toml",
-   "--no-default-features",
-   "--lib",
-   "--",
-   "oauth"
-  ],
-  "timeoutMs": 900000
- },
- {
-  "id": "a2.rs-oauth-builtin-ignored-without-stored-client",
-  "file": "desktop/src-tauri/src/oauth.rs",
-  "find": "            .or_else(|| builtin_google_client(provider, &self.google_client_id)))",
-  "replace": "            .or(None))",
-  "cmd": [
-   "cargo",
-   "test",
-   "--manifest-path",
-   "desktop/src-tauri/Cargo.toml",
-   "--no-default-features",
-   "--lib",
-   "--",
-   "oauth"
-  ],
-  "timeoutMs": 900000
- },
- {
-  "id": "a2.rs-oauth-builtin-without-id",
-  "file": "desktop/src-tauri/src/oauth.rs",
-  "find": "    (provider.google() && !client_id.is_empty()).then(",
-  "replace": "    provider.google().then(",
-  "cmd": [
-   "cargo",
-   "test",
-   "--manifest-path",
-   "desktop/src-tauri/Cargo.toml",
-   "--no-default-features",
-   "--lib",
-   "--",
-   "oauth"
-  ],
-  "timeoutMs": 900000
- },
- {
   "id": "a2.rs-oauth-mode-change-keeps-grant",
   "file": "desktop/src-tauri/src/oauth.rs",
   "find": "                || old.mode != config.mode\n",
@@ -2142,8 +2074,8 @@
  {
   "id": "a2.rs-oauth-tiktok-refresh-direct",
   "file": "desktop/src-tauri/src/oauth_broker.rs",
-  "find": "        Provider::Tiktok | Provider::NaverBlog | Provider::Facebook\n",
-  "replace": "        Provider::NaverBlog | Provider::Facebook\n",
+  "find": "        Provider::Tiktok\n            | Provider::NaverBlog\n            | Provider::Facebook\n",
+  "replace": "        Provider::NaverBlog\n            | Provider::Facebook\n",
   "cmd": [
    "cargo",
    "test",
@@ -2865,23 +2797,6 @@
   "timeoutMs": 900000
  },
  {
-  "id": "a3.rs-oauth-refresh-7day-message",
-  "file": "desktop/src-tauri/src/oauth.rs",
-  "find": "    if failure.permanent && testing && client.mode == ClientMode::GoogleBuiltin {",
-  "replace": "    if false {",
-  "cmd": [
-   "cargo",
-   "test",
-   "--manifest-path",
-   "desktop/src-tauri/Cargo.toml",
-   "--no-default-features",
-   "--lib",
-   "--",
-   "oauth"
-  ],
-  "timeoutMs": 900000
- },
- {
   "id": "rs.mg-scene-ring-ignores-words",
   "file": "desktop/src-tauri/src/motion_scene.rs",
   "find": "            .chain(texts.iter())",
@@ -2942,5 +2857,107 @@
    "scripts/verify-desktop-startup-smoke.mjs"
   ],
   "timeoutMs": 300000
+ },
+ {
+  "id": "g1.rs-oauth-google-refresh-direct",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "            | Provider::Facebook\n            | Provider::Youtube\n            | Provider::GoogleCalendar\n    )",
+  "replace": "            | Provider::Facebook\n    )",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-google-not-toris",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "            | Provider::NaverBlog\n            | Provider::Youtube\n            | Provider::GoogleCalendar\n    )",
+  "replace": "            | Provider::NaverBlog\n    )",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-google-redirect-swapped",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "Provider::GoogleCalendar => \"http://127.0.0.1:38471/oauth/google_calendar/callback\",",
+  "replace": "Provider::GoogleCalendar => \"http://127.0.0.1:38471/oauth/youtube/callback\",",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-unsupported-platform-drops-connections",
+  "file": "desktop/src-tauri/src/oauth_broker.rs",
+  "find": "        Some(\"unsupported_platform\") => transient(\"platform_unavailable\"),\n",
+  "replace": "",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-oauth-shared-quota-unflagged",
+  "file": "desktop/src-tauri/src/oauth_connections.rs",
+  "find": "shared_quota: c.client.mode == ClientMode::Toris,",
+  "replace": "shared_quota: false,",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "oauth"
+  ],
+  "timeoutMs": 900000
+ },
+ {
+  "id": "g1.rs-trends-toris-keyword-search",
+  "file": "desktop/src-tauri/src/trends.rs",
+  "find": "    (!(shared_quota && keyword.is_some())).then_some(YoutubeAuth::Login(token))",
+  "replace": "    let _ = (shared_quota, keyword);\n    Some(YoutubeAuth::Login(token))",
+  "cmd": [
+   "cargo",
+   "test",
+   "--manifest-path",
+   "desktop/src-tauri/Cargo.toml",
+   "--no-default-features",
+   "--lib",
+   "--",
+   "trends"
+  ],
+  "timeoutMs": 900000
  }
 ]

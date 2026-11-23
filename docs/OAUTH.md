@@ -2,33 +2,39 @@
 
 앱의 **SNS 로그인**에서 직접 등록한 플랫폼 앱으로 공식 로그인을 시작합니다. 계정 비밀번호를 Toris Studio에 입력하지 않습니다. Rust가 인증 코드와 토큰을 처리하고 OS 자격 증명 저장소에 저장합니다. React 화면에는 토큰·클라이언트 비밀키를 반환하지 않습니다.
 
-## 연결 방식 세 가지
+## 연결 방식 두 가지
 
 | 방식 | 대상 | 사용자가 하는 일 | 비밀값 |
 |---|---|---|---|
-| **Toris 연결 (로그인만)** | TikTok, Threads, Instagram, Facebook Page, 네이버 | 로그인만 | 앱에 없음. 코드 교환과 시크릿이 필요한 갱신은 Toris OAuth Broker(`https://oauth.toris.kr`)가 합니다. |
-| **Toris 기본 Google 클라이언트** | YouTube, Google Calendar | 로그인만 | 없음. Google 설치형 앱 클라이언트 ID + PKCE. |
+| **Toris 연결 (로그인만)** | TikTok, Threads, Instagram, Facebook Page, 네이버, YouTube, Google Calendar | 로그인만 | 앱에 없음. 코드 교환과 시크릿이 필요한 갱신은 Toris OAuth Broker(`https://oauth.toris.kr`)가 합니다. |
 | **내 개발자 앱** | 7개 모두 | 각 플랫폼에 개발자 앱을 등록하고 클라이언트 ID·시크릿·리디렉션 입력 | 사용자가 입력한 시크릿을 OS 키체인에만 저장 |
 
-SNS 관리의 **연결·권한**에서 플랫폼을 고르면 **연결 방식** 선택지가 보입니다. 저장한 내 개발자 앱이 있으면 그것을, 없으면 Toris 연결(브로커가 그 플랫폼을 제공할 때)이나 Toris 기본 Google 클라이언트(빌드에 클라이언트 ID가 있을 때)를 기본으로 고릅니다. 둘 다 없으면 지금처럼 내 개발자 앱 입력만 보입니다. 방식을 바꾸면 기존 연결은 백업 후 다시 로그인해야 합니다.
+SNS 관리의 **연결·권한**에서 플랫폼을 고르면 **연결 방식** 선택지가 보입니다. 저장한 내 개발자 앱이 있으면 그것을, 없으면 Toris 연결(브로커가 그 플랫폼을 제공할 때)을 기본으로 고릅니다. 브로커가 그 플랫폼을 제공하지 않으면 지금처럼 내 개발자 앱 입력만 보입니다. 방식을 바꾸면 기존 연결은 백업 후 다시 로그인해야 합니다.
 
 ### Toris 연결
 
 - 브로커 프로토콜의 기준은 `infrastructure/oauth-broker/README.md`와 `worker.ts`입니다. 앱 구현은 `desktop/src-tauri/src/oauth_broker.rs`입니다.
 - 로그인 시작: 앱이 로그인마다 verifier를 만들고 `POST /v1/oauth/{platform}/start`에 `SHA-256(verifier)`만 보냅니다. 브로커가 서명한 state와 공개 클라이언트 ID를 받아 인가 주소를 만듭니다. 리디렉션 주소는 앱과 브로커에 같은 값으로 고정되어 있고, 다르면 거절합니다.
 - 코드 교환: `POST /v1/oauth/{platform}/token`에 `state`·`code`·`verifier`·`redirectUri`만 보냅니다. Meta 3종은 장기 토큰을 한 번에 받습니다. 토큰은 응답으로만 오고 Rust와 OS 키체인에만 저장합니다. IPC 응답·이벤트·로그·오류 문구에는 넣지 않습니다.
-- 갱신: TikTok·네이버·Facebook은 그 연결을 발급한 브로커의 `/refresh`로, Threads·Instagram은 시크릿이 필요 없어 제공자에 직접 요청합니다.
+- 갱신: TikTok·네이버·Facebook·YouTube·Google Calendar는 그 연결을 발급한 브로커의 `/refresh`로, Threads·Instagram은 시크릿이 필요 없어 제공자에 직접 요청합니다.
+- 실패 처리: 브로커가 `provider_rejected`(제공자가 로그인을 거절)나 주소·state 불일치를 답하면 그 연결은 **다시 로그인 필요**가 됩니다. 일시 장애·요청 한도와 `unsupported_platform`(브로커에서 그 플랫폼을 잠시 끈 경우)은 재시도하며 연결을 유지합니다.
 - 모든 브로커 요청에 `User-Agent: TorisStudio/<앱 버전>`을 보냅니다. 브로커의 `MIN_APP_VERSION`보다 낮으면 "앱을 업데이트하세요"로 안내합니다.
 - Meta 콜백: 제공자는 HTTPS 리디렉션만 받으므로 `https://toris.kr/oauth/{threads|instagram|facebook}/callback`이 브로커 형식 state일 때만 앱의 루프백(`http://127.0.0.1:38471/oauth/{platform}/callback`)으로 넘겨 줍니다. 자동으로 돌아오지 않으면 브라우저의 최종 주소를 붙여 넣어도 됩니다. 가로챈 코드는 앱 메모리에만 있는 verifier 없이 교환할 수 없습니다.
 - 브로커가 응답하지 않으면(배포 전 포함) Toris 연결 선택지는 보이지 않습니다. `/v1/config` 결과는 10분(실패는 1분) 캐시합니다.
 - 브로커 주소(`https://oauth.toris.kr`)는 앱의 상수이며 화면·IPC·키체인으로 바꿀 수 없습니다(테스트만 별도 주입). 각 연결은 발급받은 브로커 주소를 기록해 두고 그 주소에서 갱신합니다.
 
-### Toris 기본 Google 클라이언트
+### Google(YouTube·Calendar)의 Toris 연결
 
-- 클라이언트 ID는 빌드 환경 변수 `TORIS_GOOGLE_CLIENT_ID`로 넣습니다. 비어 있으면 이 방식은 꺼지고 내 Google 클라이언트 입력만 보입니다. Google의 [설치형 앱 안내](https://developers.google.com/identity/protocols/oauth2/native-app)대로 시크릿 없이 PKCE로 교환합니다. YouTube와 Calendar 모두 PKCE를 씁니다.
+- Google 데스크톱 클라이언트는 코드 교환에 클라이언트 시크릿을 요구합니다(시크릿 없이 교환하면 `client_secret is missing`). 그래서 Toris의 Google 클라이언트 하나(`GOOGLE_CLIENT_ID`)를 브로커가 시크릿(`GOOGLE_CLIENT_SECRET`)과 함께 씁니다. 앱에는 시크릿이 없습니다.
+- 리디렉션은 앱의 루프백입니다: YouTube `http://127.0.0.1:38471/oauth/youtube/callback`, Calendar `http://127.0.0.1:38471/oauth/google_calendar/callback`. 둘 다 PKCE를 쓰고, 브로커는 같은 verifier를 Google에 그대로 넘깁니다. 범위는 공백으로 구분합니다.
+- 갱신은 한 시간마다 브로커의 `/refresh`로 합니다. Google이 새 갱신 토큰을 주지 않으면 앱이 기존 갱신 토큰을 유지합니다.
+- 브로커는 Google의 `invalid_grant`만 `provider_rejected`(다시 로그인)로 답합니다. 그 밖의 4xx(잘못되거나 빠진 시크릿, 꺼진 클라이언트 등)는 서버 설정 문제이므로 `provider_unavailable`(재시도)로 답해, 설정 실수 하나로 모든 사용자의 연결이 끊기지 않게 합니다.
+- 연결 해제 시 철회(`https://oauth2.googleapis.com/revoke`)는 시크릿이 필요 없어 앱이 Google에 직접 요청합니다. Google은 프로젝트 단위로 철회하므로, 같은 Google 계정을 Toris 연결로 YouTube와 Calendar에 함께 연결했다면 YouTube를 해제할 때 Calendar 권한도 함께 철회될 수 있습니다. 화면의 Toris 연결 안내에도 적혀 있습니다.
+- Google 검증을 받지 않은 앱이므로 로그인 화면에 **확인되지 않은 앱** 경고가 나올 수 있습니다. Calendar 카드와 SNS 관리의 YouTube 연결 방식 안내에 이 문구를 고정으로 보여 줍니다.
 - 동의 화면에 등록할 범위: `youtube.readonly`, `yt-analytics.readonly`, `youtube.upload`, `calendar.app.created`.
-- 앱이 Google에서 "테스트" 상태(`TORIS_GOOGLE_CLIENT_STATUS`가 `production`이 아니면)일 때는 [갱신 토큰이 7일 뒤 만료](https://developers.google.com/identity/protocols/oauth2#expiration)됩니다. 카드에 "7일마다 다시 로그인"과 현재 로그인의 유효 기한(최초 로그인 + 7일, 갱신해도 바뀌지 않음)을 보여 줍니다. 등록된 테스트 사용자만 로그인할 수 있고 확인되지 않은 앱 경고가 나올 수 있습니다. 이 상태에서 **연결 갱신**을 눌렀을 때 갱신이 거절되면(`invalid_grant` 등) "Google 테스트 단계 로그인은 7일마다 만료됩니다. 다시 로그인하세요."로 안내합니다. 앱이 자동으로 갱신하다 거절된 경우에는 연결 상태에 **다시 로그인 필요**만 표시합니다. 만료 전 미리 알림은 없습니다.
-- 일정·작업의 Calendar 카드는 **내 Google 클라이언트 사용**으로 덮어쓰고 **Toris 기본 클라이언트로 되돌리기**로 돌아갑니다. YouTube는 SNS 관리의 연결 방식에서 **내 개발자 앱**을 고르면 덮어씁니다.
+- YouTube 쿼터: Toris 연결 토큰으로 하는 Data API 호출은 Toris의 Google 프로젝트 하루 쿼터를 모든 사용자가 나눠 씁니다. 그래서 키워드 트렌드 검색(`search.list`, 한 번에 100단위)은 Toris 연결 토큰으로 하지 않고 **내 YouTube Data API 키**를 요구합니다. 인기 목록·채널 조회처럼 비용이 낮은 호출은 토큰을 씁니다. 내 개발자 앱으로 연결한 YouTube는 지금처럼 토큰으로 검색합니다.
+- 일정·작업의 Calendar 카드: 저장한 클라이언트가 없으면 **Google 로그인**이 Toris 연결을 저장한 뒤 로그인합니다. **내 Google 클라이언트 사용**은 접혀 있고, 저장하면 **Toris 연결로 되돌리기**로 돌아갈 수 있습니다. 브로커가 Google을 제공하지 않으면 내 Google 클라이언트 입력만 보입니다. YouTube는 SNS 관리의 연결 방식에서 **내 개발자 앱**을 고르면 덮어씁니다.
+- 내 Google 클라이언트의 클라이언트 보안 비밀은 화면에 **필수**로 표시합니다. Google이 교환에 요구하기 때문입니다. 앱의 입력 검증은 바꾸지 않아 빈 값도 저장됩니다.
 
 ### 내 개발자 앱
 
@@ -46,7 +52,7 @@ SNS 관리의 **연결·권한**에서 플랫폼을 고르면 **연결 방식** 
 
 게시 권한은 계정 연결 뒤 **게시 권한 연결**에서 따로 동의받습니다. 네이버 블로그는 공식 글쓰기 API가 없어 게시 권한이 없습니다([SNS 게시](SOCIAL_PUBLISHING.md) 참고).
 
-YouTube 공개 조회(채널 검색·트렌드)는 YouTube Data API 키가 있으면 그 키를, 없으면 연결된 YouTube 계정의 읽기 토큰을 씁니다. 토큰은 Rust 안에서 고정된 `googleapis.com` 주소에만 씁니다.
+YouTube 공개 조회(채널 검색·트렌드)는 YouTube Data API 키가 있으면 그 키를, 없으면 연결된 YouTube 계정의 읽기 토큰을 씁니다. Toris 연결 토큰으로는 키워드 검색을 하지 않습니다(위 쿼터 설명). 토큰은 Rust 안에서 고정된 `googleapis.com` 주소에만 씁니다.
 
 ## 로그인 완료와 저장
 

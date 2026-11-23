@@ -310,7 +310,7 @@ fn connection_list_locked(s: &OAuthService) -> Result<Value, String> {
                     }
                 }
                 for a in &c.identities {
-                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending||cleanup_pending,"revocationPending":revocation_pending,"cleanupPending":cleanup_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!cleanup_pending&&!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared,"clientMode":c.client.mode,"reloginBy":relogin_by(&c.client,&c.session,GOOGLE_CLIENT_TESTING).and_then(timestamp)}));
+                    result.push(json!({"connectionId":c.id,"platform":c.platform,"accountId":a.account_id,"accountTitle":a.title,"identityVerified":true,"verifiedAt":timestamp(c.verified_at),"connected":connected,"disconnected":c.disconnected||revocation_pending||cleanup_pending,"revocationPending":revocation_pending,"cleanupPending":cleanup_pending,"needsReconnect":!revocation_pending&&!c.disconnected&&(c.session.needs_reconnect||(!refreshable&&c.session.expires_at<=now)),"refreshable":!cleanup_pending&&!revocation_pending&&!c.disconnected&&refreshable,"readAuthorized":connected&&has_read(p,&c.session.scopes),"publishingAuthorized":connected&&p.publishing_authorized(&c.session.scopes),"scopes":c.session.scopes,"expiresAt":timestamp(c.session.expires_at),"audit":audit,"tokenStorage":"os_credentials","cookieStorage":"system_browser","legacyMigrated":c.legacy_source.is_some(),"tiktokAuditDeclared":c.client.tiktok_audit_declared,"clientMode":c.client.mode}));
                 }
             }
             Err(message) => warnings.push(json!({"connectionId":id,"message":message})),
@@ -576,7 +576,7 @@ async fn refresh_connection_locked(
             if automatic {
                 Ok(())
             } else {
-                Err(refresh_failure_message(&c.client, f, GOOGLE_CLIENT_TESTING))
+                Err(f.message())
             }
         }
     }
@@ -658,6 +658,7 @@ async fn access_locked(
         token,
         scopes: c.session.scopes,
         tiktok_audit_declared: p == Provider::Tiktok && c.client.tiktok_audit_declared,
+        shared_quota: c.client.mode == ClientMode::Toris,
     })
 }
 #[derive(Serialize, Deserialize)]

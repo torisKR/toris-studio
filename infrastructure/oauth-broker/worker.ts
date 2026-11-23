@@ -2,7 +2,7 @@
 // Nothing about a request is stored or logged: no console calls, no request/response bodies, queries,
 // provider error text, tokens, codes, search terms, or IPs. The only stored data is the daily search count.
 
-type Platform = 'tiktok' | 'threads' | 'instagram' | 'facebook' | 'naver_blog';
+type Platform = 'tiktok' | 'threads' | 'instagram' | 'facebook' | 'naver_blog' | 'youtube' | 'google_calendar';
 type Limiter = { limit(options: { key: string }): Promise<{ success: boolean }> };
 type DurableStub = { fetch(url: string, init: RequestInit): Promise<Response> };
 type DurableNamespace = { idFromName(name: string): unknown; get(id: unknown): DurableStub };
@@ -14,13 +14,14 @@ export interface Env {
   NAVER_LOGIN_CLIENT_ID?: string; NAVER_SEARCH_CLIENT_ID?: string;
   TIKTOK_CLIENT_SECRET?: string; THREADS_APP_SECRET?: string; INSTAGRAM_APP_SECRET?: string; FACEBOOK_APP_SECRET?: string;
   NAVER_LOGIN_CLIENT_SECRET?: string; NAVER_SEARCH_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string;
   STATE_SIGNING_KEYS?: string; STATE_KEY_ID?: string; MIN_APP_VERSION?: string; ENABLED_PLATFORMS?: string;
   NAVER_SEARCH_DAILY_BUDGET?: string;
   START_LIMITER?: Limiter; TOKEN_LIMITER?: Limiter; REFRESH_LIMITER?: Limiter; SEARCH_LIMITER?: Limiter;
   SEARCH_BUDGET?: DurableNamespace;
 }
 
-const PLATFORMS: readonly Platform[] = ['tiktok', 'threads', 'instagram', 'facebook', 'naver_blog'];
+const PLATFORMS: readonly Platform[] = ['tiktok', 'threads', 'instagram', 'facebook', 'naver_blog', 'youtube', 'google_calendar'];
 const META: readonly Platform[] = ['threads', 'instagram', 'facebook'];
 const REDIRECT: Record<Platform, string> = {
   tiktok: 'http://127.0.0.1:38471/oauth/tiktok/callback',
@@ -28,6 +29,8 @@ const REDIRECT: Record<Platform, string> = {
   threads: 'https://toris.kr/oauth/threads/callback',
   instagram: 'https://toris.kr/oauth/instagram/callback',
   facebook: 'https://toris.kr/oauth/facebook/callback',
+  youtube: 'http://127.0.0.1:38471/oauth/youtube/callback',
+  google_calendar: 'http://127.0.0.1:38471/oauth/google_calendar/callback',
 };
 const CLIENT: Record<Platform, [keyof Env, keyof Env]> = {
   tiktok: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET'],
@@ -35,9 +38,13 @@ const CLIENT: Record<Platform, [keyof Env, keyof Env]> = {
   instagram: ['INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET'],
   facebook: ['FACEBOOK_APP_ID', 'FACEBOOK_APP_SECRET'],
   naver_blog: ['NAVER_LOGIN_CLIENT_ID', 'NAVER_LOGIN_CLIENT_SECRET'],
+  // One Google desktop client serves both; Google requires its secret for the exchange and refresh.
+  youtube: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  google_calendar: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
 };
 const TIKTOK_TOKEN = 'https://open.tiktokapis.com/v2/oauth/token/';
 const NAVER_TOKEN = 'https://nid.naver.com/oauth2.0/token';
+const GOOGLE_TOKEN = 'https://oauth2.googleapis.com/token';
 const FACEBOOK_TOKEN = 'https://graph.facebook.com/v25.0/oauth/access_token';
 const NAVER_BLOG_SEARCH = 'https://openapi.naver.com/v1/search/blog.json';
 const STATE_TTL_SECONDS = 600;
@@ -248,6 +255,15 @@ function tokenFrom({ status, body }: { status: number; body: Json | null }): Jso
   return token;
 }
 
+/** Google: only invalid_grant means the user must log in again. Other client errors (a wrong or missing
+ * secret, a disabled client) are server configuration, so they stay retryable instead of dropping every
+ * user's connection. */
+function googleToken(result: { status: number; body: Json | null }): Json {
+  const error = result.body?.error;
+  if (result.status >= 400 && result.status < 500 && error !== 'invalid_grant') return fail('provider_unavailable');
+  return tokenFrom(result);
+}
+
 function seconds(value: unknown): number | undefined {
   const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
   return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? n : undefined;
@@ -294,6 +310,9 @@ async function exchange(env: Env, platform: Platform, code: string, verifier: st
       const short = tokenFrom(await getQuery(FACEBOOK_TOKEN, { client_id: id, redirect_uri: redirect, client_secret: secret, code }));
       return facebookLongLived(id, secret, short.access_token as string);
     }
+    case 'youtube':
+    case 'google_calendar':
+      return googleToken(await postForm(GOOGLE_TOKEN, { client_id: id, client_secret: secret, code, code_verifier: verifier, grant_type: 'authorization_code', redirect_uri: redirect }));
   }
 }
 
@@ -339,6 +358,10 @@ async function refresh(request: Request, env: Env, platform: Platform): Promise<
   }
   const body = await readJson(request, ['refreshToken']);
   const refreshToken = field(body.refreshToken, PRINTABLE, 4096);
+  if (platform === 'youtube' || platform === 'google_calendar') {
+    // Google omits refresh_token when it does not rotate it; the app keeps the one it has.
+    return reply(normalized(googleToken(await postForm(GOOGLE_TOKEN, { client_id: id, client_secret: secret, grant_type: 'refresh_token', refresh_token: refreshToken })), false));
+  }
   const result = platform === 'tiktok'
     ? await postForm(TIKTOK_TOKEN, { grant_type: 'refresh_token', refresh_token: refreshToken, client_key: id, client_secret: secret })
     : await postForm(NAVER_TOKEN, { grant_type: 'refresh_token', client_id: id, client_secret: secret, refresh_token: refreshToken });
