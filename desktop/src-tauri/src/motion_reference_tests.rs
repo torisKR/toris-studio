@@ -219,16 +219,19 @@ fn ffmpeg_reads_only_local_files_through_the_allowed_demuxers() {
 
 #[tokio::test]
 async fn oversized_files_are_refused_before_any_read() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let base = &builtins()[0];
-    // Unreadable 1 GiB + 1 byte: refusing it must not need its contents.
+    // 1 GiB + 1 byte, unreadable on unix: refusing it must not need its contents.
     let big = dir.path().join("big.mov");
     std::fs::File::create(&big)
         .unwrap()
         .set_len(MAX_VIDEO_BYTES + 1)
         .unwrap();
-    std::fs::set_permissions(&big, std::fs::Permissions::from_mode(0o000)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&big, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
     let refused = from_media(&big, "큰 영상", base).await.unwrap_err();
     assert!(refused.contains("1GiB"), "{refused}");
     // A PNG over 32 MiB is refused as an image before it is hashed or decoded.
