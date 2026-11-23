@@ -25,12 +25,16 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => {
 const list = JSON.parse(readFileSync(path.resolve(ROOT, process.argv[2] ?? 'desktop/agent-runtime/test/mutants.json'), 'utf8'));
 const only = process.argv[3];
 const results = [];
+// A test command that never ran proves nothing: a missing program (spawn error) or, behind a wrapper
+// such as `timeout` or a pnpm script, the shell's 126 (not executable) / 127 (command not found).
+const NOT_STARTED = { 126: 'exit 126: command not executable', 127: 'exit 127: command not found' };
+/** Resolves { code } when the test ran, or { notStarted: reason } when its command could not start. */
 function runTest(command, args, timeoutMs) {
   return new Promise(resolve => {
     child = spawn(command, args, { cwd: ROOT, stdio: 'ignore', detached: process.platform !== 'win32', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
     const timer = setTimeout(stopChild, timeoutMs);
-    child.on('error', () => { clearTimeout(timer); child = null; resolve(1); });
-    child.on('exit', code => { clearTimeout(timer); child = null; resolve(code ?? 1); });
+    child.on('error', error => { clearTimeout(timer); child = null; resolve({ notStarted: `${command}: ${error.code ?? error.message}` }); });
+    child.on('exit', code => { clearTimeout(timer); child = null; resolve(NOT_STARTED[code] ? { notStarted: NOT_STARTED[code] } : { code: code ?? 1 }); });
   });
 }
 for (const mutant of list.filter(m => !only || m.id.startsWith(only))) {
@@ -42,8 +46,9 @@ for (const mutant of list.filter(m => !only || m.id.startsWith(only))) {
   writeFileSync(file, original.replace(mutant.find, () => mutant.replace));
   try {
     const [command, ...args] = mutant.cmd ?? ['node', '--import', 'tsx', '--test', mutant.test];
-    const status = await runTest(command, args, mutant.timeoutMs ?? 120_000);
-    results.push({ id: mutant.id, status: status === 0 ? 'SURVIVED' : 'killed' });
+    const { code, notStarted } = await runTest(command, args, mutant.timeoutMs ?? 120_000);
+    results.push(notStarted ? { id: mutant.id, status: 'invalid', note: `test command did not start: ${notStarted}` }
+      : { id: mutant.id, status: code === 0 ? 'SURVIVED' : 'killed' });
   } finally {
     restore();
     restore = null;

@@ -1,6 +1,6 @@
 // An interrupted mutation run must put the original source back and leave nothing running.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,5 +36,28 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     assert.equal(readFileSync(target, 'utf8'), 'const value = "original";\n', 'the original source is back');
     assert.equal(existsSync(LOCK), false, 'the lock is released');
     await waitFor(() => !alive(childPid), 'the test command to be stopped', 3_000);
+  });
+}
+
+// A test command that cannot start proves nothing; counting it as "killed" would be a false pass.
+const notStarted = [
+  ['a missing program (spawn ENOENT)', ['toris-mutation-check-no-such-command']],
+  ...(process.platform === 'win32' ? [] : [['a wrapper reporting command not found (exit 127)', ['sh', '-c', 'exit 127']]]),
+];
+for (const [label, cmd] of notStarted) {
+  test(`a mutant whose test command is ${label} is invalid, not killed`, () => {
+    if (existsSync(LOCK)) return test.skip?.('another mutation run holds the lock');
+    const dir = mkdtempSync(path.join(tmpdir(), 'mutation-check-test-'));
+    const target = path.join(dir, 'target.txt');
+    writeFileSync(target, 'const value = "original";\n');
+    const list = path.join(dir, 'mutants.json');
+    writeFileSync(list, JSON.stringify([{ id: 'fixture.not-started', file: target, find: '"original"', replace: '"MUTATED"', cmd }]));
+    const run = spawnSync(process.execPath, [path.join(ROOT, 'scripts/mutation-check.mjs'), list], { encoding: 'utf8' });
+    assert.equal(run.status, 1, 'the run fails');
+    assert.match(run.stdout, /invalid\s+fixture\.not-started \(test command did not start: /);
+    assert.doesNotMatch(run.stdout, /killed\s+fixture\.not-started/);
+    assert.match(run.stdout, /0\/1 mutants killed/);
+    assert.equal(readFileSync(target, 'utf8'), 'const value = "original";\n', 'the original source is back');
+    assert.equal(existsSync(LOCK), false, 'the lock is released');
   });
 }

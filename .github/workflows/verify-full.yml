@@ -74,7 +74,11 @@ jobs:
         run: |
           brew install postgresql@17 coreutils
           printf 'TORIS_TEST_PG_BIN=%s/bin\n' "$(brew --prefix postgresql@17)" >> "$GITHUB_ENV"
-          printf '%s/libexec/gnubin\n' "$(brew --prefix coreutils)" >> "$GITHUB_PATH"
+          # Only `timeout` (rs.waiters-hang-on-exit): the rest of gnubin would shadow the BSD tools other steps use.
+          mkdir -p "$RUNNER_TEMP/gnu-timeout"
+          ln -sf "$(brew --prefix coreutils)/bin/gtimeout" "$RUNNER_TEMP/gnu-timeout/timeout"
+          "$RUNNER_TEMP/gnu-timeout/timeout" --version > /dev/null
+          printf '%s/gnu-timeout\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Start ChromaDB for the RAG live test and its mutants
         env:
           ANONYMIZED_TELEMETRY: 'FALSE'

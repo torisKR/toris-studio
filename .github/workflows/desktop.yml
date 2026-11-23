@@ -45,7 +45,7 @@ jobs:
       - name: Check repository harness (feature map, mutant targets)
         run: |
           node scripts/harness-check.mjs --all
-          node --test scripts/harness-check.test.mjs
+          node --test scripts/harness-check.test.mjs scripts/mutation-check.test.mjs
       - name: Check local API, AI handoff, OAuth callback and OAuth broker contracts
         run: |
           pnpm test
